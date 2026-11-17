@@ -327,23 +327,31 @@ impl TextRenderer {
         let n = |key: &str, d: f64| s.get(key).and_then(Json::as_f64).filter(|v| *v != 0.0).unwrap_or(d);
         let text = |key: &str| s.get(key).and_then(Json::as_str);
         let highlight = s.get("highlight").and_then(Json::as_bool).unwrap_or(false);
-        struct Line {
+        struct Line<'a> {
             text: String,
             spans: Vec<std::ops::Range<usize>>,
             lit: Option<usize>,
+            /// The speaker's colour (`it.color`), over the style's.
+            color: Option<&'a str>,
         }
         let mut lines = Vec::new();
-        for it in &cap.items {
+        for (k, it) in cap.items.iter().enumerate() {
+            let shown = cap.shown.get(k);
             let mut lit = if highlight {
                 it.words.as_deref().and_then(|wd| cut_model::captionwords::lit_at(wd, &it.text, it.start, cap.t as i64))
             } else {
                 None
             };
+            // a speaker's name before the first line is never lit: the lit index skips its tokens
+            let mut prefix = shown.map_or("", |s| s.prefix.as_str());
             for line in it.text.split('\n').map(|x| x.strip_suffix('\r').unwrap_or(x)) {
-                let spans = cut_model::captionwords::spans(line);
-                let here = lit.filter(|&n| n < spans.len());
-                lit = lit.map(|n| n.wrapping_sub(spans.len())).filter(|n| *n < usize::MAX / 2);
-                lines.push(Line { text: line.to_string(), spans, lit: here });
+                let head = if prefix.is_empty() { 0 } else { cut_model::captionwords::spans(prefix).len() };
+                let text = format!("{prefix}{line}");
+                let spans = cut_model::captionwords::spans(&text);
+                let here = lit.map(|n| n + head).filter(|&at| at >= head && at < spans.len());
+                lit = lit.map(|n| n.wrapping_sub(spans.len() - head)).filter(|n| *n < usize::MAX / 2);
+                lines.push(Line { text, spans, lit: here, color: shown.and_then(|s| s.color.as_deref()) });
+                prefix = "";
             }
         }
         if lines.is_empty() {
@@ -375,6 +383,10 @@ impl TextRenderer {
             if let Some(b) = bg {
                 c.fill_rect((-width / 2.0 - pad + w / 2.0) * k, ly, (width + 2.0 * pad) * k, lh * k, 0.0, b);
             }
+            let (line_hex, color) = match line.color.and_then(|x| css_color(x).map(|c| (x, c))) {
+                Some((x, c)) => (Some(x), c),
+                None => (text("color"), color),
+            };
             let Some(lit) = line.lit else {
                 Self::paint(c, &sh, lx, ly, color, None);
                 continue;
@@ -385,7 +397,7 @@ impl TextRenderer {
             let (x0, x1) = (x_at(r.start), x_at(r.end));
             let c0 = if lit > 0 { (x_at(line.spans[lit - 1].end) + x0) / 2.0 } else { f64::NEG_INFINITY };
             let c1 = line.spans.get(lit + 1).map_or(f64::INFINITY, |n| (x1 + x_at(n.start)) / 2.0);
-            let boxed = boxed_mode || text("color").is_some_and(|lc| color_distance(lc, hl_hex) < 150.0);
+            let boxed = boxed_mode || line_hex.is_some_and(|lc| color_distance(lc, hl_hex) < 150.0);
             if boxed {
                 let (bx, by) = (pad * 0.6 * k, lh * 0.08 * k);
                 c.fill_rect(x0 - bx, ly + by, x1 - x0 + 2.0 * bx, lh * k - 2.0 * by, size * 0.18 * k, hl);

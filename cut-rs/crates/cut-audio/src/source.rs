@@ -89,8 +89,8 @@ pub enum Audio {
 /// Packets decoded before a read's first one and dropped.
 pub const PREROLL: usize = 12;
 
-/// Whether this PC plays sound of a codec string: raw PCM and ALAC always; AAC, MP3, FLAC and Opus when Media
-/// Foundation lists a decoder for them (asked once a codec). Vorbis is not.
+/// Whether this PC plays sound of a codec string: raw PCM, ALAC and Vorbis always; AAC, MP3, FLAC and Opus when
+/// Media Foundation lists a decoder for them (asked once a codec).
 pub fn decodes(codec: &str) -> bool {
     codec.starts_with("pcm-") || cut_decode::decodes_audio(codec)
 }

@@ -8,8 +8,8 @@ Nano Studio를 고칠 때 먼저 읽는 문서입니다. 구조, 기능을 만�
 - 설치본 하나에 앱이 세 개 있습니다. 프로세스마다 모드가 하나입니다.
   - `code`: Nano Studio Code. PyCharm 스타일 Python IDE입니다.
   - `craft`: Nano Studio Craft. 공식 Minecraft Launcher로 플레이하고 서버를 여는 앱입니다.
-  - `cut`: Nano Studio Cut. 영상 편집기입니다. 디코딩과 인코딩은 WebCodecs, 합성은 WebGPU, 소리는 Web Audio로 하고 FFmpeg 같은 외부 라이브러리를 쓰지 않습니다.
-  - `--mode=code|craft|cut`로 고르고, 경로 인자가 있으면 code입니다. 둘 다 없으면 시작 화면(`renderer/chooser.html`)이 뜹니다.
+  - `cut`: Nano Studio Cut. 영상 편집기입니다. 설치본의 Cut은 Electron 창이 아니라 Rust 프로그램 `cut-rs`(`nano-studio-cut.exe`)이고, `main/cut-launcher.js`가 띄운 뒤 Electron은 끝납니다. `renderer/features/cut`의 JavaScript Cut(WebCodecs, WebGPU, Web Audio, FFmpeg 없음)은 그 명세로 저장소에만 있습니다. 자세한 것은 [cut-app.md](cut-app.md) 1절입니다.
+  - `--mode=code|craft|cut`로 고르고, `.ncut` 파일 인자는 cut, 다른 경로 인자는 code입니다. 둘 다 없으면 시작 화면(`renderer/chooser.html`)이 뜹니다.
 - 프로세스는 셋입니다.
   - 메인: `main.js`와 `main/`. 파일, 프로세스, 네트워크, 창을 맡습니다.
   - 프리로드: `preload.js`. IDE 페이지(`renderer/index.html`)에만 `window.api`를 줍니다.
@@ -25,11 +25,13 @@ Nano Studio를 고칠 때 먼저 읽는 문서입니다. 구조, 기능을 만�
 | `main/features/<기능>.js` | 기능의 메인 모듈. `register(ctx)`로 IPC를 등록합니다 |
 | `main/trust.js`, `main/security.js`, `main/program-env.js` | 안전 모드, 창 탐색과 권한 차단, 자식 프로세스 환경 |
 | `main/minecraft/`, `main/bore-*.js` | Craft의 서버, 런처, 플레이어, 비공개 공유 |
-| `main/features/cut.js`, `main/cut/` | Cut의 파일 읽기와 쓰기, 자동 저장과 복구, 캐시, 글꼴 |
+| `main/cut-launcher.js` | Rust Cut(`nano-studio-cut.exe`)을 찾고, 환경 변수를 주어 띄우고, 실패를 알림 |
+| `main/features/cut.js`, `main/cut/` | JavaScript Cut(명세, 설치본에 없음)의 파일 읽기와 쓰기, 자동 저장과 복구, 캐시, 글꼴 |
+| `cut-rs/` | Rust Cut의 Cargo 작업 공간(`crates/cut-app`이 창, 나머지 크레이트가 형식, 모델, 디코딩, 엔진, 소리, 내보내기, AI 사이드카). 현황은 `cut-rs/NEXT.md` |
 | `renderer/core/ide.js` | `window.ide` API, 액션과 키맵, 프로젝트 트리, 툴 윈도우, 대화상자, 설정 |
 | `renderer/core/editors.js` | 편집기 탭, 그룹 분할, `ide.openFile`, 창 닫기 대화상자 |
 | `renderer/features/<기능>/` | 플러그인: `plugin.json`, `index.js`, `style.css`, `locales/ko.json` |
-| `renderer/features/cut/` | Cut 편집기 전체(형식, 모델, 엔진, 내보내기, 화면). 지도는 [cut-app.md](cut-app.md) |
+| `renderer/features/cut/` | JavaScript Cut 편집기 전체(형식, 모델, 엔진, 내보내기, 화면). Rust Cut의 명세이고 설치본에 들어가지 않습니다. 지도는 [cut-app.md](cut-app.md) |
 | `renderer/locales/ko.json` | 코어와 공용 문구의 한국어 |
 | `verify/` | 테스트(`<이름>.mjs`), 공용 도구 `lib.mjs`, 고정 프로젝트 `fixtures/` |
 | `scripts/release.mjs` | 릴리스 전 과정 |
@@ -145,11 +147,13 @@ Cut의 기능은 AI도 쓸 수 있어야 합니다. 키보드 동작, 자동화 
 
 ### CI
 
-- `.github/workflows/ci.yml`이 master 푸시와 PR마다 약 150개 단계를 차례로 돌립니다. 약 70분 걸립니다.
+- `.github/workflows/ci.yml`이 master 푸시와 PR마다 `verify/ci-suites.json`의 테스트를 러너 6대에 나눠 돌립니다(약 15분). 같은 시간에 `cut-rs` job이 Rust 1.99(`cut-rs/Cargo.toml`의 `rust-version`)를 받아 Rust Cut을 릴리스로 빌드하고, 앱이 그것을 띄우는지(`verify/cut-rust-launch.mjs --real`) 보고, `cargo test --workspace`를 돌립니다. cargo의 빌드는 `Swatinem/rust-cache`로 캐시합니다. 러너에는 GPU가 없어(wgpu는 WARP로 그림) GPU 디코더나 HEVC 확장이 필요한 Rust 테스트는 "skipped"를 찍고 끝납니다.
 - 같은 브랜치에 새 푸시가 오면 진행 중인 실행이 취소됩니다. 결과가 필요하면 끝날 때까지 푸시하지 않습니다.
 - 실패하면 `gh run view <id> --log-failed`로 FAIL 줄을 봅니다. 로컬에서 그 테스트만 다시 돌려 재현되는지 확인합니다. 재현되지 않으면 `gh run rerun <id> --failed`로 다시 돌립니다.
 
 ### 릴리스
+
+빌드에는 Rust가 필요합니다. `rustup`으로 설치한 1.99 이상의 `cargo`가 PATH나 `%USERPROFILE%\.cargo\bin`에 있어야 합니다. 3단계가 `npm run dist` 전에 `cargo build --release --locked -p cut-app`으로 Rust Cut을 빌드하고(드라이런도 빌드합니다), 크기와 SHA-256을 찍고, `win-unpacked\resources\cut\nano-studio-cut.exe`가 방금 빌드한 것과 같은지 봅니다. cargo가 없거나 빌드가 실패하면 그 자리에서 멈추고 버전을 되돌립니다. exe는 따로 서명하지 않습니다. 설치 파일의 `.sig`와 `.manifest`가 설치 파일 바이트 전체(그 안의 exe 포함)를 덮습니다.
 
 베타를 먼저 내고, CI가 통과한 뒤 정식을 냅니다. 정식 버전은 스크립트가 직접 막습니다: HEAD가 origin의 master와 같고 그 커밋의 CI(`ci.yml`)가 통과해야 1단계를 넘어갑니다. 베타는 CI를 기다리지 않습니다.
 
@@ -160,7 +164,7 @@ Cut의 기능은 AI도 쓸 수 있어야 합니다. 키보드 동작, 자동화 
    PYIDE_DIST_DIR="$LOCALAPPDATA\\Temp\\pyidedist-0.3.23-beta.1" npm run release -- 0.3.23-beta.1 --dry-run --skip-tests
    ```
 
-3. 만든 `win-unpacked`의 exe를 띄워 Code, Craft, Cut이 열리는지 직접 확인합니다.
+3. 만든 `win-unpacked`의 exe를 띄워 Code, Craft, Cut이 열리는지 직접 확인합니다. Cut은 `node verify/cut-rust-launch.mjs --exe "<임시 폴더>\win-unpacked\Nano Studio.exe"`가 대역과 실제 Rust Cut으로 확인합니다.
 4. 베타를 냅니다(같은 명령에서 `--dry-run`만 뺍니다). 업데이트 채널이 베타인 설치본만 받고, `latest.yml`은 그대로입니다. 베타의 `Release <버전>` 커밋이 푸시되면서 CI가 돕니다.
 5. CI 결과를 확인합니다. 실패가 있으면 원인을 보고, 고친 뒤 `-beta.2`를 냅니다. 한 번만 실패한 시간 초과는 그 job을 다시 돌려(`gh run rerun <id> --failed`) 확인합니다.
 6. CI가 통과하고 베타에 문제가 없으면 정식을 냅니다. 드라이런과 exe 확인을 한 번 더 하고 `npm run release -- 0.3.23 --skip-tests`를 실행합니다. 스크립트가 버전 올리기, 빌드, 커밋과 태그, 푸시, 업로드, `latest.yml` 확인까지 합니다.

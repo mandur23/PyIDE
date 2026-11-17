@@ -104,12 +104,14 @@ fn shared_frames_are_the_frames_read_back_h264() {
 
 #[test]
 fn shared_frames_are_the_frames_read_back_hevc() {
-    let path = decode_common::make::video(
-        "share-hevc-1280x720.mp4",
-        &decode_common::make::settings(Codec::Hevc, 1280, 720),
-        60,
-        decode_common::make::Timing::Constant,
-    );
+    let s = decode_common::make::settings(Codec::Hevc, 1280, 720);
+    // Windows has an HEVC encoder only with the HEVC Video Extension (a CI runner has none).
+    if let Err(e) = cut_decode::encode::encode_video(&s, 1, |i, px| decode_common::make::draw(i, px, 1280, 720, false))
+    {
+        eprintln!("skipped: no HEVC file can be made here: {e}");
+        return;
+    }
+    let path = decode_common::make::video("share-hevc-1280x720.mp4", &s, 60, decode_common::make::Timing::Constant);
     both_routes("hevc", path.to_str().expect("a path"), 1280, 720, 60, &[0, 2, 31, 59]);
 }
 

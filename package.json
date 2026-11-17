@@ -72,7 +72,26 @@
       "!node_modules/monaco-editor/node_modules/**",
       "!node_modules/monaco-editor/min/vs/language/*/*.worker.js",
       "!node_modules/monaco-editor/min/vs/nls/lang/{!(ko).js,*.d.ts}",
-      "!node_modules/dompurify"
+      "!node_modules/dompurify",
+      "!renderer/features/cut/**",
+      "!main/cut/**",
+      "!main/features/cut.js",
+      "!main/ai/{whisper,voice,speaker}_server.py"
+    ],
+    "extraResources": [
+      {
+        "from": "cut-rs/target/release/nano-studio-cut.exe",
+        "to": "cut/nano-studio-cut.exe"
+      },
+      {
+        "from": "main/ai",
+        "to": "cut/sidecars",
+        "filter": [
+          "whisper_server.py",
+          "voice_server.py",
+          "speaker_server.py"
+        ]
+      }
     ],
     "asarUnpack": [
       "main/**/*.py",

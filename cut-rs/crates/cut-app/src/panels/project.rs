@@ -593,6 +593,7 @@ fn context_menu(s: &mut Shell, e: &Entry, r: &egui::Response) {
             EntryKind::Media => {
                 crate::edit::menus::open_in_source(s, ui, crate::edit::source::SourceItem::Media(e.id));
                 crate::panels::media_marks::context_items(s, ui, e.id);
+                crate::voice::media_menu_item(s, ui, e.id);
                 crate::edit::menus::sequence_from_clip(s, ui, e.id);
             }
             EntryKind::Sequence => {

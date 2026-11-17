@@ -28,6 +28,8 @@ pub struct StyleForm {
     pub boxed: bool,
     /// Captions with word timings, of all.
     pub timed: (usize, usize),
+    /// How the captions show their speakers (`crate::speakers::label::CAPTION_MODES`).
+    pub speakers: &'static str,
 }
 
 fn text_of(v: Option<&Json>, or: &str) -> String {
@@ -67,18 +69,23 @@ impl StyleForm {
             highlight_color: color("highlightColor", "#ffd23f"),
             boxed: text_of(s.get("highlightMode"), "color") == "box",
             timed: (timed, t.items.len()),
+            speakers: crate::speakers::label::mode_of(&s),
         }
     }
 
     /// The style patch OK sets.
     pub fn patch(&self) -> Json {
         let a = (self.alpha / 100.0 * 255.0 + 0.5).floor().clamp(0.0, 255.0) as u8;
-        json!({ "style": {
+        let mut style = json!({
             "font": self.font, "size": self.size.round() as i64, "color": rgb(self.color),
             "background": format!("{}{a:02x}", rgb(self.background)),
             "position": if self.bottom { "bottom" } else { "top" }, "highlight": self.highlight,
             "highlightColor": rgb(self.highlight_color), "highlightMode": if self.boxed { "box" } else { "color" },
-        } })
+        });
+        if let (Some(s), Json::Object(spk)) = (style.as_object_mut(), crate::speakers::label::style_of(self.speakers)) {
+            s.extend(spk);
+        }
+        json!({ "style": style })
     }
 }
 
@@ -157,6 +164,7 @@ pub fn window(s: &mut Shell, ctx: &egui::Context) {
                 "{n} of {m} captions have word timings. Captions made with Auto Captions have them; imported or typed ones show no highlight.",
                 &[("n", &f.timed.0.to_string()), ("m", &f.timed.1.to_string())],
             )).size(11.0));
+            crate::speakers::label::style_row(ui, &mut f.speakers);
             ui.horizontal(|ui| {
                 if ui.button(tr("OK")).clicked() {
                     done = Some(true);

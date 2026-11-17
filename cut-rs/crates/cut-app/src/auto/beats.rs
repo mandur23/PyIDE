@@ -51,6 +51,8 @@ pub struct BeatsUi {
     pub open: Option<Every>,
     pub job: Option<Job<Found>>,
     plan: Option<(Id, Every)>,
+    /// The tempo of the last detection that made markers (the control API answers it).
+    pub last_bpm: Option<f64>,
 }
 
 /// Detect Beats… chosen: the dialog for the first selected clip with sound (`soundClips(app, { all: false })`).
@@ -149,6 +151,7 @@ pub fn poll(s: &mut Shell, playing: bool) {
         return;
     };
     if s.app.exec(&C::batch("Add Beat Markers", cmds)).is_some() {
+        s.features.auto.beats.last_bpm = Some(found.bpm);
         s.app.toast(trf(
             "{bpm} BPM: {n} beat markers.",
             &[("bpm", &format!("{:.1}", found.bpm)), ("n", &count.to_string())],

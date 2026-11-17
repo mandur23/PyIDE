@@ -48,11 +48,13 @@ pub mod share;
 mod source;
 #[cfg(windows)]
 mod video;
+#[cfg(windows)]
+mod vorbis;
 
 #[cfg(windows)]
 pub use audio::{Pcm, decode_audio};
 #[cfg(windows)]
-pub use audio_part::{Blocks, OPUS_SURROUND, audio_decoder_names, audio_refusal, decode_audio_samples, decodes_audio};
+pub use audio_part::{Blocks, audio_decoder_names, audio_refusal, decode_audio_samples, decodes_audio};
 pub use error::{DecodeError, Result};
 #[cfg(windows)]
 pub use source::{FrameSource, Stats};

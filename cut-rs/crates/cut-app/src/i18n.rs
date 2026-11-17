@@ -11,7 +11,7 @@ const CORE_KO: &str = include_str!("../../../../renderer/locales/ko.json");
 const CUT_KO: &str = include_str!("../../../../renderer/features/cut/locales/ko.json");
 
 /// Texts only the native app shows (the JavaScript editor has no such sentence to reuse).
-const NATIVE_KO: [(&str, &str); 18] = [
+const NATIVE_KO: [(&str, &str); 17] = [
     ("Find Action", "동작 찾기"),
     ("No action matches.", "일치하는 동작이 없습니다."),
     ("{n} clips", "클립 {n}개"),
@@ -38,10 +38,6 @@ const NATIVE_KO: [(&str, &str); 18] = [
     ("Vorbis audio is not supported yet.", "Vorbis 오디오는 아직 지원하지 않습니다."),
     ("ALAC audio is not supported yet.", "ALAC 오디오는 아직 지원하지 않습니다."),
     ("This audio codec is not supported.", "지원하지 않는 오디오 코덱입니다."),
-    (
-        "Opus audio with more than two channels is not supported yet.",
-        "2채널을 넘는 Opus 오디오는 아직 지원하지 않습니다.",
-    ),
 ];
 
 /// The panels' windows: words agreed with the JavaScript apps' same feature, so they win over the core dictionary's
@@ -84,9 +80,18 @@ thread_local! {
     static LANG: Cell<Lang> = const { Cell::new(Lang::En) };
 }
 
+// The language last chosen on any thread: the app's, for text shown off the drawing thread (the crash message).
+static LAST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Switches every later `tr` on this thread to `lang`.
 pub fn set_lang(lang: Lang) {
     LANG.with(|l| l.set(lang));
+    LAST.store(lang == Lang::Ko, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The language last switched to on any thread (the app has one drawing thread, so it is the screen's).
+pub fn last_lang() -> Lang {
+    if LAST.load(std::sync::atomic::Ordering::Relaxed) { Lang::Ko } else { Lang::En }
 }
 
 pub fn lang() -> Lang {
@@ -100,6 +105,9 @@ fn korean() -> &'static HashMap<String, String> {
         map.extend(serde_json::from_str::<HashMap<String, String>>(CUT_KO).unwrap_or_default());
         for (k, v) in NATIVE_KO {
             map.entry(k.to_owned()).or_insert_with(|| v.to_owned());
+        }
+        for (k, v) in crate::crash::KO.iter().chain(&crate::update::KO).chain(&crate::control::panel::KO) {
+            map.entry((*k).to_owned()).or_insert_with(|| (*v).to_owned());
         }
         for (k, v) in crate::timeline::direct::KO {
             map.entry(k.to_owned()).or_insert_with(|| v.to_owned());

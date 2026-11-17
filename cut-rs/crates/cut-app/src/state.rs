@@ -107,6 +107,7 @@ pub enum Panel {
     Markers,
     History,
     Tools,
+    Transcript,
 }
 
 /// The sequence In/Out points.

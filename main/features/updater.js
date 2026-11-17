@@ -449,8 +449,14 @@ function start({ ipcMain, app, send, diagnostics, quitAhead, windows }) {
   // work (servers saving their worlds, main.js) is done first. If any of it does not finish in time nothing is installed
   // over it. The renderer has asked about running programs and saved unsaved files.
   // -> {installed, late: how many quit jobs did not finish in time}.
+  // -> {installed, late, cutOpen: how many Nano Studio Cut programs did not close (main/cut-close.js)}.
   async function install() {
     if (state.phase !== 'downloaded') return { installed: false, late: 0 };
+    // PYIDE_UPDATE_INSTALL_DIR (with PYIDE_UPDATE_TEST=1): the folder whose Cut programs verify/cut-rust-update.mjs runs.
+    const dir = (process.env.PYIDE_UPDATE_TEST === '1' && process.env.PYIDE_UPDATE_INSTALL_DIR) || path.dirname(process.execPath);
+    const waitMs = (process.env.PYIDE_UPDATE_TEST === '1' && Number(process.env.PYIDE_UPDATE_CUT_WAIT_MS)) || undefined;
+    const cut = await require('../cut-close').closeAll({ dir, waitMs, log });
+    if (cut.left.length) return { installed: false, late: 0, cutOpen: cut.left.length };
     let installed = false;
     const begin = () => {
       const u = getUpdater();
@@ -525,9 +531,11 @@ function start({ ipcMain, app, send, diagnostics, quitAhead, windows }) {
 
   // ---------- the start chooser ----------
   // It runs before any renderer of the app, so these read the settings the renderer's check reads.
-  async function checkAtStart(settings) {
+  // force: a check the person asked for (Cut's Check for Updates…), made even when checks at start are off.
+  async function checkAtStart(settings, { force = false } = {}) {
     const value = String(settings?.['updates.feedUrl'] ?? state.defaultFeed ?? '').trim();
-    if (settings?.['updates.checkOnStartup'] === false || settings?.['powerSave.enabled'] === true || !value) return;
+    const off = settings?.['updates.checkOnStartup'] === false || settings?.['powerSave.enabled'] === true;
+    if ((off && !force) || !value) return;
     // A folder feed is read with sync calls, which on a share that does not answer hold the main process for ~20 s.
     if (!/^https?:/i.test(value)) {
       const dir = /^file:/i.test(value) ? fileURLToPath(value) : value;
@@ -536,10 +544,23 @@ function start({ ipcMain, app, send, diagnostics, quitAhead, windows }) {
     }
     try { await check(value, { channel: settings?.['updates.channel'] }); } catch (err) { log.warn(`update check failed: ${err.message}`); }
   }
+  // The message for an update a running Cut kept from installing, in the app's language.
+  function cutOpenText(settings) {
+    let lang = settings?.['appearance.language'];
+    if (!['en', 'ko'].includes(lang)) lang = app.getLocale().toLowerCase().startsWith('ko') ? 'ko' : 'en';
+    const tr = require('../cut-launcher').translator(app.getAppPath(), lang);
+    return { message: tr('Nano Studio Cut is still open, so Nano Studio was not updated.'), detail: tr('Save your work in Cut and close it, then update again.') };
+  }
+
   // The update icon: one click downloads, the next installs. Another Nano Studio process may hold unsaved work, and the
   // installer closes every one of them, so it never starts by itself.
   async function updateNow(settings) {
-    if (state.phase === 'downloaded') return void install();
+    if (state.phase === 'downloaded') {
+      const result = await install();
+      // The chooser has no message of its own for this; the IDE window's is in renderer/features/updater.
+      if (result.cutOpen) await require('electron').dialog.showMessageBox({ type: 'info', title: 'Nano Studio', noLink: true, ...cutOpenText(settings) });
+      return;
+    }
     if (kind === 'msi') return void openInstaller().catch((err) => log.warn(`update download failed: ${err.message}`));
     if (kind !== 'nsis' || !offered) return;
     try { await download({ differential: settings?.['updates.differential'] !== false }); } catch (err) { log.warn(`update download failed: ${err.message}`); }

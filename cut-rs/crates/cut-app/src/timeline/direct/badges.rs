@@ -129,7 +129,17 @@ pub fn refresh(s: &mut Shell) -> bool {
 }
 
 fn menu_ids() -> &'static [&'static str] {
-    &["auto.loudness", "auto.clipLoudness", "auto.silence", "auto.scenes", "auto.beats", "auto.duck", "auto.color"]
+    &[
+        "auto.loudness",
+        "auto.clipLoudness",
+        "auto.silence",
+        "auto.scenes",
+        "auto.beats",
+        "auto.duck",
+        "auto.color",
+        "auto.isolateVoice",
+        "auto.speakers",
+    ]
 }
 
 /// The proxy badge at the top right of a clip's bar (the Project panel's `cut-proxy-badge`, which the JavaScript's

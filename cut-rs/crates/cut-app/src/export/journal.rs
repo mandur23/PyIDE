@@ -63,7 +63,14 @@ impl ExportJournal {
 
     /// Removes the part files of runs that are gone, and their lists.
     pub fn sweep(&self) {
-        let Some(dir) = self.file.parent() else { return };
+        if let Some(dir) = self.file.parent() {
+            self.sweep_in(dir);
+        }
+    }
+
+    /// [`ExportJournal::sweep`] in another journal folder by the same rules: the JavaScript Cut's
+    /// `%APPDATA%\Nano Studio\cut-exports`, whose lists have the same names and fields (`sink.js`).
+    pub fn sweep_in(&self, dir: &Path) {
         let Ok(entries) = fs::read_dir(dir) else { return };
         let files: Vec<PathBuf> = entries
             .filter_map(Result::ok)
@@ -121,7 +128,17 @@ pub fn get(s: &mut Shell) -> Arc<dyn Journal> {
     let dir = s.doc.home.home.join(".cut-rs").join("cut-exports");
     let j = Arc::new(ExportJournal::new(&dir, RUN.get_or_init(Run::new).clone()));
     let sweeper = j.clone();
-    std::thread::Builder::new().name("export journal".into()).spawn(move || sweeper.sweep()).ok();
+    // the JavaScript Cut (no longer installed) kept its journal beside Nano Studio's settings
+    let js = crate::studio::js_export_journal();
+    std::thread::Builder::new()
+        .name("export journal".into())
+        .spawn(move || {
+            sweeper.sweep();
+            if let Some(dir) = js {
+                sweeper.sweep_in(&dir);
+            }
+        })
+        .ok();
     s.features.export.journal = Some(j.clone());
     j
 }
@@ -173,6 +190,37 @@ mod tests {
         assert!(part.exists() && me.file.exists(), "this run's list and part stay");
         me.remove(&part);
         assert!(!me.file.exists(), "an empty list is deleted");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_javascript_cuts_leftovers_are_cleaned_by_its_journal() {
+        let dir = std::env::temp_dir().join(format!("cut-journal-js-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let js = dir.join("cut-exports");
+        fs::create_dir_all(&js).unwrap();
+        let file = |name: &str| {
+            let p = dir.join(name);
+            fs::write(&p, b"x").unwrap();
+            p
+        };
+        let (listed, tmp, other, unlisted) =
+            (file("talk.mp4.part"), file("talk.mp4.1a2b3c4d.faststart.tmp"), file("talk.mp4"), file("film.mp4.part"));
+        // a list as sink.js writes it (`run.mark({ parts })`), of a run that is gone
+        let dead = js.join("4242-abcdef.json");
+        let parts = json!([listed.to_string_lossy(), tmp.to_string_lossy(), other.to_string_lossy()]);
+        fs::write(&dead, json!({ "pid": 4242, "run": "abcdef", "started": 1, "parts": parts }).to_string()).unwrap();
+        let me = Run::new();
+        let live = js.join(format!("{}-{}.json", me.pid, me.run));
+        let live_part = file("live.mp4.part");
+        let marker =
+            json!({ "pid": me.pid, "run": me.run, "started": me.started, "parts": [live_part.to_string_lossy()] });
+        fs::write(&live, marker.to_string()).unwrap();
+        ExportJournal::new(&dir.join("own"), me).sweep_in(&js);
+        assert!(!listed.exists() && !tmp.exists() && !dead.exists(), "a gone run's parts and its list are removed");
+        assert!(other.exists(), "a finished file it lists stays (only .part and .faststart.tmp go)");
+        assert!(unlisted.exists(), "a part no list names stays");
+        assert!(live.exists() && live_part.exists(), "a run that still runs keeps its parts");
         fs::remove_dir_all(&dir).unwrap();
     }
 }

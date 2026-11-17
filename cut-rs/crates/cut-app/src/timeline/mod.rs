@@ -107,6 +107,8 @@ pub struct Timeline {
     volume_drag: Option<head_volume::VolumeDrag>,
     /// The tool buttons in the timeline's own bar (`cut.timelineTools`, Window > Timeline Tool Bar).
     pub tool_bar: bool,
+    /// The clips an AI's edit just changed and when their flash ends (`highlight`, `flash`).
+    pub flashing: Option<(std::collections::HashSet<Id>, std::time::Instant)>,
 }
 
 impl Default for Timeline {
@@ -128,6 +130,7 @@ impl Default for Timeline {
             trim_view: None,
             volume_drag: None,
             tool_bar: false,
+            flashing: None,
         }
     }
 }
@@ -162,6 +165,13 @@ fn frame_of(seq: &Sequence) -> Ticks {
 }
 
 impl Timeline {
+    /// The clips an AI's edit changed flash for 1.4 s (`timeline.flash`).
+    pub fn flash(&mut self, ids: &[Id]) {
+        self.flashing = (!ids.is_empty()).then(|| {
+            (ids.iter().copied().collect(), std::time::Instant::now() + std::time::Duration::from_millis(1400))
+        });
+    }
+
     /// Rebuilds the clip index when the project or the sequence changed.
     fn refresh(&mut self, app: &App) {
         let Some(seq) = app.sequence() else {
@@ -274,15 +284,14 @@ impl Timeline {
         }
 
         self.bar(ui, bar, app, pal);
-        // Timecode of the playhead (`Playhead Position`).
+        // Timecode of the playhead, typed into to move it.
         painter.rect_filled(corner, 0.0, pal.gray[2]);
-        painter.text(
-            Pos2::new(corner.left() + 10.0, corner.center().y),
-            Align2::LEFT_CENTER,
-            timecode(app.t, seq.fps),
-            FontId::monospace(14.0),
-            pal.accent,
-        );
+        let tc = Rect::from_min_max(corner.min + Vec2::new(8.0, 6.0), corner.max - Vec2::new(8.0, 6.0));
+        let look = (FontId::monospace(14.0), pal.accent);
+        let id = ui.scope_id().with("cut-timeline-tc");
+        if let Some(t) = crate::panels::timecode::field(ui, tc, id, (app.t, seq.fps), look, &tr("Playhead Position")) {
+            app.set_time(t.max(0));
+        }
         ruler::draw(&painter, ruler, &self.view, &seq, app, pal);
         self.heads(ui, heads, app, pal, &seq);
         self.lanes(ui, lanes, app, pal, &seq, thumbs);
@@ -380,15 +389,26 @@ impl Timeline {
                     continue;
                 }
                 RowKind::Caption => {
-                    let name =
-                        row.id.and_then(|id| seq.captions.iter().find(|c| c.id == id)).map_or("", |c| c.name.as_str());
-                    painter.text(
+                    let Some(ct) = row.id.and_then(|id| seq.captions.iter().find(|c| c.id == id)) else { continue };
+                    let name = [ct.name.as_str(), ct.lang.as_str()].into_iter().find(|n| !n.is_empty());
+                    let at = painter.text(
                         Pos2::new(r.left() + 10.0, r.center().y),
                         Align2::LEFT_CENTER,
-                        name,
+                        name.map_or_else(|| tr("Captions"), Into::into),
                         FontId::proportional(12.0),
                         pal.gray[11],
                     );
+                    // Sync lock of the caption track (ripple edits move its captions), on unless turned off.
+                    let b = Rect::from_center_size(Pos2::new(at.right() + 16.0, r.center().y), Vec2::splat(20.0));
+                    let icon = egui::Button::new(egui::RichText::new(crate::icons::SYNC).size(11.0));
+                    let sync = ui.put(b, icon.selected(ct.sync_lock)).on_hover_text(tr("Sync Lock"));
+                    let on = ct.sync_lock;
+                    sync.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, tr("Sync Lock")));
+                    if sync.clicked() {
+                        let patch = json!({ "syncLock": !on });
+                        let id = (seq.id.as_str(), ct.id.as_str());
+                        app.exec(&cut_model::commands::build::set_caption_track(id.0, id.1, patch));
+                    }
                     continue;
                 }
                 _ => {}
@@ -472,7 +492,9 @@ impl Timeline {
             // The bottom edge of a header changes the track's height (one undo step).
             let grip =
                 Rect::from_min_max(Pos2::new(r.left(), r.bottom() - 4.0), Pos2::new(r.right(), r.bottom() + 1.0));
-            let g = ui.interact(grip, ui.scope_id().with(("height", track.id.as_str())), Sense::drag());
+            let g = ui
+                .interact(grip, ui.scope_id().with(("height", track.id.as_str())), Sense::drag())
+                .on_hover_text(tr("Drag to change the track height"));
             if g.hovered() || g.dragged() {
                 ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
             }
@@ -588,6 +610,22 @@ impl Timeline {
                 }
                 if selected {
                     painter.rect_stroke(r, CornerRadius::same(2), Stroke::new(2.0, pal.selected), StrokeKind::Inside);
+                }
+                if let Some((ids, until)) = &self.flashing
+                    && ids.contains(&clip.id)
+                    && *until > std::time::Instant::now()
+                {
+                    // a bright edge that fades over its last 450 ms
+                    let left = until.saturating_duration_since(std::time::Instant::now()).as_secs_f32();
+                    let k = (left / 0.45).min(1.0);
+                    painter.rect_filled(r, CornerRadius::same(2), pal.accent.gamma_multiply(0.3 * k));
+                    painter.rect_stroke(
+                        r,
+                        CornerRadius::same(2),
+                        Stroke::new(2.0, pal.accent.gamma_multiply(k)),
+                        StrokeKind::Inside,
+                    );
+                    painter.ctx().request_repaint();
                 }
                 marks::clip(&mx, clip, row, r, selected);
                 let badge = direct::badges::clip(&painter, &self.direct.marks, clip, r);

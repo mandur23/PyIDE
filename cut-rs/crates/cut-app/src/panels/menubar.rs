@@ -106,14 +106,19 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui) {
             }
             item(s, ui, "window.essential", Some("Essential Sound"));
             item(s, ui, "window.captions", Some("Captions"));
+            item(s, ui, "window.transcript", Some("Transcript"));
             crate::windows::menu(s, ui);
         });
         ui.menu_button(tr("Help"), |ui| {
             item(s, ui, "keyHelp", None);
             item(s, ui, "keyboardShortcuts", None);
             item(s, ui, "findAction", Some("Find Action…"));
+            ui.separator();
+            item(s, ui, "checkForUpdates", Some("Check for Updates…"));
+            item(s, ui, "about", Some(crate::update::KO[0].0));
         });
     });
+    crate::update::about(ui.ctx());
 }
 
 fn file(s: &mut Shell, ui: &mut egui::Ui) {

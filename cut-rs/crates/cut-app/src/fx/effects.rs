@@ -324,13 +324,14 @@ fn item_row(ui: &mut egui::Ui, s: &mut Shell, d: &'static Def, depth: usize, fav
         bx = t.right() + 6.0;
     }
     if favs.iter().any(|f| f == d.id) {
-        ui.painter().text(
+        let star = ui.painter().text(
             Pos2::new(bx, rect.center().y),
             egui::Align2::LEFT_CENTER,
             glyph::STAR,
             egui::FontId::proportional(11.0),
             Color32::from_rgb(0xe6, 0xc2, 0x29),
         );
+        ui.interact(star, r.id.with("favorite"), egui::Sense::hover()).on_hover_text(tr("Favorite"));
     }
     let r = r.on_hover_text(tr(d.name));
     if r.clicked() || r.drag_started() {

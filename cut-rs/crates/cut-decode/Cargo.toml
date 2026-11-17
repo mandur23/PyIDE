@@ -11,6 +11,8 @@ publish.workspace = true
 cut-time = { path = "../cut-time" }
 cut-formats = { path = "../cut-formats" }
 thiserror = "2"
+# Vorbis (pure Rust; the owner approved it on 2026-11-16). Without its `ogg` feature: packets come from cut-formats.
+lewton = { version = "0.10.2", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

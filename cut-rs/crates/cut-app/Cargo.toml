@@ -24,6 +24,8 @@ cut-audio = { path = "../cut-audio" }
 cut-export = { path = "../cut-export" }
 # The codec tables behind the import's refusal sentences (and the generated test media in tests/media).
 cut-decode = { path = "../cut-decode" }
+# The private AI environment and the Python servers of speech recognition, speaker labels and voice isolation.
+cut-sidecar = { path = "../cut-sidecar" }
 # Thumbnails kept in the cache as JPEG, as the JavaScript keeps them (the engine already builds this version).
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 eframe = { version = "0.37.0", default-features = false, features = ["wgpu", "default_fonts", "accesskit"] }
@@ -33,6 +35,8 @@ rfd = { version = "0.15", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 sha1 = "0.10"
+# Windows' display language for Nano Studio's `system` language (already built here for cosmic-text).
+sys-locale = "0.3"
 
 [dev-dependencies]
 cut-oracle = { path = "../cut-oracle" }

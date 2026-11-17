@@ -56,14 +56,18 @@ fn surround_opus_decodes_each_stream_into_its_channel() {
     let mono = decode_audio(&reader, &source.tracks[0]).expect("the mono fixture");
     let same =
         |x: &[f32]| x.len() == mono.data[0].len() && x.iter().zip(&mono.data[0]).all(|(a, b)| (a - b).abs() < 1e-6);
-    // one stream routed to channel 1 of six, the others silent
-    let (reader, source) = open(&opus_routed_webm("opus-51-to1.webm", 6, 1));
-    let out = decode_audio(&reader, &source.tracks[0]).expect("5.1 Opus");
-    assert_eq!((out.rate, out.channels), (48000, 6));
-    for (c, x) in out.data.iter().enumerate() {
-        assert!(if c == 1 { same(x) } else { x.iter().all(|v| *v == 0.0) }, "channel {c}");
+    // One stream routed to each channel of 5.1 (Vorbis order L C R Ls Rs LFE), the others silent: it comes out in
+    // WebCodecs' order, L R C LFE Ls Rs, so the first two channels are left and right.
+    for (to, out_at) in [(0, 0), (1, 2), (2, 1), (3, 4), (4, 5), (5, 3)] {
+        let (reader, source) = open(&opus_routed_webm(&format!("opus-51-to{to}.webm"), 6, to));
+        let out = decode_audio(&reader, &source.tracks[0]).expect("5.1 Opus");
+        assert_eq!((out.rate, out.channels), (48000, 6));
+        for (c, x) in out.data.iter().enumerate() {
+            assert!(if c == out_at { same(x) } else { x.iter().all(|v| *v == 0.0) }, "Vorbis {to}: channel {c}");
+        }
     }
-    // three streams in one packet (two self-delimited), channels from streams 2, 0, 1 and one silent
+    // three streams in one packet (two self-delimited), channels from streams 2, 0, 1 and one silent (four channels
+    // keep their order)
     let (reader, source) = open(&opus_streams_webm("opus-3-streams.webm", 3, &[2, 0, 255, 1]));
     let track = &source.tracks[0];
     assert!(decodes_audio(&track.codec));

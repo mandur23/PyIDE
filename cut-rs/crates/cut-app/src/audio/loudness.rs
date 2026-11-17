@@ -61,7 +61,7 @@ pub fn alone(project: &Project, seq: Id, clip: Id) -> Option<Project> {
 }
 
 /// The master gain that meets `target` (`gain()`): the sequence's own plus the match, to 0.01 dB.
-fn master_gain_for(seq: &Sequence, measured: &Loudness, target: f64) -> f64 {
+pub fn master_gain_for(seq: &Sequence, measured: &Loudness, target: f64) -> f64 {
     js_round((seq.master_gain + match_gain(measured, target, -1.0)) * 100.0) / 100.0
 }
 
@@ -71,7 +71,7 @@ fn round1(x: f64) -> f64 {
 
 /// The commands that bring each measured clip to `target` (its volume and volume keyframes moved by the same dB,
 /// kept within -60..24), and each clip's new volume. Silent clips are left out.
-fn clip_commands(seq: &Sequence, measured: &[(Id, Option<Loudness>)], target: f64) -> (Vec<Json>, Vec<(Id, f64)>) {
+pub fn clip_commands(seq: &Sequence, measured: &[(Id, Option<Loudness>)], target: f64) -> (Vec<Json>, Vec<(Id, f64)>) {
     let mut cmds = Vec::new();
     let mut gains = Vec::new();
     for (id, m) in measured {

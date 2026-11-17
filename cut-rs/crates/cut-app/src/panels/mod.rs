@@ -13,6 +13,7 @@ pub mod new_item;
 pub mod project;
 pub mod source;
 pub mod status;
+pub mod timecode;
 pub mod tools;
 pub mod topbar;
 

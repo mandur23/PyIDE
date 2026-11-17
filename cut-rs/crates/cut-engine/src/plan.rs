@@ -353,14 +353,67 @@ pub enum Which<'a> {
     Ids(&'a [cut_model::Id]),
 }
 
-/// One caption track's items under t.
+/// One caption track's items under t, each with how its speaker shows ([`shown`]).
 pub struct Captions<'p> {
     pub style: &'p Map<String, Json>,
     pub t: f64,
     pub items: Vec<&'p cut_model::Caption>,
+    pub shown: Vec<Shown>,
 }
 
-pub fn captions_at<'p>(seq: &'p Sequence, t: f64, which: Which<'_>) -> Vec<Captions<'p>> {
+/// A caption as shown (speakers.js `shown`): its speaker's name before the text (`style.speakerName`, as `Name: `)
+/// and its colour (`style.speakerColor`), for a speaker of the project's labels.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Hash)]
+pub struct Shown {
+    pub prefix: String,
+    pub color: Option<String>,
+}
+
+/// JavaScript's truthiness, for fields another editor wrote.
+fn truthy(v: Option<&Json>) -> bool {
+    match v {
+        None | Some(Json::Null) => false,
+        Some(Json::Bool(b)) => *b,
+        Some(Json::Number(n)) => n.as_f64().is_some_and(|f| f != 0.0 && !f.is_nan()),
+        Some(Json::String(s)) => !s.is_empty(),
+        Some(_) => true,
+    }
+}
+
+/// How `item` of a track of `style` shows its speaker under the project's labels `speakers` (speakers.js `shown` as
+/// `decorate` applies it: nothing without labels or when the style shows no speakers); `unnamed` is "Speaker {n}"
+/// in the screen's language.
+pub fn shown(speakers: Option<&Json>, style: &Map<String, Json>, item: &cut_model::Caption, unnamed: &str) -> Shown {
+    let list = speakers.and_then(|s| s.get("list")).and_then(Json::as_array).map_or(&[][..], Vec::as_slice);
+    let (name, color) = (truthy(style.get("speakerName")), truthy(style.get("speakerColor")));
+    let at = item
+        .speaker
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .and_then(|id| list.iter().position(|s| s.get("id").and_then(Json::as_str) == Some(id)));
+    let Some(i) = at.filter(|_| name || color) else { return Shown::default() };
+    let text = |v: Option<&Json>| match v {
+        Some(Json::String(s)) => s.clone(),
+        Some(v) => v.to_string(),
+        None => String::new(),
+    };
+    let own = list[i].get("name");
+    let label = if truthy(own) { text(own) } else { unnamed.replacen("{n}", &(i + 1).to_string(), 1) };
+    Shown {
+        prefix: if name { format!("{label}: ") } else { String::new() },
+        color: (color && truthy(list[i].get("color"))).then(|| text(list[i].get("color"))),
+    }
+}
+
+/// The caption tracks `which` names, with the items under t and how their speakers show under `speakers` (the
+/// project's labels; `unnamed` as [`shown`] takes it).
+pub fn captions_at<'p>(
+    seq: &'p Sequence,
+    t: f64,
+    which: Which<'_>,
+    speakers: Option<&Json>,
+    unnamed: &str,
+) -> Vec<Captions<'p>> {
     let chosen: Vec<&cut_model::CaptionTrack> = match which {
         Which::None => return Vec::new(),
         Which::First => seq.captions.iter().take(1).collect(),
@@ -369,10 +422,11 @@ pub fn captions_at<'p>(seq: &'p Sequence, t: f64, which: Which<'_>) -> Vec<Capti
     let ft = if seq.fps.num > 0 { cut_time::snap(t.round() as i64, seq.fps, false) as f64 } else { t };
     chosen
         .into_iter()
-        .map(|c| Captions {
-            style: &c.style,
-            t: ft,
-            items: c.items.iter().filter(|it| it.start as f64 <= t && t < it.end as f64).collect(),
+        .map(|c| {
+            let items: Vec<&cut_model::Caption> =
+                c.items.iter().filter(|it| it.start as f64 <= t && t < it.end as f64).collect();
+            let shown = items.iter().map(|it| shown(speakers, &c.style, it, unnamed)).collect();
+            Captions { style: &c.style, t: ft, items, shown }
         })
         .filter(|c| !c.items.is_empty())
         .collect()

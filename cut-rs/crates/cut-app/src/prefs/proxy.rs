@@ -101,7 +101,7 @@ pub fn hash(text: &str) -> String {
 }
 
 /// A JSON value as JavaScript's template string writes it (`${m.size}`).
-fn js_text(v: &Json) -> String {
+pub fn js_text(v: &Json) -> String {
     match v {
         Json::Null => "null".into(),
         Json::Number(n) => match n.as_f64() {

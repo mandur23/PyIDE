@@ -164,7 +164,14 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui) {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.add_space(8.0);
-        ui.label(RichText::new(timecode(at, fps)).monospace().color(pal.accent).size(14.0));
+        let id = ui.scope_id().with("cut-source-tc");
+        let look = (egui::FontId::monospace(14.0), pal.accent);
+        if let Some(t) = super::timecode::inline(ui, id, (at, fps), look, &tr("Playhead position"))
+            && clip.is_some()
+        {
+            let p = s.app.history.project();
+            s.app.edit.source.scrub(p, t.clamp(0, end.max(0)));
+        }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.add_space(8.0);
             let tip = if i.is_some() || o.is_some() { tr("In to Out duration") } else { tr("Duration") };

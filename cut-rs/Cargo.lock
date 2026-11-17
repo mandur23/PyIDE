@@ -498,6 +498,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "byteorder"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
+
+[[package]]
 name = "byteorder-lite"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -810,6 +816,7 @@ dependencies = [
  "cut-formats",
  "cut-model",
  "cut-oracle",
+ "cut-sidecar",
  "cut-time",
  "eframe",
  "egui_kittest",
@@ -818,6 +825,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1",
+ "sys-locale",
 ]
 
 [[package]]
@@ -840,6 +848,7 @@ version = "0.1.0"
 dependencies = [
  "cut-formats",
  "cut-time",
+ "lewton",
  "png",
  "thiserror 2.0.21",
  "wgpu",
@@ -912,6 +921,13 @@ dependencies = [
 
 [[package]]
 name = "cut-oracle"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
+name = "cut-sidecar"
 version = "0.1.0"
 dependencies = [
  "serde_json",
@@ -1807,6 +1823,16 @@ name = "lazy_static"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
+
+[[package]]
+name = "lewton"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "777b48df9aaab155475a83a7df3070395ea1ac6902f5cd062b8f2b028075c030"
+dependencies = [
+ "byteorder",
+ "tinyvec",
+]
 
 [[package]]
 name = "libc"

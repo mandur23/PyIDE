@@ -9,9 +9,14 @@ use cut_decode::{Accel, Codec};
 #[test]
 fn hevc_main_decodes_every_frame_in_software_and_on_the_gpu() {
     let s = hevc();
+    if !here(&s) {
+        return;
+    }
     check_made("hevc-720p.mp4", &s, make::Timing::Constant, Accel::Software);
     let path = check_made("hevc-720p.mp4", &s, make::Timing::Constant, Accel::Auto);
-    assert!(path.starts_with("Hardware"), "{path}");
+    if gpu_here() {
+        assert!(path.starts_with("Hardware"), "{path}");
+    }
 }
 
 #[test]
@@ -34,8 +39,30 @@ fn hevc() -> cut_decode::encode::VideoSettings {
     cut_decode::encode::VideoSettings { b_frames: 0, ..make::settings(Codec::Hevc, 1280, 720) }
 }
 
+/// Whether an HEVC file can be made here: Windows has an HEVC encoder only with the HEVC Video Extension (a CI runner
+/// has none).
+fn here(s: &cut_decode::encode::VideoSettings) -> bool {
+    let probe = cut_decode::encode::encode_video(s, 1, |i, px| make::draw(i, px, s.width, s.height, s.ten_bit));
+    if let Err(e) = &probe {
+        eprintln!("skipped: no HEVC file can be made here: {e}");
+    }
+    probe.is_ok()
+}
+
+/// Whether there is a GPU: a CI runner's DXGI lists only its software adapter.
+fn gpu_here() -> bool {
+    let gpu = !cut_decode::adapters().iter().all(|a| a.contains("Basic Render"));
+    if !gpu {
+        eprintln!("skipped: no GPU here ({:?})", cut_decode::adapters());
+    }
+    gpu
+}
+
 #[test]
 fn hevc_gpu_frames_are_the_software_frames_byte_for_byte() {
+    if !here(&hevc()) || !gpu_here() {
+        return;
+    }
     let path = make::video("hevc-720p.mp4", &hevc(), 90, make::Timing::Constant);
     let (reader, source) = open(&path);
     let track = video(&source);

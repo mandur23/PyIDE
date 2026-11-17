@@ -183,6 +183,15 @@ struct Window {
 
 impl eframe::App for Window {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        if self.launch.startup.first_frame_start.is_none() {
+            // Nano Studio's theme while this app has none of its own; `system` is the window's (Windows')
+            if self.shell.doc.setting("theme").is_none()
+                && let Some(k) = cut_app::studio::theme(ui.ctx().system_theme())
+            {
+                self.shell.palette = cut_app::theme::Palette::of(k);
+            }
+            cut_app::crash::test_switch();
+        }
         self.launch.startup.first_frame_start.get_or_insert_with(now_ms);
         if self.launch.gpu.is_none()
             && let Some(rs) = frame.wgpu_render_state()
@@ -220,6 +229,8 @@ fn wgpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
 fn main() -> eframe::Result {
     let main_at = now_ms();
     let home = Home::resolve();
+    cut_app::crash::install(&home.home);
+    cut_app::studio::start(&home.home, main_at);
     // a project to open is read and parsed on a thread while the window and its GPU device are made
     let loading = std::env::args_os().nth(1).or_else(|| std::env::var_os("CUT_OPEN")).map(|path| {
         let mut projects = cut_app::files::Projects::new(home.autosave.clone());

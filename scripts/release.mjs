@@ -4,7 +4,7 @@
 // 1. checks: clean tree on master, local master contains origin's, a semver version above package.json's, no tag v<v>
 //    here or on origin, for a stable version a pushed HEAD that CI passed (a beta goes before CI), release notes, the release key (NANO_RELEASE_KEY, by default
 //    %USERPROFILE%\.nano-studio\release-key.pem) matching main/release-key.js, a signed Marketplace index, gh signed in
-// 2. sets the version in package.json and package-lock.json   3. npm run dist and checks the installers and latest.yml (beta.yml)
+// 2. sets the version in package.json and package-lock.json   3. builds cut-rs (cargo), npm run dist, checks the installers, latest.yml (beta.yml), the packed Cut exe
 // 4. verify/installed.mjs all on a hidden desktop              5. commit "Release <v>" and tag v<v>
 // 6. pushes master and the tag (atomic)
 // 7. publishes to the `nano-studio` release of mandur23/Portfolio-Nano- (never marked Latest): the installers, their
@@ -46,6 +46,10 @@ const DIST = process.env.PYIDE_DIST_DIR ? path.resolve(process.env.PYIDE_DIST_DI
 if (/["%^&|<>!]/.test(DIST)) throw new Error(`PYIDE_DIST_DIR must not contain " % ^ & | < > !: ${DIST}`);
 const PKG = path.join(ROOT, 'package.json');
 const LOCK = path.join(ROOT, 'package-lock.json');
+// Nano Studio Cut, the Rust program built before npm run dist (package.json build.extraResources packs it).
+const CUT_MANIFEST = path.join(ROOT, 'cut-rs', 'Cargo.toml');
+export const CUT_BUILT = path.join(ROOT, 'cut-rs', 'target', 'release', 'nano-studio-cut.exe');
+export const CUT_PACKED = path.join(DIST, 'win-unpacked', 'resources', 'cut', 'nano-studio-cut.exe');
 export const INSTALL_DIR = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Nano Studio');
 const EXE_NAME = 'Nano Studio.exe';
 const LOCAL_UNINSTALLER = path.join(INSTALL_DIR, 'Uninstall Nano Studio.exe');
@@ -319,6 +323,21 @@ function distProblem({ exe, blockmap, msi, yml: ymlFile }, v) {
   return null;
 }
 
+const sha256Of = (file) => (io.existsSync(file) ? createHash('sha256').update(io.readFileSync(file)).digest('hex') : null);
+
+// Builds cut-rs's release exe with the toolchain on PATH, else rustup's default ~\.cargo\bin. -> its SHA-256.
+function buildCut() {
+  const home = process.env.CARGO_HOME || path.join(process.env.USERPROFILE || '', '.cargo');
+  const cargo = ['cargo', path.join(home, 'bin', 'cargo.exe')].find((c) => sh(c, ['--version'], { capture: true, allowFail: true }).status === 0);
+  if (!cargo) fail('cargo was not found (on PATH or in ~\\.cargo\\bin): Nano Studio Cut (cut-rs) is a Rust program, and the release builds it. Install Rust with rustup (docs/development.md, 8)');
+  log(`  $ ${show('cargo', ['build', '--release', '--locked', '-p', 'cut-app', '--manifest-path', CUT_MANIFEST])}`);
+  sh(cargo, ['build', '--release', '--locked', '-p', 'cut-app', '--manifest-path', CUT_MANIFEST]);
+  const hash = sha256Of(CUT_BUILT);
+  if (!hash) fail(`cargo build finished without ${path.relative(ROOT, CUT_BUILT)}`);
+  log(`  ${path.relative(ROOT, CUT_BUILT)}: ${(io.readFileSync(CUT_BUILT).length / 1048576).toFixed(1)} MB, SHA-256 ${hash}`);
+  return hash;
+}
+
 // ---------- signing ----------
 // Set by checkSigningKey in step 1, used in step 7.
 let sign = null;
@@ -518,10 +537,11 @@ async function main() {
     if (problem) blocker(problem);
     else log(`  ${built}`);
   } else {
-    step(3, 'npm run dist');
+    step(3, 'build Nano Studio Cut (cargo build --release -p cut-app), then npm run dist');
+    const cut = buildCut();
     if (dryRun && io.existsSync(yml)) state.ymlBefore = io.readFileSync(yml);
     sh(process.env.PYIDE_DIST_DIR ? `npm run dist -- "-c.directories.output=${DIST}"` : 'npm run dist', [], { shell: true });
-    const problem = distProblem(files, V);
+    const problem = distProblem(files, V) || (sha256Of(CUT_PACKED) !== cut ? `${path.relative(ROOT, CUT_PACKED)} is not the Nano Studio Cut just built` : null);
     if (problem) fail(`after npm run dist: ${problem}`);
     log(`  ${built}`);
   }

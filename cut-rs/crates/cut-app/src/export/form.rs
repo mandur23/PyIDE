@@ -369,6 +369,13 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui, inline: bool) {
     let io = s.app.in_out;
     let has_io = Some(seq.id) == s.app.sequence_id && (io.in_.is_some() || io.out.is_some());
     let has_captions = seq.captions.iter().any(|c| !c.items.is_empty());
+    // the track a burn-in draws, named when there is more than one
+    let shown = crate::captions::shown(s).filter(|_| Some(seq.id) == s.app.sequence_id);
+    let burned = shown
+        .and_then(|id| seq.captions.iter().find(|c| c.id == id))
+        .or(seq.captions.first())
+        .filter(|_| seq.captions.len() > 1)
+        .map(|c| trf("Burns in the caption track shown in the Captions panel: {name}", &[("name", &c.name)]));
     let busy = s.features.export.busy();
     let own = s.features.export.running_own();
     let f = &mut s.features.export.form;
@@ -511,6 +518,13 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui, inline: bool) {
                     });
                 });
             });
+            if let Some(note) = &burned
+                && matches!(f.captions, Some(CaptionMode::Burn | CaptionMode::Both))
+            {
+                ui.label("");
+                ui.label(RichText::new(note).small().weak());
+                ui.end_row();
+            }
             row(ui, "File", |ui| {
                 ui.horizontal(|ui| {
                     if ui.add(egui::TextEdit::singleline(&mut f.path).desired_width(300.0)).changed() {
@@ -595,13 +609,17 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui, inline: bool) {
         && job.is_none()
     {
         ui.add_space(6.0);
-        let text = trf(
-            "{pct}% · {left} left",
-            &[
-                ("pct", &((fraction * 100.0).floor() as u64).to_string()),
-                ("left", &left.map_or_else(|| "…".to_owned(), format_seconds)),
-            ],
-        );
+        let text = if fraction == 0.0 && left.is_none() {
+            tr("Starting…").into_owned()
+        } else {
+            trf(
+                "{pct}% · {left} left",
+                &[
+                    ("pct", &((fraction * 100.0).floor() as u64).to_string()),
+                    ("left", &left.map_or_else(|| "…".to_owned(), format_seconds)),
+                ],
+            )
+        };
         ui.add(egui::ProgressBar::new(fraction as f32).text(text));
     }
     outcome(s, ui);

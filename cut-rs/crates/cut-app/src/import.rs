@@ -60,7 +60,7 @@ pub fn reason_text(code: &str) -> &'static str {
 }
 
 /// One file's result: a media entry for `importMedia`, or why not; and for a file imported without its sound (a
-/// video with Vorbis audio), the sentence that says why.
+/// video whose audio codec this PC does not decode), the sentence that says why.
 #[derive(Debug, Clone)]
 pub struct Probed {
     pub path: PathBuf,
@@ -83,8 +83,8 @@ fn video_refusal(codec: &str) -> Option<&'static str> {
     cut_decode::Codec::of(codec).map(cut_decode::Codec::missing_decoder)
 }
 
-/// Whether the sound engine decodes this audio codec on this PC (PCM; AAC, MP3, FLAC and Opus through Media
-/// Foundation): `media.js`'s `/^pcm-/` test or `supported('audio', ...)`.
+/// Whether the sound engine decodes this audio codec on this PC (PCM, ALAC and Vorbis always; AAC, MP3, FLAC and
+/// Opus through Media Foundation): `media.js`'s `/^pcm-/` test or `supported('audio', ...)`.
 pub fn decodable_audio(codec: &str) -> bool {
     cut_audio::decodes(codec)
 }
@@ -144,16 +144,6 @@ pub fn entry_of(path: &Path, size: u64, mtime: f64, src: &Source) -> Result<Json
         }
     }
     let audio = match a.map(|t| (&t.media, &t.codec)) {
-        Some((Media::Audio(info), codec)) if codec == "opus" && info.channels > 2 => {
-            if video.is_null() && error.is_none() {
-                error = Some(Refusal {
-                    code: "unsupported",
-                    detail: format!("Opus with {} channels", info.channels),
-                    sentence: Some(cut_decode::OPUS_SURROUND),
-                });
-            }
-            Json::Null
-        }
         Some((Media::Audio(info), codec)) if decodable_audio(codec) => {
             json!({ "rate": info.sample_rate, "channels": info.channels, "codec": codec })
         }
@@ -181,9 +171,7 @@ pub fn entry_of(path: &Path, size: u64, mtime: f64, src: &Source) -> Result<Json
 /// The sentence for a file imported without its sound: its picture plays, its audio codec does not.
 pub fn note_of(entry: &Json, src: &Source) -> Option<&'static str> {
     let a = src.tracks.iter().find(|t| t.kind() == Kind::Audio)?;
-    let surround = matches!(&a.media, Media::Audio(i) if a.codec == "opus" && i.channels > 2);
-    let sentence = if surround { cut_decode::OPUS_SURROUND } else { cut_decode::audio_refusal(&a.codec) };
-    (entry["kind"] == "video" && entry["audio"].is_null()).then_some(sentence)
+    (entry["kind"] == "video" && entry["audio"].is_null()).then(|| cut_decode::audio_refusal(&a.codec))
 }
 
 /// Probes one file (`probeFile`).
@@ -291,21 +279,27 @@ impl Importer {
 }
 
 /// The files of a dropped folder that the importer reads, breadth first, at most 8 folders deep and 50,000 entries
-/// (`find.js` `listMedia`), with each file's folder path relative to the dropped one (the bins to make).
-pub fn list_folder(root: &Path) -> Vec<(PathBuf, Vec<String>)> {
+/// (`find.js` `listMedia`), with each file's folder path relative to the dropped one (the bins to make); and whether
+/// the walk stopped at the 50,000th entry.
+pub fn list_folder(root: &Path) -> (Vec<(PathBuf, Vec<String>)>, bool) {
     let mut out = Vec::new();
-    walk(root, |p, rel| {
+    let truncated = walk(root, |p, rel| {
         if accepted(&p) {
             out.push((p, rel.to_vec()));
         }
         true
     });
-    out
+    (out, truncated)
 }
 
 /// The files under a folder the person chose (`find.js` `walk`): breadth first, at most 8 folders deep and 50,000
 /// entries, links not followed. `visit` gets each file and its folders below the root; `false` stops the walk.
-pub fn walk(root: &Path, mut visit: impl FnMut(PathBuf, &[String]) -> bool) {
+/// -> whether it stopped at the entry limit.
+pub fn walk(root: &Path, visit: impl FnMut(PathBuf, &[String]) -> bool) -> bool {
+    walk_at_most(root, 50_000, visit)
+}
+
+fn walk_at_most(root: &Path, most: usize, mut visit: impl FnMut(PathBuf, &[String]) -> bool) -> bool {
     let mut queue = vec![(root.to_owned(), Vec::<String>::new())];
     let mut seen = 0usize;
     while !queue.is_empty() {
@@ -315,8 +309,8 @@ pub fn walk(root: &Path, mut visit: impl FnMut(PathBuf, &[String]) -> bool) {
         entries.sort_by_key(|e| e.file_name().to_string_lossy().to_lowercase());
         for e in entries {
             seen += 1;
-            if seen > 50_000 {
-                return;
+            if seen > most {
+                return true;
             }
             let Ok(ft) = e.file_type() else { continue };
             if ft.is_symlink() {
@@ -328,8 +322,31 @@ pub fn walk(root: &Path, mut visit: impl FnMut(PathBuf, &[String]) -> bool) {
                 r.push(e.file_name().to_string_lossy().into_owned());
                 queue.push((p, r));
             } else if ft.is_file() && !visit(p, &rel) {
-                return;
+                return false;
             }
         }
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_walk_stops_at_its_entry_limit_and_says_so() {
+        let root = std::env::temp_dir().join(format!("cut-app-walk-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        for f in ["a.wav", "b.wav", "sub/c.wav"] {
+            std::fs::write(root.join(f), b"").unwrap();
+        }
+        let mut seen = Vec::new();
+        assert!(walk_at_most(&root, 2, |p, _| {
+            seen.push(p);
+            true
+        }));
+        assert_eq!(seen.len(), 2, "a.wav and b.wav, then the limit at sub");
+        assert!(!walk_at_most(&root, 4, |_, _| true), "four entries fit");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -1,0 +1,4684 @@
+{
+ "instructions": "Nano Studio Cut is a video editor. These tools read and edit the project open in it. Every edit shows live in the editor, becomes part of its undo history and can be undone by the user. Times are seconds on the sequence timeline (with frame numbers at the sequence rate beside them); source_in and source_out are seconds of the source media. Edits snap to whole frames. Ids (clips c<n>, media m<n>, tracks V1/A1, markers, captions, effects e<n>) come from the read tools: call get_sequence before editing, and get_clip for one clip's details. sequence_id may be left out: the active sequence. A refused edit changes nothing. Read its message, then fix the arguments or tell the user why it cannot be done. Change only what the request asks for. Do not change project or sequence settings, other clips or anything else the user did not ask about, not even to make a refused edit work; suggest such a change in your answer instead. Keyboard and menu commands without a tool of their own run with run_action (list_actions lists them). Long jobs (automation, proxies, an export with wait) report progress and end when the user presses Stop. A call still running after a while (or one waiting for the user's answer in a dialog) answers {running: true, job, progress}: it has not failed and goes on running. Call wait_job with that job until it gives the tool's own result; never start the tool again, and do not tell the user it failed or timed out while it runs. Files: import_media brings in only files the user confirms in a dialog or that are in the project's folder; export_sequence, export_frame and export_captions ask the user first and write new files only; save_project writes the project's own file (and asks where when it has none). Nothing else reads or writes files, and nothing is downloaded unless the user agrees in Cut's setup dialog. Locked tracks are the user's: leave them alone.",
+ "tools": [
+  {
+   "name": "get_project",
+   "kind": "read",
+   "title": "Read the project",
+   "description": "The project's sequences (size, rate, length, clip count, which is active), its media count, bins, LUTs, settings, whether it was saved to a file and has unsaved changes, the playhead and the selection. Start here.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "get_sequence",
+   "kind": "read",
+   "title": "Read the timeline",
+   "description": "A sequence's tracks, clips (time on the timeline, source range, effects, links), transitions and caption tracks. from/to (seconds) keep the clips that overlap that range; long sequences are cut at max_clips.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "from": {
+      "type": "number",
+      "description": "Only clips that end after this time (s).",
+      "minimum": 0
+     },
+     "to": {
+      "type": "number",
+      "description": "Only clips that start before this time (s).",
+      "minimum": 0
+     },
+     "max_clips": {
+      "type": "integer",
+      "description": "At most this many clips (default 300).",
+      "minimum": 1,
+      "maximum": 2000
+     }
+    },
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "get_clip",
+   "kind": "read",
+   "title": "Read a clip",
+   "description": "Everything about one clip: properties, keyframes (times on the timeline), effects with all their parameters, masks, text layers, clip markers.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "clip_id": {
+      "type": "string",
+      "description": "The clip."
+     }
+    },
+    "required": [
+     "clip_id"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "get_media",
+   "kind": "read",
+   "title": "Read the media",
+   "description": "The project's media: id, name, kind, length, picture size and rate, whether it has sound, how many clips use it, its bin, whether it has a proxy or its file is missing (offline). No file paths.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "get_markers",
+   "kind": "read",
+   "title": "Read the markers",
+   "description": "The sequence markers and the clip markers (times on the timeline).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     }
+    },
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "get_captions",
+   "kind": "read",
+   "title": "Read the captions",
+   "description": "Caption tracks and their items (id, start, end, text). track_id picks one track; from/to (s) keep the items in that range; max_items caps each track (default 300).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "track_id": {
+      "type": "string",
+      "description": "A caption track (cc<n>)."
+     },
+     "from": {
+      "type": "number",
+      "description": "From this time (s).",
+      "minimum": 0
+     },
+     "to": {
+      "type": "number",
+      "description": "Until this time (s).",
+      "minimum": 0
+     },
+     "max_items": {
+      "type": "integer",
+      "description": "At most this many items a track.",
+      "minimum": 1,
+      "maximum": 2000
+     }
+    },
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "get_transcript",
+   "kind": "read",
+   "title": "Read the transcript",
+   "description": "What is said in the sequence, from speech recognition already done in Cut: segments with start, end (s) and text. Empty when the speech was not recognised yet (the user runs Auto Captions or the Transcript panel).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "from": {
+      "type": "number",
+      "description": "From this time (s).",
+      "minimum": 0
+     },
+     "to": {
+      "type": "number",
+      "description": "Until this time (s).",
+      "minimum": 0
+     }
+    },
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "list_effects",
+   "kind": "read",
+   "title": "List the effects",
+   "description": "The video and audio effects and the transitions there are, with their parameters as \"id: type min..max = default\". kind and search narrow the list.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "kind": {
+      "type": "string",
+      "description": "video or audio.",
+      "enum": [
+       "video",
+       "audio"
+      ]
+     },
+     "search": {
+      "type": "string",
+      "description": "Part of a type, a name or a category.",
+      "maxLength": 60
+     }
+    },
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "get_frame",
+   "kind": "read",
+   "title": "Look at a frame",
+   "description": "A PNG of the program monitor's picture at a time (the playhead when left out), with the shown caption track burned in, so you can see the edit.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "time": {
+      "type": "number",
+      "description": "The time (s).",
+      "minimum": 0
+     },
+     "width": {
+      "type": "integer",
+      "description": "Picture width in pixels, 160 to 1280 (default 640).",
+      "minimum": 160,
+      "maximum": 1280
+     }
+    },
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "get_state",
+   "kind": "read",
+   "title": "Read the editor state",
+   "description": "The playhead, whether it plays, the selected clips, the sequence In/Out and the last steps of the undo history.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "place_clip",
+   "kind": "edit",
+   "title": "Place a clip",
+   "description": "Puts media (or a nest of another sequence) on the timeline at a time. mode overwrite replaces what is there; insert pushes later clips. Video goes on video_track (default V1), sound on audio_track (default A1); null leaves that part out. source_in/source_out pick part of the media (s); a picture takes duration (s).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "media_id": {
+      "type": "string",
+      "description": "The media (get_media)."
+     },
+     "nest_sequence_id": {
+      "type": "string",
+      "description": "Instead of media: another sequence, placed as one nest clip."
+     },
+     "at": {
+      "type": "number",
+      "description": "Where it starts on the timeline (s).",
+      "minimum": 0
+     },
+     "mode": {
+      "type": "string",
+      "description": "overwrite (default) or insert.",
+      "enum": [
+       "overwrite",
+       "insert"
+      ]
+     },
+     "video_track": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "Video track id, or null for none."
+     },
+     "audio_track": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "Audio track id, or null for none."
+     },
+     "source_in": {
+      "type": "number",
+      "description": "Start in the source (s).",
+      "minimum": 0
+     },
+     "source_out": {
+      "type": "number",
+      "description": "End in the source (s).",
+      "minimum": 0
+     },
+     "duration": {
+      "type": "number",
+      "description": "Length of a picture (s).",
+      "minimum": 0.01,
+      "maximum": 3600
+     }
+    },
+    "required": [
+     "at"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "move_clips",
+   "kind": "edit",
+   "title": "Move clips",
+   "description": "Moves clips along the timeline (to: the new start of the earliest one, or delta: seconds, negative earlier) and between tracks (track_delta: +1 one track up, -1 down). Linked and grouped clips move along unless linked is false. insert pushes clips at the destination instead of overwriting them.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "clip_ids": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "maxLength": 64
+      },
+      "description": "The clips.",
+      "minItems": 1,
+      "maxItems": 500
+     },
+     "to": {
+      "type": "number",
+      "description": "New start of the earliest clip (s).",
+      "minimum": 0
+     },
+     "delta": {
+      "type": "number",
+      "description": "Seconds to move by."
+     },
+     "track_delta": {
+      "type": "integer",
+      "description": "Tracks to move by.",
+      "minimum": -20,
+      "maximum": 20
+     },
+     "insert": {
+      "type": "boolean",
+      "description": "Push clips at the destination."
+     },
+     "linked": {
+      "type": "boolean",
+      "description": "Move linked clips too (default true)."
+     }
+    },
+    "required": [
+     "clip_ids"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "trim_clip",
+   "kind": "edit",
+   "title": "Trim a clip",
+   "description": "Moves a clip's start or end edge (to: the new edge time, or delta: seconds). mode normal leaves a gap or fills one, ripple moves later clips with the edge, roll moves the neighbouring clip's edge too, stretch (Rate Stretch) changes the speed so the same source fills the new length. slip (delta s, no edge) shows a later (+) or earlier part of the source in place; slide (delta s, no edge) moves the clip while its neighbours trim. The result says where it stopped and why (source, neighbour, length, speed).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "clip_id": {
+      "type": "string",
+      "description": "The clip."
+     },
+     "edge": {
+      "type": "string",
+      "description": "start or end (not for slip and slide).",
+      "enum": [
+       "start",
+       "end"
+      ]
+     },
+     "to": {
+      "type": "number",
+      "description": "The new edge time (s).",
+      "minimum": 0
+     },
+     "delta": {
+      "type": "number",
+      "description": "Seconds to move the edge (or slip, slide) by."
+     },
+     "mode": {
+      "type": "string",
+      "description": "normal (default), ripple, roll, stretch, slip or slide.",
+      "enum": [
+       "normal",
+       "ripple",
+       "roll",
+       "stretch",
+       "slip",
+       "slide"
+      ]
+     },
+     "linked": {
+      "type": "boolean",
+      "description": "Linked clips too (default true)."
+     }
+    },
+    "required": [
+     "clip_id"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "razor",
+   "kind": "edit",
+   "title": "Razor",
+   "description": "Cuts clips in two at a time: on every unlocked track, or only on track_ids, or only clip_ids (with their linked clips).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "at": {
+      "type": "number",
+      "description": "Where to cut (s).",
+      "minimum": 0
+     },
+     "track_ids": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "maxLength": 64
+      },
+      "description": "Only these tracks.",
+      "minItems": 1,
+      "maxItems": 500
+     },
+     "clip_ids": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "maxLength": 64
+      },
+      "description": "Only these clips.",
+      "minItems": 1,
+      "maxItems": 500
+     }
+    },
+    "required": [
+     "at"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "delete_clips",
+   "kind": "edit",
+   "title": "Delete clips",
+   "description": "Removes clips (with their linked and grouped clips unless linked is false). ripple closes the gaps they leave on their tracks and the sync-locked ones.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "clip_ids": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "maxLength": 64
+      },
+      "description": "The clips.",
+      "minItems": 1,
+      "maxItems": 500
+     },
+     "ripple": {
+      "type": "boolean",
+      "description": "Close the gaps (default false)."
+     },
+     "linked": {
+      "type": "boolean",
+      "description": "Linked clips too (default true)."
+     }
+    },
+    "required": [
+     "clip_ids"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "delete_range",
+   "kind": "edit",
+   "title": "Delete a time range",
+   "description": "Removes from..to (s) on every unlocked track, or on track_ids. ripple (default true) pulls later material earlier (Premiere's Extract: \"cut the first 3 seconds\"); ripple false leaves a gap (Lift).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "from": {
+      "type": "number",
+      "description": "Start (s).",
+      "minimum": 0
+     },
+     "to": {
+      "type": "number",
+      "description": "End (s).",
+      "minimum": 0
+     },
+     "ripple": {
+      "type": "boolean",
+      "description": "Close the gap (default true)."
+     },
+     "track_ids": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "maxLength": 64
+      },
+      "description": "Only these tracks.",
+      "minItems": 1,
+      "maxItems": 500
+     }
+    },
+    "required": [
+     "from",
+     "to"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "link_clips",
+   "kind": "edit",
+   "title": "Link clips",
+   "description": "link joins clips so they move, trim and get deleted together; unlink parts them; group and ungroup do the same for a group (clips that move and delete together).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "clip_ids": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "maxLength": 64
+      },
+      "description": "The clips.",
+      "minItems": 1,
+      "maxItems": 500
+     },
+     "action": {
+      "type": "string",
+      "description": "link, unlink, group or ungroup.",
+      "enum": [
+       "link",
+       "unlink",
+       "group",
+       "ungroup"
+      ]
+     }
+    },
+    "required": [
+     "clip_ids",
+     "action"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "set_clip",
+   "kind": "edit",
+   "title": "Change a clip",
+   "description": "Changes a clip's settings. Video clips: opacity (%), position ([x, y] px from the center), scale (% or [w %, h %]), rotation (deg), anchor, crop ([top, right, bottom, left] %), interpolation (sample or blend: Time Interpolation), color (a color matte's #rrggbb). Audio clips: volume (dB, 0 unchanged), pan (-100..100), fade_in, fade_out (s). Both: name, enabled, role (Essential Sound's audio type: dialogue, music, effects, ambience or null), label (a color label or null). The value is the clip's static value; set_keyframes animates it.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "clip_id": {
+      "type": "string",
+      "description": "The clip."
+     },
+     "name": {
+      "type": "string",
+      "description": "A name.",
+      "maxLength": 200
+     },
+     "enabled": {
+      "type": "boolean",
+      "description": "false hides and mutes it."
+     },
+     "role": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "enum": [
+       "dialogue",
+       "music",
+       "effects",
+       "ambience"
+      ],
+      "description": "What its sound is."
+     },
+     "label": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "enum": [
+       "violet",
+       "iris",
+       "caribbean",
+       "lavender",
+       "cerulean",
+       "forest",
+       "rose",
+       "mango"
+      ],
+      "description": "violet, iris, caribbean, lavender, cerulean, forest, rose, mango or null."
+     },
+     "interpolation": {
+      "type": "string",
+      "description": "sample or blend.",
+      "enum": [
+       "sample",
+       "blend"
+      ]
+     },
+     "color": {
+      "type": "string",
+      "description": "A color matte's color like #2f6fdb.",
+      "maxLength": 7
+     },
+     "opacity": {
+      "type": "number",
+      "description": "%",
+      "minimum": 0,
+      "maximum": 100
+     },
+     "position": {
+      "type": "array",
+      "items": {
+       "type": "number"
+      },
+      "description": "[x, y] px from the center.",
+      "minItems": 2,
+      "maxItems": 2
+     },
+     "scale": {
+      "type": [
+       "number",
+       "array"
+      ],
+      "items": {
+       "type": "number"
+      },
+      "description": "% or [w %, h %]."
+     },
+     "rotation": {
+      "type": "number",
+      "description": "Degrees."
+     },
+     "anchor": {
+      "type": "array",
+      "items": {
+       "type": "number"
+      },
+      "description": "[x, y] px.",
+      "minItems": 2,
+      "maxItems": 2
+     },
+     "crop": {
+      "type": "array",
+      "items": {
+       "type": "number"
+      },
+      "description": "[top, right, bottom, left] %.",
+      "minItems": 4,
+      "maxItems": 4
+     },
+     "volume": {
+      "type": "number",
+      "description": "dB.",
+      "minimum": -60,
+      "maximum": 24
+     },
+     "pan": {
+      "type": "number",
+      "description": "-100 left to 100 right.",
+      "minimum": -100,
+      "maximum": 100
+     },
+     "fade_in": {
+      "type": "number",
+      "description": "Fade-in (s).",
+      "minimum": 0
+     },
+     "fade_out": {
+      "type": "number",
+      "description": "Fade-out (s).",
+      "minimum": 0
+     },
+     "linked": {
+      "type": "boolean",
+      "description": "Its linked clips too, where it applies (default true)."
+     }
+    },
+    "required": [
+     "clip_id"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "set_speed",
+   "kind": "edit",
+   "title": "Change the speed",
+   "description": "Speed/Duration: a clip's constant speed in % (100 normal, 50 slow motion, 200 twice as fast), or the duration (s) that the same source should fill, and reverse. ripple (default true) moves later clips with the new length. Linked clips change too unless linked is false.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "clip_id": {
+      "type": "string",
+      "description": "The clip."
+     },
+     "speed": {
+      "type": "number",
+      "description": "% (1 to 10000).",
+      "minimum": 1,
+      "maximum": 10000
+     },
+     "duration": {
+      "type": "number",
+      "description": "Instead of speed: the new length (s).",
+      "minimum": 0.01,
+      "maximum": 86400
+     },
+     "reverse": {
+      "type": "boolean",
+      "description": "Play backwards."
+     },
+     "ripple": {
+      "type": "boolean",
+      "description": "Move later clips (default true)."
+     },
+     "linked": {
+      "type": "boolean",
+      "description": "Linked clips too (default true)."
+     }
+    },
+    "required": [
+     "clip_id"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "set_time_remap",
+   "kind": "edit",
+   "title": "Time remapping",
+   "description": "Time Remapping of a video clip: its speed changes along it, replacing any remapping it has. segments in order: {speed: % (1 to 10000), until: timeline time (s) where it ends, as the clip plays now; ramp: seconds of speed transition into the next speed segment}, {hold: seconds of a freeze frame} or {reverse: seconds it plays backward, then forward again for as long}. A hold or reverse goes between two speed segments; the last segment is a speed with no until. Each speed segment keeps its source frames, so the clip gets longer or shorter (up to the next clip). off: true goes back to one constant speed.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "clip_id": {
+      "type": "string",
+      "description": "The video clip."
+     },
+     "segments": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "speed": {
+         "type": "number",
+         "description": "%.",
+         "minimum": 1,
+         "maximum": 10000
+        },
+        "until": {
+         "type": "number",
+         "description": "Timeline time (s) where this speed segment ends.",
+         "minimum": 0
+        },
+        "ramp": {
+         "type": "number",
+         "description": "Seconds of transition into the next speed (0.04..60).",
+         "minimum": 0,
+         "maximum": 60
+        },
+        "hold": {
+         "type": "number",
+         "description": "A freeze frame this long (s).",
+         "minimum": 0.01,
+         "maximum": 3600
+        },
+        "reverse": {
+         "type": "number",
+         "description": "Backward this long (s), then forward again.",
+         "minimum": 0.01,
+         "maximum": 3600
+        }
+       },
+       "required": [],
+       "additionalProperties": false
+      },
+      "description": "The segments.",
+      "minItems": 1,
+      "maxItems": 32
+     },
+     "off": {
+      "type": "boolean",
+      "description": "Turn Time Remapping off."
+     }
+    },
+    "required": [
+     "clip_id"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "set_keyframes",
+   "kind": "edit",
+   "title": "Set keyframes",
+   "description": "Animates a property of a clip: the full list of keyframes (time on the timeline in s, inside the clip; value; ease linear, hold, easeIn, easeOut or easeInOut). An empty list removes the animation. property: a clip property (opacity, position, scale, rotation, anchor, crop, volume, pan), \"effects.<effect id>.<parameter>\" (video and audio effects), a mask's \"masks.<mask id>.<path|feather|opacity|expansion>\" (an effect's mask: \"effects.<effect id>.masks.<mask id>.<field>\"; a path value is {shape: ellipse|rectangle, x, y, width, height} in fractions 0..1, like add_mask) or a layer's \"layers.<layer id>.<field>\" (titles: opacity, position, reveal, size; graphics: number, [x, y], color fields).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "clip_id": {
+      "type": "string",
+      "description": "The clip."
+     },
+     "property": {
+      "type": "string",
+      "description": "The property path.",
+      "maxLength": 80
+     },
+     "keyframes": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "time": {
+         "type": "number",
+         "description": "Timeline time (s).",
+         "minimum": 0
+        },
+        "value": {
+         "type": [
+          "number",
+          "array",
+          "string",
+          "boolean",
+          "object"
+         ],
+         "description": "The value."
+        },
+        "ease": {
+         "type": "string",
+         "description": "linear (default), hold, easeIn, easeOut, easeInOut.",
+         "enum": [
+          "linear",
+          "hold",
+          "easeIn",
+          "easeOut",
+          "easeInOut"
+         ]
+        }
+       },
+       "required": [
+        "time",
+        "value"
+       ],
+       "additionalProperties": false
+      },
+      "description": "The keyframes.",
+      "maxItems": 200
+     }
+    },
+    "required": [
+     "clip_id",
+     "property",
+     "keyframes"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "add_effect",
+   "kind": "edit",
+   "title": "Add an effect",
+   "description": "Adds a video or audio effect (list_effects) to a clip, with parameters that differ from the defaults. The effect's kind must match the clip's track. Returns the effect id.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "clip_id": {
+      "type": "string",
+      "description": "The clip."
+     },
+     "type": {
+      "type": "string",
+      "description": "The effect type.",
+      "maxLength": 60
+     },
+     "params": {
+      "type": "object",
+      "description": "Parameter values by id."
+     },
+     "index": {
+      "type": "integer",
+      "description": "Its place in the clip's effect list (default last).",
+      "minimum": 0,
+      "maximum": 50
+     }
+    },
+    "required": [
+     "clip_id",
+     "type"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "set_effect",
+   "kind": "edit",
+   "title": "Change an effect",
+   "description": "Turns an effect on or off, changes its parameters (null puts one back to its default) and moves it in the clip's effect order (index 0 is applied first).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "clip_id": {
+      "type": "string",
+      "description": "The clip."
+     },
+     "effect_id": {
+      "type": "string",
+      "description": "The effect (e<n>, from get_clip)."
+     },
+     "on": {
+      "type": "boolean",
+      "description": "On or off."
+     },
+     "params": {
+      "type": "object",
+      "description": "Parameter values by id."
+     },
+     "index": {
+      "type": "integer",
+      "description": "Its new place in the effect list.",
+      "minimum": 0,
+      "maximum": 50
+     }
+    },
+    "required": [
+     "clip_id",
+     "effect_id"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "remove_effect",
+   "kind": "edit",
+   "title": "Remove an effect",
+   "description": "Removes an effect from a clip, with its keyframes and masks.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "clip_id": {
+      "type": "string",
+      "description": "The clip."
+     },
+     "effect_id": {
+      "type": "string",
+      "description": "The effect."
+     }
+    },
+    "required": [
+     "clip_id",
+     "effect_id"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "set_color",
+   "kind": "edit",
+   "title": "Lumetri color",
+   "description": "Lumetri Color of a video clip, every section (its Lumetri Color, added when it has none). Basic: temperature, tint, contrast, highlights, shadows, whites, blacks, vibrance (-100..100), exposure (-4..4 stops), saturation (0..200 %). Creative: lut (a LUT id from get_project, or \"\" for none), lut_intensity (%). curves: master, red, green, blue as flat [x0, y0, x1, y1, ...] lists 0..1 ([0, 0, 1, 1] is unchanged). hsl (HSL Secondary): the range (hue 0..360, hue_range and hue_soft in degrees; sat_low, sat_high, sat_soft, lum_low, lum_high, lum_soft %), its correction (temperature, tint, contrast, saturation %, hue_shift -180..180) and show_mask.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "clip_id": {
+      "type": "string",
+      "description": "The video clip."
+     },
+     "temperature": {
+      "type": "number",
+      "description": "-100..100."
+     },
+     "tint": {
+      "type": "number",
+      "description": "-100..100."
+     },
+     "exposure": {
+      "type": "number",
+      "description": "Stops, -4..4."
+     },
+     "contrast": {
+      "type": "number",
+      "description": "-100..100."
+     },
+     "highlights": {
+      "type": "number",
+      "description": "-100..100."
+     },
+     "shadows": {
+      "type": "number",
+      "description": "-100..100."
+     },
+     "whites": {
+      "type": "number",
+      "description": "-100..100."
+     },
+     "blacks": {
+      "type": "number",
+      "description": "-100..100."
+     },
+     "saturation": {
+      "type": "number",
+      "description": "%, 0..200."
+     },
+     "vibrance": {
+      "type": "number",
+      "description": "-100..100."
+     },
+     "lut": {
+      "type": "string",
+      "description": "A LUT id of the project, or \"\".",
+      "maxLength": 80
+     },
+     "lut_intensity": {
+      "type": "number",
+      "description": "%, 0..100.",
+      "minimum": 0,
+      "maximum": 100
+     },
+     "curves": {
+      "type": "object",
+      "properties": {
+       "master": {
+        "type": "array",
+        "items": {
+         "type": "number"
+        },
+        "description": "The master curve.",
+        "minItems": 4,
+        "maxItems": 32
+       },
+       "red": {
+        "type": "array",
+        "items": {
+         "type": "number"
+        },
+        "description": "The red curve.",
+        "minItems": 4,
+        "maxItems": 32
+       },
+       "green": {
+        "type": "array",
+        "items": {
+         "type": "number"
+        },
+        "description": "The green curve.",
+        "minItems": 4,
+        "maxItems": 32
+       },
+       "blue": {
+        "type": "array",
+        "items": {
+         "type": "number"
+        },
+        "description": "The blue curve.",
+        "minItems": 4,
+        "maxItems": 32
+       }
+      },
+      "required": [],
+      "additionalProperties": false
+     },
+     "hsl": {
+      "type": "object",
+      "properties": {
+       "hue": {
+        "type": "number",
+        "description": "hue"
+       },
+       "hue_range": {
+        "type": "number",
+        "description": "hue_range"
+       },
+       "hue_soft": {
+        "type": "number",
+        "description": "hue_soft"
+       },
+       "sat_low": {
+        "type": "number",
+        "description": "sat_low"
+       },
+       "sat_high": {
+        "type": "number",
+        "description": "sat_high"
+       },
+       "sat_soft": {
+        "type": "number",
+        "description": "sat_soft"
+       },
+       "lum_low": {
+        "type": "number",
+        "description": "lum_low"
+       },
+       "lum_high": {
+        "type": "number",
+        "description": "lum_high"
+       },
+       "lum_soft": {
+        "type": "number",
+        "description": "lum_soft"
+       },
+       "show_mask": {
+        "type": "boolean",
+        "description": "Show the range as a mask."
+       },
+       "temperature": {
+        "type": "number",
+        "description": "temperature"
+       },
+       "tint": {
+        "type": "number",
+        "description": "tint"
+       },
+       "contrast": {
+        "type": "number",
+        "description": "contrast"
+       },
+       "saturation": {
+        "type": "number",
+        "description": "saturation"
+       },
+       "hue_shift": {
+        "type": "number",
+        "description": "hue_shift"
+       }
+      },
+      "required": [],
+      "additionalProperties": false
+     }
+    },
+    "required": [
+     "clip_id"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "add_transition",
+   "kind": "edit",
+   "title": "Add a transition",
+   "description": "Puts a transition on an edit point of a track (where two clips meet, or a clip's start or end). type from list_effects (default: a cross dissolve, or a crossfade on audio); duration (s) defaults to the project's; align center, start or end.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "track": {
+      "type": "string",
+      "description": "The track."
+     },
+     "at": {
+      "type": "number",
+      "description": "The edit point (s).",
+      "minimum": 0
+     },
+     "type": {
+      "type": "string",
+      "description": "The transition type.",
+      "maxLength": 60
+     },
+     "duration": {
+      "type": "number",
+      "description": "Seconds.",
+      "minimum": 0.01,
+      "maximum": 60
+     },
+     "align": {
+      "type": "string",
+      "description": "center (default), start or end.",
+      "enum": [
+       "center",
+       "start",
+       "end"
+      ]
+     },
+     "params": {
+      "type": "object",
+      "description": "Its parameters."
+     }
+    },
+    "required": [
+     "track",
+     "at"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "remove_transition",
+   "kind": "edit",
+   "title": "Remove a transition",
+   "description": "Removes a transition (ids from get_sequence).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "transition_id": {
+      "type": "string",
+      "description": "The transition."
+     }
+    },
+    "required": [
+     "transition_id"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "add_text",
+   "kind": "edit",
+   "title": "Add a title",
+   "description": "Adds a text clip (a title) at a time for duration seconds (default the project's still length), on track or else on the lowest free video track above the clips there (a new track when none is free).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "text": {
+      "type": "string",
+      "description": "The text; \\n breaks lines.",
+      "maxLength": 2000
+     },
+     "at": {
+      "type": "number",
+      "description": "Start (s).",
+      "minimum": 0
+     },
+     "duration": {
+      "type": "number",
+      "description": "Seconds.",
+      "minimum": 0.04,
+      "maximum": 3600
+     },
+     "track": {
+      "type": "string",
+      "description": "A video track."
+     },
+     "size": {
+      "type": "integer",
+      "description": "Font size in px of a 1080-line picture.",
+      "minimum": 8,
+      "maximum": 600
+     },
+     "color": {
+      "type": "string",
+      "description": "Text color like #ffffff.",
+      "maxLength": 9
+     },
+     "font": {
+      "type": "string",
+      "description": "Font family.",
+      "maxLength": 100
+     },
+     "weight": {
+      "type": "integer",
+      "description": "100 to 900 (700 bold).",
+      "minimum": 100,
+      "maximum": 900
+     },
+     "italic": {
+      "type": "boolean",
+      "description": "Italic."
+     },
+     "align": {
+      "type": "string",
+      "description": "left, center or right.",
+      "enum": [
+       "left",
+       "center",
+       "right"
+      ]
+     },
+     "tracking": {
+      "type": "number",
+      "description": "Letter spacing (px).",
+      "minimum": -200,
+      "maximum": 1000
+     },
+     "leading": {
+      "type": "number",
+      "description": "Line height, times the size.",
+      "minimum": 0.5,
+      "maximum": 5
+     },
+     "position": {
+      "type": "array",
+      "items": {
+       "type": "number"
+      },
+      "description": "[x, y] px from the center (y > 0 is lower).",
+      "minItems": 2,
+      "maxItems": 2
+     },
+     "box": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "A background box color like #00000099, or null for none."
+     },
+     "stroke": {
+      "type": [
+       "object",
+       "null"
+      ],
+      "properties": {
+       "color": {
+        "type": "string",
+        "description": "#rrggbb.",
+        "maxLength": 9
+       },
+       "width": {
+        "type": "number",
+        "description": "px.",
+        "minimum": 0,
+        "maximum": 100
+       }
+      },
+      "additionalProperties": false,
+      "description": "An outline {color, width}, or null."
+     },
+     "shadow": {
+      "type": [
+       "object",
+       "null"
+      ],
+      "properties": {
+       "color": {
+        "type": "string",
+        "description": "#rrggbbaa.",
+        "maxLength": 9
+       },
+       "blur": {
+        "type": "number",
+        "description": "px.",
+        "minimum": 0,
+        "maximum": 200
+       },
+       "x": {
+        "type": "number",
+        "description": "px.",
+        "minimum": -500,
+        "maximum": 500
+       },
+       "y": {
+        "type": "number",
+        "description": "px.",
+        "minimum": -500,
+        "maximum": 500
+       }
+      },
+      "additionalProperties": false,
+      "description": "A drop shadow {color, blur, x, y}, or null."
+     }
+    },
+    "required": [
+     "text",
+     "at"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "set_text",
+   "kind": "edit",
+   "title": "Change a title",
+   "description": "Changes a text clip: the text and look of its first layer (or layer_id); add_layer: true adds a new layer with these settings instead; remove_layer removes one. animation puts a motion preset on the layer as keyframes: fade, rise or typewriter, in (at the start, default) or out (at the end).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "clip_id": {
+      "type": "string",
+      "description": "The text clip."
+     },
+     "layer_id": {
+      "type": "string",
+      "description": "A text layer (l<n>)."
+     },
+     "text": {
+      "type": "string",
+      "description": "New text.",
+      "maxLength": 2000
+     },
+     "size": {
+      "type": "integer",
+      "description": "Font size in px of a 1080-line picture.",
+      "minimum": 8,
+      "maximum": 600
+     },
+     "color": {
+      "type": "string",
+      "description": "Text color like #ffffff.",
+      "maxLength": 9
+     },
+     "font": {
+      "type": "string",
+      "description": "Font family.",
+      "maxLength": 100
+     },
+     "weight": {
+      "type": "integer",
+      "description": "100 to 900 (700 bold).",
+      "minimum": 100,
+      "maximum": 900
+     },
+     "italic": {
+      "type": "boolean",
+      "description": "Italic."
+     },
+     "align": {
+      "type": "string",
+      "description": "left, center or right.",
+      "enum": [
+       "left",
+       "center",
+       "right"
+      ]
+     },
+     "tracking": {
+      "type": "number",
+      "description": "Letter spacing (px).",
+      "minimum": -200,
+      "maximum": 1000
+     },
+     "leading": {
+      "type": "number",
+      "description": "Line height, times the size.",
+      "minimum": 0.5,
+      "maximum": 5
+     },
+     "position": {
+      "type": "array",
+      "items": {
+       "type": "number"
+      },
+      "description": "[x, y] px from the center (y > 0 is lower).",
+      "minItems": 2,
+      "maxItems": 2
+     },
+     "box": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "A background box color like #00000099, or null for none."
+     },
+     "stroke": {
+      "type": [
+       "object",
+       "null"
+      ],
+      "properties": {
+       "color": {
+        "type": "string",
+        "description": "#rrggbb.",
+        "maxLength": 9
+       },
+       "width": {
+        "type": "number",
+        "description": "px.",
+        "minimum": 0,
+        "maximum": 100
+       }
+      },
+      "additionalProperties": false,
+      "description": "An outline {color, width}, or null."
+     },
+     "shadow": {
+      "type": [
+       "object",
+       "null"
+      ],
+      "properties": {
+       "color": {
+        "type": "string",
+        "description": "#rrggbbaa.",
+        "maxLength": 9
+       },
+       "blur": {
+        "type": "number",
+        "description": "px.",
+        "minimum": 0,
+        "maximum": 200
+       },
+       "x": {
+        "type": "number",
+        "description": "px.",
+        "minimum": -500,
+        "maximum": 500
+       },
+       "y": {
+        "type": "number",
+        "description": "px.",
+        "minimum": -500,
+        "maximum": 500
+       }
+      },
+      "additionalProperties": false,
+      "description": "A drop shadow {color, blur, x, y}, or null."
+     },
+     "add_layer": {
+      "type": "boolean",
+      "description": "Add a layer."
+     },
+     "remove_layer": {
+      "type": "boolean",
+      "description": "Remove layer_id."
+     },
+     "animation": {
+      "type": "string",
+      "description": "fade, rise or typewriter.",
+      "enum": [
+       "fade",
+       "rise",
+       "typewriter"
+      ]
+     },
+     "animation_at": {
+      "type": "string",
+      "description": "in (default) or out.",
+      "enum": [
+       "in",
+       "out"
+      ]
+     }
+    },
+    "required": [
+     "clip_id"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "add_captions",
+   "kind": "edit",
+   "title": "Add captions",
+   "description": "Adds caption items to a caption track (track_id), or makes a new caption track (name, lang) with them. Captions are subtitles shown over the picture, not title clips.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "track_id": {
+      "type": "string",
+      "description": "An existing caption track."
+     },
+     "name": {
+      "type": "string",
+      "description": "A new track's name.",
+      "maxLength": 100
+     },
+     "lang": {
+      "type": "string",
+      "description": "A new track's language code (ko, en...).",
+      "maxLength": 10
+     },
+     "items": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "start": {
+         "type": "number",
+         "description": "Start (s).",
+         "minimum": 0
+        },
+        "end": {
+         "type": "number",
+         "description": "End (s).",
+         "minimum": 0
+        },
+        "text": {
+         "type": "string",
+         "description": "The caption text.",
+         "maxLength": 500
+        }
+       },
+       "required": [
+        "start",
+        "end",
+        "text"
+       ],
+       "additionalProperties": false
+      },
+      "description": "The captions.",
+      "minItems": 1,
+      "maxItems": 500
+     }
+    },
+    "required": [
+     "items"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "set_caption",
+   "kind": "edit",
+   "title": "Change a caption",
+   "description": "Changes one caption's text or times.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "track_id": {
+      "type": "string",
+      "description": "The caption track."
+     },
+     "caption_id": {
+      "type": "string",
+      "description": "The caption (from get_captions)."
+     },
+     "text": {
+      "type": "string",
+      "description": "New text.",
+      "maxLength": 500
+     },
+     "start": {
+      "type": "number",
+      "description": "New start (s).",
+      "minimum": 0
+     },
+     "end": {
+      "type": "number",
+      "description": "New end (s).",
+      "minimum": 0
+     }
+    },
+    "required": [
+     "track_id",
+     "caption_id"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "remove_captions",
+   "kind": "edit",
+   "title": "Remove captions",
+   "description": "Removes captions by id, or the whole caption track (whole_track: true).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "track_id": {
+      "type": "string",
+      "description": "The caption track."
+     },
+     "caption_ids": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "maxLength": 64
+      },
+      "description": "The captions.",
+      "minItems": 1,
+      "maxItems": 500
+     },
+     "whole_track": {
+      "type": "boolean",
+      "description": "Remove the track and all its captions."
+     }
+    },
+    "required": [
+     "track_id"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "add_marker",
+   "kind": "edit",
+   "title": "Add a marker",
+   "description": "Adds a sequence marker at a time, or a clip marker (clip_id). kind comment (default), chapter (YouTube chapters) or beat; color one of green, red, purple, orange, yellow, white, blue, cyan.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "at": {
+      "type": "number",
+      "description": "Time (s).",
+      "minimum": 0
+     },
+     "name": {
+      "type": "string",
+      "description": "Its name.",
+      "maxLength": 200
+     },
+     "kind": {
+      "type": "string",
+      "description": "comment, chapter or beat.",
+      "enum": [
+       "comment",
+       "chapter",
+       "beat"
+      ]
+     },
+     "color": {
+      "type": "string",
+      "description": "Its color.",
+      "enum": [
+       "green",
+       "red",
+       "purple",
+       "orange",
+       "yellow",
+       "white",
+       "blue",
+       "cyan"
+      ]
+     },
+     "note": {
+      "type": "string",
+      "description": "A note.",
+      "maxLength": 2000
+     },
+     "duration": {
+      "type": "number",
+      "description": "A range marker's length (s).",
+      "minimum": 0
+     },
+     "clip_id": {
+      "type": "string",
+      "description": "Put it on this clip."
+     }
+    },
+    "required": [
+     "at"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "set_marker",
+   "kind": "edit",
+   "title": "Change a marker",
+   "description": "Changes a marker's time, name, kind, color or note.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "marker_id": {
+      "type": "string",
+      "description": "The marker."
+     },
+     "at": {
+      "type": "number",
+      "description": "New time (s).",
+      "minimum": 0
+     },
+     "name": {
+      "type": "string",
+      "description": "Name.",
+      "maxLength": 200
+     },
+     "kind": {
+      "type": "string",
+      "description": "comment, chapter or beat.",
+      "enum": [
+       "comment",
+       "chapter",
+       "beat"
+      ]
+     },
+     "color": {
+      "type": "string",
+      "description": "Color.",
+      "enum": [
+       "green",
+       "red",
+       "purple",
+       "orange",
+       "yellow",
+       "white",
+       "blue",
+       "cyan"
+      ]
+     },
+     "note": {
+      "type": "string",
+      "description": "Note.",
+      "maxLength": 2000
+     }
+    },
+    "required": [
+     "marker_id"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "remove_markers",
+   "kind": "edit",
+   "title": "Remove markers",
+   "description": "Removes markers by id, or every sequence marker of a kind (comment, chapter, beat or all).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "marker_ids": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "maxLength": 64
+      },
+      "description": "The markers.",
+      "minItems": 1,
+      "maxItems": 500
+     },
+     "kind": {
+      "type": "string",
+      "description": "comment, chapter, beat or all.",
+      "enum": [
+       "comment",
+       "chapter",
+       "beat",
+       "all"
+      ]
+     }
+    },
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "add_mask",
+   "kind": "edit",
+   "title": "Add a mask",
+   "description": "Adds a mask to a video clip's Opacity (the clip shows only inside it), or to one of its effects (effect_id: the effect applies only inside). shape ellipse or rectangle, centered at x, y with width and height, all fractions 0..1 of the clip's picture.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "clip_id": {
+      "type": "string",
+      "description": "The video clip."
+     },
+     "effect_id": {
+      "type": "string",
+      "description": "Mask this effect instead of the clip."
+     },
+     "shape": {
+      "type": "string",
+      "description": "ellipse or rectangle.",
+      "enum": [
+       "ellipse",
+       "rectangle"
+      ]
+     },
+     "x": {
+      "type": "number",
+      "description": "Center, 0..1 from the left.",
+      "minimum": 0,
+      "maximum": 1
+     },
+     "y": {
+      "type": "number",
+      "description": "Center, 0..1 from the top.",
+      "minimum": 0,
+      "maximum": 1
+     },
+     "width": {
+      "type": "number",
+      "description": "0..1 of the picture width.",
+      "minimum": 0.001,
+      "maximum": 4
+     },
+     "height": {
+      "type": "number",
+      "description": "0..1 of the picture height.",
+      "minimum": 0.001,
+      "maximum": 4
+     },
+     "feather": {
+      "type": "number",
+      "description": "Pixels, 0..1000.",
+      "minimum": 0,
+      "maximum": 1000
+     },
+     "opacity": {
+      "type": "number",
+      "description": "%.",
+      "minimum": 0,
+      "maximum": 100
+     },
+     "expansion": {
+      "type": "number",
+      "description": "Pixels, -2000..2000.",
+      "minimum": -2000,
+      "maximum": 2000
+     },
+     "inverted": {
+      "type": "boolean",
+      "description": "Keep the outside instead."
+     },
+     "mode": {
+      "type": "string",
+      "description": "add, subtract, intersect, difference or none.",
+      "enum": [
+       "add",
+       "subtract",
+       "intersect",
+       "difference",
+       "none"
+      ]
+     }
+    },
+    "required": [
+     "clip_id",
+     "shape"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "set_mask",
+   "kind": "edit",
+   "title": "Change a mask",
+   "description": "Changes a mask's static feather, opacity, expansion, inverted or mode, or its shape (shape with x, y, width, height as in add_mask). set_keyframes animates masks.<mask id>.<path|feather|opacity|expansion>.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "clip_id": {
+      "type": "string",
+      "description": "The clip."
+     },
+     "mask_id": {
+      "type": "string",
+      "description": "The mask (m<n>)."
+     },
+     "effect_id": {
+      "type": "string",
+      "description": "When the mask is an effect's."
+     },
+     "shape": {
+      "type": "string",
+      "description": "ellipse or rectangle: a new path.",
+      "enum": [
+       "ellipse",
+       "rectangle"
+      ]
+     },
+     "x": {
+      "type": "number",
+      "description": "Center, 0..1 from the left.",
+      "minimum": 0,
+      "maximum": 1
+     },
+     "y": {
+      "type": "number",
+      "description": "Center, 0..1 from the top.",
+      "minimum": 0,
+      "maximum": 1
+     },
+     "width": {
+      "type": "number",
+      "description": "0..1 of the picture width.",
+      "minimum": 0.001,
+      "maximum": 4
+     },
+     "height": {
+      "type": "number",
+      "description": "0..1 of the picture height.",
+      "minimum": 0.001,
+      "maximum": 4
+     },
+     "feather": {
+      "type": "number",
+      "description": "Pixels, 0..1000.",
+      "minimum": 0,
+      "maximum": 1000
+     },
+     "opacity": {
+      "type": "number",
+      "description": "%.",
+      "minimum": 0,
+      "maximum": 100
+     },
+     "expansion": {
+      "type": "number",
+      "description": "Pixels, -2000..2000.",
+      "minimum": -2000,
+      "maximum": 2000
+     },
+     "inverted": {
+      "type": "boolean",
+      "description": "Keep the outside instead."
+     },
+     "mode": {
+      "type": "string",
+      "description": "add, subtract, intersect, difference or none.",
+      "enum": [
+       "add",
+       "subtract",
+       "intersect",
+       "difference",
+       "none"
+      ]
+     }
+    },
+    "required": [
+     "clip_id",
+     "mask_id"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "remove_mask",
+   "kind": "edit",
+   "title": "Remove a mask",
+   "description": "Removes a mask and its keyframes.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "clip_id": {
+      "type": "string",
+      "description": "The clip."
+     },
+     "mask_id": {
+      "type": "string",
+      "description": "The mask."
+     },
+     "effect_id": {
+      "type": "string",
+      "description": "When the mask is an effect's."
+     }
+    },
+    "required": [
+     "clip_id",
+     "mask_id"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "nest_clips",
+   "kind": "edit",
+   "title": "Nest clips",
+   "description": "Moves clips (with their linked and grouped clips) into a new sequence and puts one nest clip of it in their place, as Premiere's Clip > Nest. Returns the new sequence and the nest clips.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "clip_ids": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "maxLength": 64
+      },
+      "description": "The clips.",
+      "minItems": 1,
+      "maxItems": 500
+     },
+     "name": {
+      "type": "string",
+      "description": "The new sequence's name.",
+      "maxLength": 200
+     }
+    },
+    "required": [
+     "clip_ids"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "set_track",
+   "kind": "edit",
+   "title": "Change a track",
+   "description": "Changes a track: name; video tracks visible; audio tracks mute, solo, volume (dB, -60..24) and pan (-100..100); sync_lock. Locking and unlocking stay the user's.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "track_id": {
+      "type": "string",
+      "description": "The track."
+     },
+     "name": {
+      "type": "string",
+      "description": "Name.",
+      "maxLength": 100
+     },
+     "visible": {
+      "type": "boolean",
+      "description": "Show the video track."
+     },
+     "mute": {
+      "type": "boolean",
+      "description": "Mute."
+     },
+     "solo": {
+      "type": "boolean",
+      "description": "Solo."
+     },
+     "volume": {
+      "type": "number",
+      "description": "dB.",
+      "minimum": -60,
+      "maximum": 24
+     },
+     "pan": {
+      "type": "number",
+      "description": "-100..100.",
+      "minimum": -100,
+      "maximum": 100
+     },
+     "sync_lock": {
+      "type": "boolean",
+      "description": "Sync lock."
+     }
+    },
+    "required": [
+     "track_id"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "set_sequence",
+   "kind": "edit",
+   "title": "Change the sequence",
+   "description": "Sequence Settings and the master track: name, frame size (width, height px, even), fps (23.976, 24, 25, 29.97, 30, 50, 59.94 or 60; every time moves to the new frames), background color, master_gain (dB on the whole mix, -60..24: the Audio Track Mixer's master). active: true brings it to the front in the timeline (not an undo step).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "name": {
+      "type": "string",
+      "description": "Name.",
+      "maxLength": 200
+     },
+     "width": {
+      "type": "integer",
+      "description": "px.",
+      "minimum": 16,
+      "maximum": 8192
+     },
+     "height": {
+      "type": "integer",
+      "description": "px.",
+      "minimum": 16,
+      "maximum": 8192
+     },
+     "fps": {
+      "type": "string",
+      "description": "Frames a second.",
+      "enum": [
+       "24",
+       "25",
+       "30",
+       "50",
+       "60",
+       "23.976",
+       "29.97",
+       "59.94"
+      ]
+     },
+     "master_gain": {
+      "type": "number",
+      "description": "dB.",
+      "minimum": -60,
+      "maximum": 24
+     },
+     "background": {
+      "type": "string",
+      "description": "Color like #000000.",
+      "maxLength": 7
+     },
+     "active": {
+      "type": "boolean",
+      "description": "Show it in the timeline."
+     }
+    },
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "remove_silence",
+   "kind": "edit",
+   "title": "Remove silence",
+   "description": "Measures the sound on this PC and ripple-deletes every stretch quieter than threshold (dB, default -40) that lasts longer than longer_than seconds, on the speech tracks (music, effects and ambience clips do not count).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "longer_than": {
+      "type": "number",
+      "description": "Seconds, 0.1..60.",
+      "minimum": 0.1,
+      "maximum": 60
+     },
+     "threshold": {
+      "type": "number",
+      "description": "dB, -90..-5.",
+      "minimum": -90,
+      "maximum": -5
+     }
+    },
+    "required": [
+     "longer_than"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "select_clips",
+   "kind": "play",
+   "title": "Select clips",
+   "description": "Selects clips on the timeline (an empty list clears the selection); add keeps the selection there was.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "clip_ids": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "The clips.",
+      "maxItems": 500
+     },
+     "add": {
+      "type": "boolean",
+      "description": "Add to the selection."
+     }
+    },
+    "required": [
+     "clip_ids"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "seek",
+   "kind": "play",
+   "title": "Move the playhead",
+   "description": "Moves the playhead (and the picture in the program monitor) to a time.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "time": {
+      "type": "number",
+      "description": "Seconds.",
+      "minimum": 0
+     }
+    },
+    "required": [
+     "time"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "play",
+   "kind": "play",
+   "title": "Play",
+   "description": "Starts playback in the program monitor from the playhead.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "stop",
+   "kind": "play",
+   "title": "Stop",
+   "description": "Stops playback in the program monitor; the playhead stays where it is.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "undo",
+   "kind": "play",
+   "title": "Undo",
+   "description": "Undoes the last step of the editor's history (the user's steps before your turn stay).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "redo",
+   "kind": "play",
+   "title": "Redo",
+   "description": "Redoes the step of the editor history that was undone last.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "export_sequence",
+   "kind": "export",
+   "title": "Export",
+   "description": "Exports the sequence to a new file in the project's folder with a preset (youtube-1080p, youtube-4k, shorts, 720p, audio-m4a) and optional overrides of the Export Settings: width, height (px, even), codec (h264 or hevc), bitrate (Mbps), bitrate_mode, key_seconds, audio_bitrate (128, 160 or 192 kbps), loudness (target LUFS, or null to leave it). The user is asked first and may say no; an existing file is never replaced. from/to export part of it; captions burn draws the shown caption track into the picture. It joins the export queue; wait: true waits until it is written, with progress (Stop cancels it).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "preset": {
+      "type": "string",
+      "description": "The preset.",
+      "enum": [
+       "youtube-1080p",
+       "youtube-4k",
+       "shorts",
+       "720p",
+       "audio-m4a"
+      ]
+     },
+     "file_name": {
+      "type": "string",
+      "description": "A file name without folders (the preset's extension is added).",
+      "maxLength": 120
+     },
+     "from": {
+      "type": "number",
+      "description": "Start (s).",
+      "minimum": 0
+     },
+     "to": {
+      "type": "number",
+      "description": "End (s).",
+      "minimum": 0
+     },
+     "captions": {
+      "type": "string",
+      "description": "none (default) or burn.",
+      "enum": [
+       "none",
+       "burn"
+      ]
+     },
+     "width": {
+      "type": "integer",
+      "description": "px.",
+      "minimum": 16,
+      "maximum": 8192
+     },
+     "height": {
+      "type": "integer",
+      "description": "px.",
+      "minimum": 16,
+      "maximum": 8192
+     },
+     "codec": {
+      "type": "string",
+      "description": "h264 or hevc.",
+      "enum": [
+       "h264",
+       "hevc"
+      ]
+     },
+     "bitrate": {
+      "type": "number",
+      "description": "Video Mbps, 0.1..400.",
+      "minimum": 0.1,
+      "maximum": 400
+     },
+     "bitrate_mode": {
+      "type": "string",
+      "description": "variable or constant.",
+      "enum": [
+       "variable",
+       "constant"
+      ]
+     },
+     "key_seconds": {
+      "type": "number",
+      "description": "Seconds between key frames.",
+      "minimum": 0.5,
+      "maximum": 10
+     },
+     "audio_bitrate": {
+      "type": "integer",
+      "description": "kbps.",
+      "enum": [
+       128,
+       160,
+       192
+      ]
+     },
+     "loudness": {
+      "type": [
+       "number",
+       "null"
+      ],
+      "minimum": -40,
+      "maximum": -5,
+      "description": "Target LUFS, or null."
+     },
+     "wait": {
+      "type": "boolean",
+      "description": "Wait for the file (default false)."
+     }
+    },
+    "required": [
+     "preset"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "import_media",
+   "kind": "edit",
+   "title": "Import media",
+   "description": "Brings media files (video, sound, pictures) into the project, or caption files (.srt, .vtt) as a caption track of the sequence. paths: absolute file paths the user named; files in the project's folder come in at once, others only after the user confirms them in a dialog that lists them. Without paths the Import dialog opens for the user to pick files (folder: true picks a folder, its subfolders becoming bins). bin_id puts the media in a bin. Network shares are refused.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "paths": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "description": "An absolute path like C:\\Users\\me\\Videos\\a.mp4.",
+       "maxLength": 400
+      },
+      "description": "The files.",
+      "minItems": 1,
+      "maxItems": 50
+     },
+     "folder": {
+      "type": "boolean",
+      "description": "Let the user pick a folder."
+     },
+     "bin_id": {
+      "type": "string",
+      "description": "A bin (get_project).",
+      "maxLength": 64
+     }
+    },
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "remove_media",
+   "kind": "edit",
+   "title": "Remove media",
+   "description": "Removes media from the project (never from the disk): media_ids, or unused: true for every media no sequence uses (Remove Unused). Media that clips use are refused; delete those clips first.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "media_ids": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "maxLength": 64
+      },
+      "description": "The media.",
+      "minItems": 1,
+      "maxItems": 500
+     },
+     "unused": {
+      "type": "boolean",
+      "description": "Every unused media."
+     }
+    },
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "project_items",
+   "kind": "edit",
+   "title": "Bins and names",
+   "description": "The Project panel's items: new_bin (name, parent bin_id), remove_bin (bin_id; its items go to its parent), rename (item_id of a media, bin or sequence, name), move (item_ids into bin_id, or to the top when bin_id is left out).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "description": "new_bin, remove_bin, rename or move.",
+      "enum": [
+       "new_bin",
+       "remove_bin",
+       "rename",
+       "move"
+      ]
+     },
+     "name": {
+      "type": "string",
+      "description": "A name.",
+      "maxLength": 200
+     },
+     "bin_id": {
+      "type": "string",
+      "description": "A bin.",
+      "maxLength": 64
+     },
+     "item_id": {
+      "type": "string",
+      "description": "A media, bin or sequence.",
+      "maxLength": 64
+     },
+     "item_ids": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "maxLength": 64
+      },
+      "description": "Media, bins or sequences.",
+      "minItems": 1,
+      "maxItems": 500
+     }
+    },
+    "required": [
+     "action"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "add_sequence",
+   "kind": "edit",
+   "title": "New sequence",
+   "description": "Makes a sequence: a preset (youtube-1080p30, youtube-4k30, shorts, square) or width, height (even px) and fps, or duplicate_of another sequence (Duplicate). It goes in bin_id if given, and becomes the active sequence unless active is false.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "name": {
+      "type": "string",
+      "description": "Name.",
+      "maxLength": 200
+     },
+     "preset": {
+      "type": "string",
+      "description": "A sequence preset.",
+      "enum": [
+       "youtube-1080p30",
+       "youtube-4k30",
+       "shorts",
+       "square"
+      ]
+     },
+     "width": {
+      "type": "integer",
+      "description": "px.",
+      "minimum": 16,
+      "maximum": 8192
+     },
+     "height": {
+      "type": "integer",
+      "description": "px.",
+      "minimum": 16,
+      "maximum": 8192
+     },
+     "fps": {
+      "type": "string",
+      "description": "Frames a second.",
+      "enum": [
+       "24",
+       "25",
+       "30",
+       "50",
+       "60",
+       "23.976",
+       "29.97",
+       "59.94"
+      ]
+     },
+     "duplicate_of": {
+      "type": "string",
+      "description": "A sequence to copy.",
+      "maxLength": 64
+     },
+     "bin_id": {
+      "type": "string",
+      "description": "A bin.",
+      "maxLength": 64
+     },
+     "active": {
+      "type": "boolean",
+      "description": "Show it (default true)."
+     }
+    },
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "remove_sequence",
+   "kind": "edit",
+   "title": "Delete a sequence",
+   "description": "Deletes a sequence from the project, with the nest clips of it in other sequences. The project keeps one sequence at least.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence.",
+      "maxLength": 64
+     }
+    },
+    "required": [
+     "sequence_id"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "add_track",
+   "kind": "edit",
+   "title": "Add a track",
+   "description": "Adds a video or audio track (on top of its kind, or at index among its kind, 0 the lowest), with a name.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "kind": {
+      "type": "string",
+      "description": "video or audio.",
+      "enum": [
+       "video",
+       "audio"
+      ]
+     },
+     "name": {
+      "type": "string",
+      "description": "Name.",
+      "maxLength": 100
+     },
+     "index": {
+      "type": "integer",
+      "description": "Its place among the tracks of its kind.",
+      "minimum": 0,
+      "maximum": 99
+     }
+    },
+    "required": [
+     "kind"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "remove_track",
+   "kind": "edit",
+   "title": "Delete a track",
+   "description": "Deletes a track with its clips and transitions. Locked tracks are refused.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "track_id": {
+      "type": "string",
+      "description": "The track."
+     }
+    },
+    "required": [
+     "track_id"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "set_transition",
+   "kind": "edit",
+   "title": "Change a transition",
+   "description": "Changes a transition: its duration (s), align (center, start or end of the edit), type (another transition of its kind, list_effects) or params.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "transition_id": {
+      "type": "string",
+      "description": "The transition."
+     },
+     "duration": {
+      "type": "number",
+      "description": "Seconds.",
+      "minimum": 0.01,
+      "maximum": 60
+     },
+     "align": {
+      "type": "string",
+      "description": "center, start or end.",
+      "enum": [
+       "center",
+       "start",
+       "end"
+      ]
+     },
+     "type": {
+      "type": "string",
+      "description": "A transition type.",
+      "maxLength": 60
+     },
+     "params": {
+      "type": "object",
+      "description": "Its parameters."
+     }
+    },
+    "required": [
+     "transition_id"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "set_caption_track",
+   "kind": "edit",
+   "title": "Caption track settings",
+   "description": "Changes a caption track: name, lang, sync_lock, and its Caption Style (font, size, weight, color, background, position, margin, highlight of the spoken word with highlight_color and highlight_mode, speakers). shown: true makes it the track the program monitor draws and an export burns in (not an undo step).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "track_id": {
+      "type": "string",
+      "description": "The caption track (cc<n>)."
+     },
+     "name": {
+      "type": "string",
+      "description": "Name.",
+      "maxLength": 100
+     },
+     "lang": {
+      "type": "string",
+      "description": "Language code.",
+      "maxLength": 10
+     },
+     "sync_lock": {
+      "type": "boolean",
+      "description": "Moves with ripple edits."
+     },
+     "shown": {
+      "type": "boolean",
+      "description": "Show this track."
+     },
+     "style": {
+      "type": "object",
+      "properties": {
+       "font": {
+        "type": "string",
+        "description": "Font family.",
+        "maxLength": 100
+       },
+       "size": {
+        "type": "integer",
+        "description": "px of a 1080-line picture.",
+        "minimum": 8,
+        "maximum": 300
+       },
+       "weight": {
+        "type": "integer",
+        "description": "100..900.",
+        "minimum": 100,
+        "maximum": 900
+       },
+       "color": {
+        "type": "string",
+        "description": "#rrggbb.",
+        "maxLength": 9
+       },
+       "background": {
+        "type": [
+         "string",
+         "null"
+        ],
+        "description": "Box color #rrggbbaa, or null."
+       },
+       "position": {
+        "type": "string",
+        "description": "bottom or top.",
+        "enum": [
+         "bottom",
+         "top"
+        ]
+       },
+       "margin": {
+        "type": "number",
+        "description": "% of the picture height from the edge.",
+        "minimum": 0,
+        "maximum": 45
+       },
+       "highlight": {
+        "type": "boolean",
+        "description": "Light the word being spoken."
+       },
+       "highlight_color": {
+        "type": "string",
+        "description": "#rrggbb.",
+        "maxLength": 9
+       },
+       "highlight_mode": {
+        "type": "string",
+        "description": "color or box.",
+        "enum": [
+         "color",
+         "box"
+        ]
+       },
+       "speakers": {
+        "type": "string",
+        "description": "off, color, name or both: how speaker labels show.",
+        "enum": [
+         "off",
+         "color",
+         "name",
+         "both"
+        ]
+       }
+      },
+      "required": [],
+      "additionalProperties": false
+     }
+    },
+    "required": [
+     "track_id"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "add_color_matte",
+   "kind": "edit",
+   "title": "Add a color matte",
+   "description": "Adds a color matte (a full-frame solid color clip) at a time for duration seconds (default the project's still length) on a video track (default the lowest free one above the clips there).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "at": {
+      "type": "number",
+      "description": "Start (s).",
+      "minimum": 0
+     },
+     "duration": {
+      "type": "number",
+      "description": "Seconds.",
+      "minimum": 0.04,
+      "maximum": 3600
+     },
+     "color": {
+      "type": "string",
+      "description": "#rrggbb (default #2f6fdb).",
+      "maxLength": 7
+     },
+     "track": {
+      "type": "string",
+      "description": "A video track."
+     },
+     "name": {
+      "type": "string",
+      "description": "Name.",
+      "maxLength": 100
+     }
+    },
+    "required": [
+     "at"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "set_project_settings",
+   "kind": "edit",
+   "title": "Project settings",
+   "description": "The project's settings: still_duration (s, new pictures and titles), transition_duration (s, new transitions), freeze_duration (s, Insert Frame Hold), fit (fit, fill or original: how new media of another size scale), speech_terms (the word list speech recognition is told of: names and terms, as written).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "still_duration": {
+      "type": "number",
+      "description": "Seconds.",
+      "minimum": 0.04,
+      "maximum": 3600
+     },
+     "transition_duration": {
+      "type": "number",
+      "description": "Seconds.",
+      "minimum": 0.04,
+      "maximum": 60
+     },
+     "freeze_duration": {
+      "type": "number",
+      "description": "Seconds.",
+      "minimum": 0.04,
+      "maximum": 3600
+     },
+     "fit": {
+      "type": "string",
+      "description": "fit, fill or original.",
+      "enum": [
+       "fit",
+       "fill",
+       "original"
+      ]
+     },
+     "speech_terms": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "description": "A term.",
+       "maxLength": 100
+      },
+      "description": "The word list.",
+      "maxItems": 200
+     }
+    },
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "save_project",
+   "kind": "export",
+   "title": "Save the project",
+   "description": "Saves the project to its file. A project that was never saved opens the Save As dialog, where the user picks the place (or cancels). Never writes anywhere else.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "export_frame",
+   "kind": "export",
+   "title": "Export a frame",
+   "description": "Saves the program monitor's picture at a time (default the playhead) as a new PNG in the project's folder (Export Frame). The user is asked first; an existing file is never replaced.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "time": {
+      "type": "number",
+      "description": "Seconds.",
+      "minimum": 0
+     },
+     "file_name": {
+      "type": "string",
+      "description": "A file name without folders (.png is added).",
+      "maxLength": 120
+     }
+    },
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "export_captions",
+   "kind": "export",
+   "title": "Export captions",
+   "description": "Writes a caption track to a new .srt or .vtt file in the project's folder. The user is asked first; an existing file is never replaced.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "track_id": {
+      "type": "string",
+      "description": "The caption track (default the shown one)."
+     },
+     "format": {
+      "type": "string",
+      "description": "srt (default) or vtt.",
+      "enum": [
+       "srt",
+       "vtt"
+      ]
+     },
+     "file_name": {
+      "type": "string",
+      "description": "A file name without folders.",
+      "maxLength": 120
+     }
+    },
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "export_queue",
+   "kind": "export",
+   "title": "Export queue",
+   "description": "The export queue: list (its jobs: id, file name, state, progress, error), cancel, retry or remove a job (job_id), clear_finished.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "description": "list (default), cancel, retry, remove or clear_finished.",
+      "enum": [
+       "list",
+       "cancel",
+       "retry",
+       "remove",
+       "clear_finished"
+      ]
+     },
+     "job_id": {
+      "type": "integer",
+      "description": "A job id (list).",
+      "minimum": 0
+     }
+    },
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "proxies",
+   "kind": "edit",
+   "title": "Proxies",
+   "description": "Proxies (720p H.264 copies that play smoothly; exports always use the original): status of media_ids (or all video media), create them (waits with progress unless wait is false; Stop cancels the ones not done), or remove them (the media play their original again).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "description": "status (default), create or remove.",
+      "enum": [
+       "status",
+       "create",
+       "remove"
+      ]
+     },
+     "media_ids": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "maxLength": 64
+      },
+      "description": "Video media.",
+      "minItems": 1,
+      "maxItems": 500
+     },
+     "wait": {
+      "type": "boolean",
+      "description": "Wait for create (default true)."
+     }
+    },
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "create_shorts",
+   "kind": "edit",
+   "title": "Create a shorts sequence",
+   "description": "Highlights to Shorts: a new 9:16 sequence (1080x1920) holding only the given ranges of this sequence, back to back, with the video scaled to fill (mode fill, default) or fit. Captions and markers in the ranges come along. Choose the ranges from get_transcript; the new sequence becomes the active one.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "ranges": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "from": {
+         "type": "number",
+         "description": "Start (s).",
+         "minimum": 0
+        },
+        "to": {
+         "type": "number",
+         "description": "End (s).",
+         "minimum": 0
+        }
+       },
+       "required": [
+        "from",
+        "to"
+       ],
+       "additionalProperties": false
+      },
+      "description": "The parts to keep, in any order.",
+      "minItems": 1,
+      "maxItems": 20
+     },
+     "name": {
+      "type": "string",
+      "description": "Name.",
+      "maxLength": 200
+     },
+     "mode": {
+      "type": "string",
+      "description": "fill or fit.",
+      "enum": [
+       "fill",
+       "fit"
+      ]
+     }
+    },
+    "required": [
+     "ranges"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "automation",
+   "kind": "edit",
+   "title": "Automation",
+   "description": "Runs an Automation menu job on this PC as one undo step; it reports progress and ends on Stop. transcribe (speech recognition; get_transcript reads it), auto_captions (a caption track from it), remove_fillers (ripple-deletes filler words and long pauses), label_speakers, isolate_voice (the voice without music or noise), detect_scenes (markers or splits), detect_beats (beat markers of an audio clip), match_loudness (master gain for a LUFS target), match_clip_loudness (each clip's volume for it), auto_duck (music lowered under dialogue; set_clip role first), auto_color (white balance and exposure). A job that needs a model asks the user in Cut's setup dialog first; a no is a refusal.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "action": {
+      "type": "string",
+      "description": "The job.",
+      "enum": [
+       "transcribe",
+       "auto_captions",
+       "remove_fillers",
+       "label_speakers",
+       "isolate_voice",
+       "detect_scenes",
+       "detect_beats",
+       "match_loudness",
+       "match_clip_loudness",
+       "auto_duck",
+       "auto_color"
+      ]
+     },
+     "clip_ids": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "maxLength": 64
+      },
+      "description": "The clips (default: the selection, else every clip it fits, as the menu does).",
+      "minItems": 1,
+      "maxItems": 500
+     },
+     "from": {
+      "type": "number",
+      "description": "With to: only this range of the timeline (s), as In/Out.",
+      "minimum": 0
+     },
+     "to": {
+      "type": "number",
+      "description": "End of the range (s).",
+      "minimum": 0
+     },
+     "language": {
+      "type": "string",
+      "description": "auto (default), ko or en.",
+      "enum": [
+       "auto",
+       "ko",
+       "en"
+      ]
+     },
+     "chars_per_line": {
+      "type": "integer",
+      "description": "0: 18 for Korean, 42 otherwise.",
+      "minimum": 0,
+      "maximum": 80
+     },
+     "highlight": {
+      "type": "boolean",
+      "description": "Light each word as it is spoken."
+     },
+     "fillers": {
+      "type": "boolean",
+      "description": "Filler words (default true)."
+     },
+     "pauses": {
+      "type": "boolean",
+      "description": "Long pauses (default true)."
+     },
+     "pause_length": {
+      "type": "number",
+      "description": "Pauses longer than (s), 0.3..10.",
+      "minimum": 0.3,
+      "maximum": 10
+     },
+     "keep": {
+      "type": "number",
+      "description": "Kept on each side (s), 0..1.",
+      "minimum": 0,
+      "maximum": 1
+     },
+     "speakers": {
+      "type": "integer",
+      "description": "How many speakers (0: find out).",
+      "minimum": 0,
+      "maximum": 10
+     },
+     "threshold": {
+      "type": "number",
+      "description": "detect_scenes: % of change, 5..95 (default 35); auto_duck: speech louder than (dB, -90..-5).",
+      "minimum": -90,
+      "maximum": 95
+     },
+     "mode": {
+      "type": "string",
+      "description": "markers (default) or split.",
+      "enum": [
+       "markers",
+       "split"
+      ]
+     },
+     "every": {
+      "type": "string",
+      "description": "beat (default) or bar.",
+      "enum": [
+       "beat",
+       "bar"
+      ]
+     },
+     "target": {
+      "type": "number",
+      "description": "LUFS, -40..-5 (YouTube -14, podcasts -16, broadcast -24).",
+      "minimum": -40,
+      "maximum": -5
+     },
+     "amount": {
+      "type": "number",
+      "description": "dB, -40..-1 (default -12).",
+      "minimum": -40,
+      "maximum": -1
+     },
+     "fade": {
+      "type": "number",
+      "description": "s, 0..2 (default 0.3).",
+      "minimum": 0,
+      "maximum": 2
+     },
+     "time": {
+      "type": "number",
+      "description": "The frame to analyze (s; default five frames across the clip).",
+      "minimum": 0
+     }
+    },
+    "required": [
+     "action"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "essential_sound",
+   "kind": "edit",
+   "title": "Essential Sound",
+   "description": "Essential Sound's one-click repairs on audio clips (a video clip brings its linked audio): clarity (EQ and compressor for dialogue), reduce_hum_50 or reduce_hum_60 (mains hum), noise_gate, hard_limiter (-1 dB). Each adds its effects with the panel's settings, as one undo step; set_effect changes them after. The audio type is set_clip role; voice isolation, ducking and loudness are automation jobs.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "clip_ids": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "maxLength": 64
+      },
+      "description": "The clips.",
+      "minItems": 1,
+      "maxItems": 500
+     },
+     "action": {
+      "type": "string",
+      "description": "The repair.",
+      "enum": [
+       "clarity",
+       "reduce_hum_50",
+       "reduce_hum_60",
+       "noise_gate",
+       "hard_limiter"
+      ]
+     }
+    },
+    "required": [
+     "clip_ids",
+     "action"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "speakers",
+   "kind": "edit",
+   "title": "Speakers",
+   "description": "The speaker labels of the project (made by automation label_speakers): list them (id, name, color), or rename one (speaker_id, name; an empty name goes back to \"Speaker n\"). Names show in the Transcript panel and in captions that show speakers.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "description": "list (default) or rename.",
+      "enum": [
+       "list",
+       "rename"
+      ]
+     },
+     "speaker_id": {
+      "type": "string",
+      "description": "The speaker.",
+      "maxLength": 32
+     },
+     "name": {
+      "type": "string",
+      "description": "The new name.",
+      "maxLength": 60
+     }
+    },
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "add_graphic",
+   "kind": "edit",
+   "title": "Add a graphic",
+   "description": "Adds a motion graphic clip drawn from layers (shapes, paths, text, groups, particles) on a transparent background, at a time for duration seconds. Pixels from the frame's center, y down; the first layer at the bottom. Animate with set_keyframes on \"layers.<id>.<field>\": trimEnd 0 to 100 draws a line on, value counts up a {value} text, scale [0, 0] to [100, 100] pops in. Check with get_frame.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "at": {
+      "type": "number",
+      "description": "Start (s).",
+      "minimum": 0
+     },
+     "duration": {
+      "type": "number",
+      "description": "Seconds.",
+      "minimum": 0.04,
+      "maximum": 3600
+     },
+     "track": {
+      "type": "string",
+      "description": "A video track (default: a free one)."
+     },
+     "name": {
+      "type": "string",
+      "description": "Name.",
+      "maxLength": 100
+     },
+     "layers": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "description": "A layer: {id, kind, ...fields}. By kind: rect size [w, h], radius; ellipse size; polygon points, radius; star points, radius, innerRadius; line from [x, y], to [x, y]; path d (SVG path data, no A arcs); text text (\"{value}\" shows value), font, fontSize, weight, italic, align, lineHeight, letterSpacing, value, decimals, reveal (0..1); group (others name it as parent); particles count, seed, emit (stream or burst), emitter [w, h], direction (degrees, 0 up), spread, speed (px/s), speedVariation, gravity [x, y] (px/s²), life (s), particleSize, particleSizeEnd, fill, fillEnd, opacityEnd, particleShape (circle or square), spin. Paint: fill (\"#rrggbb\", \"#rrggbbaa\" or null), gradient ({type: linear or radial, from: [x, y], to: [x, y], stops: [[0, color], [1, color]]}), stroke, strokeWidth, cap, join, dash ([dash, gap]), trimStart, trimEnd, trimOffset (% of the outline). Every layer: name, parent (a group earlier in the list), visible, position [x, y], anchor [x, y] (pivot), scale [x %, y %], rotation (degrees), opacity (%), blend (normal, add, screen, multiply, overlay...), blur, shadowColor, shadowBlur, shadowOffset, repeatCount (copies), repeatOffset [x, y], repeatRotation, repeatScale [x %, y %] (per copy), repeatOpacity (last copy %).",
+       "properties": {
+        "id": {
+         "type": "string",
+         "maxLength": 40,
+         "description": "Unique id; keyframes name it."
+        },
+        "kind": {
+         "type": "string",
+         "enum": [
+          "rect",
+          "ellipse",
+          "polygon",
+          "star",
+          "line",
+          "path",
+          "text",
+          "group",
+          "particles"
+         ],
+         "description": "Kind."
+        }
+       },
+       "required": [
+        "kind"
+       ]
+      },
+      "description": "The layers, bottom first.",
+      "minItems": 1,
+      "maxItems": 200
+     }
+    },
+    "required": [
+     "at",
+     "layers"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "set_graphic",
+   "kind": "edit",
+   "title": "Change a graphic",
+   "description": "Changes a graphic clip's layers as one undo step: layers replaces them all, or update (fields by id), add and remove.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sequence_id": {
+      "type": "string",
+      "description": "The sequence; the active one when left out.",
+      "maxLength": 64
+     },
+     "clip_id": {
+      "type": "string",
+      "description": "The graphic clip."
+     },
+     "layers": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "description": "A layer as in add_graphic.",
+       "required": [
+        "kind"
+       ]
+      },
+      "description": "All layers (replaces them).",
+      "minItems": 1,
+      "maxItems": 200
+     },
+     "update": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "description": "id and the fields to set (not kind).",
+       "required": [
+        "id"
+       ]
+      },
+      "description": "Layers to change.",
+      "maxItems": 200
+     },
+     "add": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "description": "A layer, and after: the layer it goes above (default: on top).",
+       "required": [
+        "kind"
+       ]
+      },
+      "description": "Layers to add.",
+      "maxItems": 200
+     },
+     "remove": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "description": "A layer id.",
+       "maxLength": 40
+      },
+      "description": "Layers to remove.",
+      "maxItems": 200
+     }
+    },
+    "required": [
+     "clip_id"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "list_actions",
+   "kind": "read",
+   "title": "List the actions",
+   "description": "The editor's keyboard and menu actions that run_action runs (the ones with a tool of their own are not listed): id, what it does, what it needs, and view: true when it changes only what the user sees (no undo step). search narrows by words of the id or the text.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "search": {
+      "type": "string",
+      "description": "Words to look for.",
+      "maxLength": 60
+     }
+    },
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "run_action",
+   "kind": "edit",
+   "title": "Run an action",
+   "description": "Runs one of the editor's keyboard or menu actions as the key would (list_actions gives the ids, what they do and need). time moves the playhead first and clip_ids selects clips first, for actions that work at the playhead or on the selection. Refused when what the action needs is missing; the result says what changed (the undo step, the selection, the playhead, In/Out).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "The action id (list_actions).",
+      "maxLength": 60
+     },
+     "time": {
+      "type": "number",
+      "description": "Move the playhead here first (s).",
+      "minimum": 0
+     },
+     "clip_ids": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "maxLength": 64
+      },
+      "description": "Select these clips first.",
+      "minItems": 1,
+      "maxItems": 500
+     }
+    },
+    "required": [
+     "id"
+    ],
+    "additionalProperties": false
+   }
+  }
+ ],
+ "actions": [
+  {
+   "id": "playInToOut",
+   "what": "Plays from the sequence In to its Out in the program monitor.",
+   "needs": "inOut",
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "frameBack",
+   "what": "Moves the playhead one frame back.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "frameForward",
+   "what": "Moves the playhead one frame on.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "frameBack5",
+   "what": "Moves the playhead five frames back.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "frameForward5",
+   "what": "Moves the playhead five frames on.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "prevEdit",
+   "what": "Moves the playhead to the previous edit point of the targeted tracks.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "nextEdit",
+   "what": "Moves the playhead to the next edit point of the targeted tracks.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "prevEditAny",
+   "what": "Moves the playhead to the previous edit point on any track.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "nextEditAny",
+   "what": "Moves the playhead to the next edit point on any track.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "goStart",
+   "what": "Moves the playhead to the start.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "goEnd",
+   "what": "Moves the playhead to the end.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "goIn",
+   "what": "Moves the playhead to the sequence In.",
+   "needs": "in",
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "goOut",
+   "what": "Moves the playhead to the sequence Out.",
+   "needs": "out",
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "markIn",
+   "what": "Sets the sequence In at the playhead.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "markOut",
+   "what": "Sets the sequence Out at the playhead.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "markClip",
+   "what": "Sets In and Out around the clip under the playhead (the selected one first).",
+   "needs": "clip",
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "markSelection",
+   "what": "Sets In and Out around the selected clips.",
+   "needs": "selection",
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "clearIn",
+   "what": "Clears the sequence In.",
+   "needs": "in",
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "clearOut",
+   "what": "Clears the sequence Out.",
+   "needs": "out",
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "clearInOut",
+   "what": "Clears the sequence In and Out.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "addMarker",
+   "what": "Adds a marker at the playhead (on the selected clip there, else on the sequence).",
+   "needs": null,
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "nextMarker",
+   "what": "Moves the playhead to the next sequence marker.",
+   "needs": "markers",
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "prevMarker",
+   "what": "Moves the playhead to the previous sequence marker.",
+   "needs": "markers",
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "clearMarker",
+   "what": "Removes the sequence marker at the playhead.",
+   "needs": "marker",
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "clearAllMarkers",
+   "what": "Removes every sequence marker.",
+   "needs": "markers",
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "insert",
+   "what": "Insert: puts the Source monitor's clip (its In to Out) at the playhead on the patched tracks, pushing later clips.",
+   "needs": "source",
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "overwrite",
+   "what": "Overwrite: puts the Source monitor's clip at the playhead over what is there.",
+   "needs": "source",
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "lift",
+   "what": "Lift: removes In to Out on the targeted tracks and leaves a gap.",
+   "needs": "inOut",
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "extract",
+   "what": "Extract: removes In to Out on the targeted tracks and closes the gap.",
+   "needs": "inOut",
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "split",
+   "what": "Add Edit: cuts the selected clips at the playhead, or the targeted tracks' clips there.",
+   "needs": null,
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "splitAll",
+   "what": "Add Edit to All Tracks: cuts every clip under the playhead.",
+   "needs": null,
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "rippleStart",
+   "what": "Ripple Trim Previous Edit to Playhead (Q): removes from the clip's start to the playhead and closes the gap.",
+   "needs": "clip",
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "rippleEnd",
+   "what": "Ripple Trim Next Edit to Playhead (W): removes from the playhead to the clip's end and closes the gap.",
+   "needs": "clip",
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "rippleDelete",
+   "what": "Deletes the selected clips and closes their gaps.",
+   "needs": "selection",
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "delete",
+   "what": "Deletes the selected clips and leaves gaps.",
+   "needs": "selection",
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "toggleEnabled",
+   "what": "Turns the selected clips off (hidden and muted) or on again.",
+   "needs": "selection",
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "link",
+   "what": "Links the selected clips, or unlinks them when linked.",
+   "needs": "selection",
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "group",
+   "what": "Groups the selected clips.",
+   "needs": "two",
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "ungroup",
+   "what": "Ungroups the selected clips.",
+   "needs": "selection",
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "nudgeLeft",
+   "what": "Moves the selected clips one frame earlier.",
+   "needs": "selection",
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "nudgeRight",
+   "what": "Moves the selected clips one frame later.",
+   "needs": "selection",
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "nudgeLeft5",
+   "what": "Moves the selected clips five frames earlier.",
+   "needs": "selection",
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "nudgeRight5",
+   "what": "Moves the selected clips five frames later.",
+   "needs": "selection",
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "nudgeUp",
+   "what": "Moves the selected clips one track up.",
+   "needs": "selection",
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "nudgeDown",
+   "what": "Moves the selected clips one track down.",
+   "needs": "selection",
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "selectAtPlayhead",
+   "what": "Selects the clips under the playhead on the targeted tracks.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "matchFrame",
+   "what": "Match Frame: opens the media of the clip under the playhead in the Source monitor at the same frame.",
+   "needs": "clip",
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "extendEdit",
+   "what": "Extend Edit: moves the nearest edit point of the selected clips (or the targeted tracks) to the playhead.",
+   "needs": null,
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "freezeFrame",
+   "what": "Insert Frame Hold Segment: holds the frame under the playhead for the freeze duration, pushing the rest later.",
+   "needs": "video",
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "transitionVideo",
+   "what": "Puts the default video transition on the edit nearest the playhead on the targeted tracks (or the selected clips' edits).",
+   "needs": null,
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "transitionAudio",
+   "what": "Puts the default audio crossfade on the edit nearest the playhead.",
+   "needs": null,
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "transitionBoth",
+   "what": "Puts the default transitions on the selected clips' ends.",
+   "needs": "selection",
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "cut",
+   "what": "Cuts the selected clips to the clipboard (they are removed).",
+   "needs": "selection",
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "copy",
+   "what": "Copies the selected clips to the clipboard.",
+   "needs": "selection",
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "paste",
+   "what": "Pastes the clipboard at the playhead over what is there.",
+   "needs": "clipboard",
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "pasteInsert",
+   "what": "Pastes the clipboard at the playhead, pushing later clips.",
+   "needs": "clipboard",
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "selectAll",
+   "what": "Selects every clip of the sequence.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "deselect",
+   "what": "Clears the selection.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "tool.select",
+   "what": "The timeline's Selection tool (V), for the user's mouse.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "tool.trackForward",
+   "what": "The Track Select Forward tool.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "tool.trackBackward",
+   "what": "The Track Select Backward tool.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "tool.ripple",
+   "what": "The Ripple Edit tool.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "tool.roll",
+   "what": "The Rolling Edit tool.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "tool.rate",
+   "what": "The Rate Stretch tool.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "tool.razor",
+   "what": "The Razor tool.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "tool.slip",
+   "what": "The Slip tool.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "tool.slide",
+   "what": "The Slide tool.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "tool.pen",
+   "what": "The Pen tool.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "tool.hand",
+   "what": "The Hand tool.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "tool.zoom",
+   "what": "The Zoom tool.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "tool.text",
+   "what": "The Type tool.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "snap",
+   "what": "Turns snapping in the timeline on or off.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "zoomIn",
+   "what": "Zooms the timeline in.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "zoomOut",
+   "what": "Zooms the timeline out.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "zoomFit",
+   "what": "Zooms the timeline to show the whole sequence.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "videoTracksTaller",
+   "what": "Makes the video tracks taller.",
+   "needs": null,
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "videoTracksShorter",
+   "what": "Makes the video tracks shorter.",
+   "needs": null,
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "audioTracksTaller",
+   "what": "Makes the audio tracks taller.",
+   "needs": null,
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "audioTracksShorter",
+   "what": "Makes the audio tracks shorter.",
+   "needs": null,
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "expandTracks",
+   "what": "Expands every track.",
+   "needs": null,
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "minimizeTracks",
+   "what": "Minimizes every track.",
+   "needs": null,
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "maximizePanel",
+   "what": "Maximizes the panel with the keyboard, or restores it.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "newBin",
+   "what": "Adds a bin to the Project panel.",
+   "needs": null,
+   "view": false,
+   "panel": "timeline"
+  },
+  {
+   "id": "workspace.editing",
+   "what": "Shows the Editing workspace.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "workspace.color",
+   "what": "Shows the Color workspace.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "workspace.effects",
+   "what": "Shows the Effects workspace.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "workspace.audio",
+   "what": "Shows the Audio workspace.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "workspace.captions",
+   "what": "Shows the Captions and Graphics workspace.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "workspace.export",
+   "what": "Shows the Export workspace.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "workspace.reset",
+   "what": "Resets the shown workspace to its saved layout.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "selectUnused",
+   "what": "Selects the media no sequence uses in the Project panel.",
+   "needs": null,
+   "view": true,
+   "panel": "project"
+  },
+  {
+   "id": "auto.nextUncertain",
+   "what": "Moves the playhead to the next word speech recognition was unsure of.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "auto.prevUncertain",
+   "what": "Moves the playhead to the previous word speech recognition was unsure of.",
+   "needs": null,
+   "view": true,
+   "panel": "timeline"
+  },
+  {
+   "id": "window.project",
+   "what": "Opens the project panel (Window menu).",
+   "needs": null,
+   "view": true,
+   "panel": null
+  },
+  {
+   "id": "window.source",
+   "what": "Opens the source panel (Window menu).",
+   "needs": null,
+   "view": true,
+   "panel": null
+  },
+  {
+   "id": "window.program",
+   "what": "Opens the program panel (Window menu).",
+   "needs": null,
+   "view": true,
+   "panel": null
+  },
+  {
+   "id": "window.timeline",
+   "what": "Opens the timeline panel (Window menu).",
+   "needs": null,
+   "view": true,
+   "panel": null
+  },
+  {
+   "id": "window.controls",
+   "what": "Opens the controls panel (Window menu).",
+   "needs": null,
+   "view": true,
+   "panel": null
+  },
+  {
+   "id": "window.effects",
+   "what": "Opens the effects panel (Window menu).",
+   "needs": null,
+   "view": true,
+   "panel": null
+  },
+  {
+   "id": "window.text",
+   "what": "Opens the text panel (Window menu).",
+   "needs": null,
+   "view": true,
+   "panel": null
+  },
+  {
+   "id": "window.color",
+   "what": "Opens the color panel (Window menu).",
+   "needs": null,
+   "view": true,
+   "panel": null
+  },
+  {
+   "id": "window.history",
+   "what": "Opens the history panel (Window menu).",
+   "needs": null,
+   "view": true,
+   "panel": null
+  },
+  {
+   "id": "window.markers",
+   "what": "Opens the markers panel (Window menu).",
+   "needs": null,
+   "view": true,
+   "panel": null
+  },
+  {
+   "id": "window.mixer",
+   "what": "Opens the mixer panel (Window menu).",
+   "needs": null,
+   "view": true,
+   "panel": null
+  },
+  {
+   "id": "window.essential",
+   "what": "Opens the essential panel (Window menu).",
+   "needs": null,
+   "view": true,
+   "panel": null
+  },
+  {
+   "id": "window.captions",
+   "what": "Opens the captions panel (Window menu).",
+   "needs": null,
+   "view": true,
+   "panel": null
+  },
+  {
+   "id": "window.transcript",
+   "what": "Opens the transcript panel (Window menu).",
+   "needs": null,
+   "view": true,
+   "panel": null
+  },
+  {
+   "id": "window.export",
+   "what": "Opens the export panel (Window menu).",
+   "needs": null,
+   "view": true,
+   "panel": null
+  },
+  {
+   "id": "window.queue",
+   "what": "Opens the queue panel (Window menu).",
+   "needs": null,
+   "view": true,
+   "panel": null
+  },
+  {
+   "id": "window.tools",
+   "what": "Opens the tools panel (Window menu).",
+   "needs": null,
+   "view": true,
+   "panel": null
+  }
+ ],
+ "keys": {
+  "playPause": {
+   "tools": [
+    "play",
+    "stop"
+   ]
+  },
+  "shuttleBack": {
+   "no": "Shuttling is hands-on playback; play, stop and seek move the picture."
+  },
+  "shuttleStop": {
+   "tools": [
+    "stop"
+   ]
+  },
+  "shuttleForward": {
+   "no": "Shuttling is hands-on playback; play, stop and seek move the picture."
+  },
+  "nest": {
+   "tools": [
+    "nest_clips"
+   ]
+  },
+  "speed": {
+   "tools": [
+    "set_speed"
+   ]
+  },
+  "fullscreen": {
+   "no": "Full-screen playback takes over the user's screen; the user starts it (Ctrl+`)."
+  },
+  "maximizeUnderCursor": {
+   "no": "It acts on the panel under the mouse pointer, which an AI does not hold; maximizePanel does the same for the focused panel."
+  },
+  "undo": {
+   "tools": [
+    "undo"
+   ]
+  },
+  "redo": {
+   "tools": [
+    "redo"
+   ]
+  },
+  "save": {
+   "tools": [
+    "save_project"
+   ]
+  },
+  "saveAs": {
+   "no": "It writes the project to a new file at a place the user picks; save_project saves it to its own file (asking for a place only when it has none)."
+  },
+  "saveCopy": {
+   "no": "It writes a copy of the project to a place the user picks; the user does it."
+  },
+  "restoreAutosave": {
+   "no": "It replaces the open project with an autosave the user picks from a list; the user does it."
+  },
+  "open": {
+   "no": "It closes this project and opens another; that is the user's call."
+  },
+  "newProject": {
+   "no": "It closes this project for a new one; that is the user's call."
+  },
+  "newSequence": {
+   "tools": [
+    "add_sequence"
+   ]
+  },
+  "import": {
+   "tools": [
+    "import_media"
+   ]
+  },
+  "export": {
+   "tools": [
+    "export_sequence"
+   ]
+  },
+  "exportFrame": {
+   "tools": [
+    "export_frame"
+   ]
+  },
+  "keyHelp": {
+   "no": "A cheat sheet of keys for the person at the keyboard."
+  },
+  "keyboardShortcuts": {
+   "no": "The user's own keyboard settings."
+  },
+  "settings": {
+   "no": "The user's preferences (Settings > Video Editor)."
+  },
+  "removeUnused": {
+   "tools": [
+    "remove_media"
+   ]
+  },
+  "findMissing": {
+   "no": "Relinking picks files on disk in a dialog; the user does it (File > Find Missing Media…). get_media shows which media are offline."
+  },
+  "createProxy": {
+   "tools": [
+    "proxies"
+   ]
+  }
+ },
+ "automation": {
+  "silence": {
+   "tools": [
+    "remove_silence"
+   ]
+  },
+  "scenes": {
+   "tools": [
+    "automation"
+   ]
+  },
+  "beats": {
+   "tools": [
+    "automation"
+   ]
+  },
+  "captions": {
+   "tools": [
+    "automation"
+   ]
+  },
+  "fillers": {
+   "tools": [
+    "automation"
+   ]
+  },
+  "speakers": {
+   "tools": [
+    "automation",
+    "speakers"
+   ]
+  },
+  "aiPolish": {
+   "no": "The assistant is Claude: it reads the captions (get_captions) and fixes them itself (set_caption)."
+  },
+  "aiTranslate": {
+   "no": "The assistant is Claude: it reads the captions (get_captions) and writes a translated track itself (add_captions)."
+  },
+  "aiMetadata": {
+   "no": "The assistant is Claude: it writes titles and descriptions in its answer, from get_transcript; chapters are add_marker with kind chapter."
+  },
+  "aiHighlights": {
+   "tools": [
+    "create_shorts",
+    "get_transcript"
+   ]
+  },
+  "aiCommand": {
+   "no": "An edit command in plain words is what the assistant itself does."
+  },
+  "aiAssistant": {
+   "no": "It opens this chat."
+  },
+  "loudness": {
+   "tools": [
+    "automation"
+   ]
+  },
+  "clipLoudness": {
+   "tools": [
+    "automation"
+   ]
+  },
+  "duck": {
+   "tools": [
+    "automation"
+   ]
+  },
+  "isolateVoice": {
+   "tools": [
+    "automation"
+   ]
+  },
+  "color": {
+   "tools": [
+    "automation"
+   ]
+  }
+ }
+}

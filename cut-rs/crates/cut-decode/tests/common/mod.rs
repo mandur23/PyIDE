@@ -5,6 +5,7 @@ pub mod make;
 pub mod mkv;
 pub mod more;
 pub mod signal;
+pub mod vorbis;
 
 use std::path::PathBuf;
 

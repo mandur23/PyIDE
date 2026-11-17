@@ -13,7 +13,7 @@ pub fn hash_of(key: &str) -> String {
 }
 
 /// JavaScript's `\s` (control characters are already replaced by `_` when this is asked).
-fn js_space(c: char) -> bool {
+pub(crate) fn js_space(c: char) -> bool {
     matches!(
         c,
         '\t' | '\n' | '\u{0b}' | '\u{0c}' | '\r' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'

@@ -52,15 +52,10 @@ fn truncated_and_bit_flipped_samples_do_not_panic_or_hang() {
 
 #[test]
 fn tracks_this_crate_does_not_decode_are_unsupported() {
-    let (reader, source) = open(&common::more::vorbis_webm("vorbis-alone.webm", false));
-    for t in &source.tracks {
-        let e = match t.kind() {
-            cut_formats::Kind::Video => VideoDecoder::new(t, Accel::Software).err(),
-            cut_formats::Kind::Audio => decode_audio(&reader, t).err(),
-        };
-        eprintln!("{}: {e:?}", t.codec);
-        assert_eq!(e.map(|e| e.code()), Some("unsupported"), "{}", t.codec);
-    }
+    let (reader, source) = open(&fixture("video/voice.webm"));
+    let mut t = source.tracks[0].clone();
+    t.codec = "ac-3".into();
+    assert_eq!(decode_audio(&reader, &t).map(|_| ()).unwrap_err().code(), "unsupported");
     let (_, clip) = open(&fixture("video/clip.mp4"));
     let v = video(&clip);
     assert_eq!(decode_audio(&reader, v).map(|_| ()).unwrap_err().code(), "unsupported");

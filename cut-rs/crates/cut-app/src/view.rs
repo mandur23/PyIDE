@@ -59,6 +59,7 @@ fn panel_id(p: Panel) -> Option<&'static str> {
         Panel::Effects => "effects",
         Panel::Markers => "markers",
         Panel::History => "history",
+        Panel::Transcript => "transcript",
         Panel::Tools => return None,
     })
 }
@@ -205,6 +206,7 @@ pub const MENU_ACTIONS: &[(&str, &[&str])] = &[
     ("workspace.save", &["Workspaces", "Save Changes to This Workspace"]),
     ("window.essential", &["Window", "Essential Sound"]),
     ("window.captions", &["Window", "Captions"]),
+    ("window.transcript", &["Window", "Transcript"]),
     ("window.dockAll", &["Window", "Return All Panels to Main Window"]),
     ("importFolder", &["File", "Import Folder…"]),
     ("proxy.toggle", &["View", "Play Proxies"]),

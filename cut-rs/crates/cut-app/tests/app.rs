@@ -198,7 +198,8 @@ fn a_folder_lists_its_media_with_their_bins() {
     for f in ["x.mp4", "day1/y.wav", "day1/a/z.png", "day1/notes.txt"] {
         std::fs::write(root.join(f), b"").unwrap();
     }
-    let list = import::list_folder(&root);
+    let (list, truncated) = import::list_folder(&root);
+    assert!(!truncated, "four entries are under the limit");
     let rels: Vec<(String, Vec<String>)> =
         list.iter().map(|(p, r)| (p.file_name().unwrap().to_string_lossy().into_owned(), r.clone())).collect();
     assert_eq!(

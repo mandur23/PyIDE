@@ -58,6 +58,11 @@ impl Step {
         if self.cancel.load(Ordering::Relaxed) { Err(Cancelled) } else { Ok(()) }
     }
 
+    /// The flag a Cancel sets, for a model that is told to stop.
+    pub fn cancel_flag(&self) -> &AtomicBool {
+        &self.cancel
+    }
+
     /// Progress 0..1.
     pub fn progress(&self, fraction: f64) {
         self.progress.store((fraction.clamp(0.0, 1.0) as f32).to_bits(), Ordering::Relaxed);
@@ -157,7 +162,7 @@ pub fn run(s: &mut Shell, id: &str, _ctx: &egui::Context) -> bool {
     if !matches!(id, "auto.duck" | "auto.silence" | "auto.color" | "auto.scenes" | "auto.beats") {
         return false;
     }
-    if s.features.auto.running() {
+    if s.features.auto.running() || crate::voice::running(s) || crate::speakers::running(s) {
         s.app.toast(tr("Another analysis is running."));
         return true;
     }
@@ -181,7 +186,7 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     beats::poll(s, playing);
     let running = {
         let a = &s.features.auto;
-        let job = |title: &str, f: f32, paused: bool| (title.to_owned(), f, paused);
+        let job = |title: &str, f: f32, paused: bool| (title.to_owned(), f, paused, None);
         a.duck
             .job
             .as_ref()
@@ -190,8 +195,10 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
             .or_else(|| a.color.job.as_ref().map(|j| job(&j.title, j.fraction(), j.paused())))
             .or_else(|| a.scenes.job.as_ref().map(|j| job(&j.title, j.fraction(), j.paused())))
             .or_else(|| a.beats.job.as_ref().map(|j| job(&j.title, j.fraction(), j.paused())))
+            .or_else(|| crate::voice::progress_box(s))
+            .or_else(|| crate::speakers::progress_box(s))
     };
-    if let Some((title, f, paused)) = running {
+    if let Some((title, f, paused, text)) = running {
         ctx.request_repaint_after(Duration::from_millis(50));
         let mut stop = false;
         egui::Window::new(title)
@@ -203,6 +210,8 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
                 ui.add(ProgressBar::new(f).desired_width(260.0));
                 let line = if paused {
                     tr("Paused while playing").into_owned()
+                } else if let Some(text) = text {
+                    text
                 } else {
                     format!("{}%", cut_audio::util::js_round(f64::from(f) * 100.0))
                 };
@@ -227,6 +236,8 @@ pub fn cancel(s: &mut Shell) {
     a.color.job.as_ref().inspect(|j| j.cancel());
     a.scenes.job.as_ref().inspect(|j| j.cancel());
     a.beats.job.as_ref().inspect(|j| j.cancel());
+    crate::voice::cancel(s);
+    crate::speakers::cancel(s);
 }
 
 /// What an analysis that did not finish leaves: a toast for a cancel, a report for a failure.

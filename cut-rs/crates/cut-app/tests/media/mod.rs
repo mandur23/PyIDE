@@ -14,6 +14,8 @@ pub mod make;
 pub mod mkv;
 #[path = "../../../cut-decode/tests/common/more.rs"]
 pub mod more;
+#[path = "../../../cut-decode/tests/common/vorbis.rs"]
+pub mod vorbis;
 
 /// A decoded picture as `make::read_number` reads it: luma rows, then chroma.
 pub struct Got {

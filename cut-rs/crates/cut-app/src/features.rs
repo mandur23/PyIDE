@@ -21,6 +21,11 @@ pub struct Features {
     pub export: crate::export::ExportUi,
     pub auto: crate::auto::AutoUi,
     pub view: crate::view::View,
+    pub ai: crate::ai::AiUi,
+    pub speakers: crate::speakers::SpeakersUi,
+    pub voice: crate::voice::VoiceUi,
+    pub speech: crate::speech::SpeechUi,
+    pub control: crate::control::Control,
 }
 
 impl Features {
@@ -51,6 +56,11 @@ pub fn enabled(s: &Shell, id: &str) -> Option<bool> {
         .or_else(|| crate::panels::new_item::enabled(s, id))
         .or_else(|| crate::timeline::direct::enabled(s, id))
         .or_else(|| crate::view::enabled(s, id))
+        .or_else(|| crate::ai::enabled(s, id))
+        .or_else(|| crate::voice::enabled(s, id))
+        .or_else(|| crate::speakers::enabled(s, id))
+        .or_else(|| crate::speech::enabled(s, id))
+        .or_else(|| crate::update::enabled(s, id))
 }
 
 /// Runs `id` when it is one of these features' actions -> whether it was.
@@ -71,7 +81,12 @@ pub fn run(s: &mut Shell, id: &str, ctx: &egui::Context) -> bool {
             || crate::auto::run(s, id, ctx)
             || crate::panels::new_item::run(s, id, ctx)
             || crate::timeline::direct::run(s, id, ctx)
-            || crate::view::run(s, id, ctx);
+            || crate::view::run(s, id, ctx)
+            || crate::ai::run(s, id, ctx)
+            || crate::voice::run(s, id, ctx)
+            || crate::speakers::run(s, id, ctx)
+            || crate::speech::run(s, id, ctx)
+            || crate::update::run(s, id, ctx);
     }
     true
 }
@@ -80,7 +95,7 @@ pub fn run(s: &mut Shell, id: &str, ctx: &egui::Context) -> bool {
 /// `panel_ms` (the report and the benchmarks read it).
 pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     type Part = fn(&mut Shell, &egui::Context);
-    let parts: [(&'static str, Part); 10] = [
+    let parts: [(&'static str, Part); 15] = [
         ("(edit)", crate::edit::frame),
         ("(audio windows)", crate::audio::windows),
         ("(captions windows)", crate::captions::windows),
@@ -91,6 +106,11 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
         ("(new item)", crate::panels::new_item::windows),
         ("(timeline marks)", crate::timeline::direct::frame),
         ("(view windows)", crate::view::windows),
+        ("(claude)", crate::ai::windows),
+        ("(speakers)", crate::speakers::windows),
+        ("(voice)", crate::voice::windows),
+        ("(speech)", crate::speech::windows),
+        ("(control)", crate::control::panel::windows),
     ];
     for (name, part) in parts {
         let t = std::time::Instant::now();

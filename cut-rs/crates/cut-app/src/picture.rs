@@ -87,6 +87,7 @@ impl Screen {
         };
         let key = Key { revision, want, size, captions, proxy: opts.proxy, quality: opts.quality };
         if self.shown != Some(key) || !self.stats.complete {
+            self.engine.set_speaker_label(&crate::i18n::tr("Speaker {n}"));
             let r = match want {
                 Want::Sequence { seq, t } => self.engine.render(project, seq, t, size, opts),
                 Want::Media { media, t } => self.engine.render_media(project, media, t, size, opts),
@@ -228,6 +229,22 @@ impl Monitors {
             Want::Media { media, t } => engine.render_media(project, media, t, size, &opts),
         };
         r.map(|_| engine.read_pixels()).map_err(|e| e.to_string())
+    }
+
+    /// As [`Monitors::still`] for a sequence, with the caption track `captions` burned in (the control API's frame).
+    pub fn still_captioned(
+        &self,
+        project: &Project,
+        seq: Id,
+        t: Ticks,
+        size: (u32, u32),
+        captions: Option<Id>,
+    ) -> Result<Vec<u8>, String> {
+        let mut engine = Engine::new(self.rs.device.clone(), self.rs.queue.clone());
+        let captions = captions.map_or(Captions::None, |id| Captions::Tracks(vec![id]));
+        let opts =
+            RenderOptions { captions, wait: Some(std::time::Duration::from_secs(10)), ..RenderOptions::default() };
+        engine.render(project, seq, t, size, &opts).map(|_| engine.read_pixels()).map_err(|e| e.to_string())
     }
 
     /// The source monitor's picture of `media` at source time `t`.

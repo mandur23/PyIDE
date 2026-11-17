@@ -317,5 +317,13 @@
   "Unsaved changes in these files will be lost:": "이 파일들의 저장하지 않은 변경 내용은 사라집니다:",
   "Close Anyway": "그래도 닫기",
   "Earlier output was dropped: the console keeps the last {size} KB.": "앞부분 출력은 버렸습니다. 콘솔은 마지막 {size}KB만 보관합니다.",
-  "Create Virtual Environment…": "가상 환경 만들기…"
+  "Create Virtual Environment…": "가상 환경 만들기…",
+  "Nano Studio Cut could not start.": "Nano Studio Cut 프로그램을 시작하지 못했습니다.",
+  "The program is missing: {path}": "프로그램이 없습니다: {path}",
+  "Reinstall Nano Studio to repair it.": "고치려면 Nano Studio 설치 프로그램을 다시 실행하세요.",
+  "Build it in cut-rs with: cargo build --release -p cut-app": "cut-rs 폴더에서 빌드하세요: cargo build --release -p cut-app",
+  "Windows did not start {path}: {error}": "Windows에서 이 프로그램을 시작하지 못했습니다: {path} ({error})",
+  "It ended right after starting, with exit code {code}.": "시작하자마자 끝났습니다. 종료 코드: {code}",
+  "Nano Studio Cut is still open, so Nano Studio was not updated.": "Nano Studio Cut 창이 열려 있어서 업데이트하지 않았습니다.",
+  "Save your work in Cut and close it, then update again.": "Cut 창에서 작업을 저장하고 닫은 뒤 다시 업데이트하세요."
 }

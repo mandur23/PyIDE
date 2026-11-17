@@ -9,9 +9,86 @@ Nano Studio Cut(영상 편집 앱)을 고칠 때 보는 문서입니다. 공통 
 
 ## 1. 실행
 
+설치본의 Cut은 Rust 프로그램 `cut-rs`(`nano-studio-cut.exe`)입니다. 이 문서가 설명하는 JavaScript Cut(`renderer/features/cut`, `main/cut`, `main/features/cut.js`)은 설치본에 들어가지 않고, Rust 편집기의 명세로 저장소에 남아 있습니다. cut-rs의 오라클 테스트가 이 모듈들과 값을 비교합니다. Rust 쪽은 `cut-rs/NEXT.md`와 각 크레이트의 `lib.rs`에 있습니다.
+
 ```bash
-npm start -- --mode=cut
+cargo build --release -p cut-app --manifest-path cut-rs/Cargo.toml   # Rust Cut을 빌드
+npm start -- --mode=cut                                               # 빌드한 Rust Cut을 띄움
+PYIDE_CUT_JS=1 npm start -- --mode=cut                                # 소스 실행에서만: 이 창에 JavaScript Cut
 ```
+
+- Cut을 여는 모든 길(`--mode=cut`, `--mode=cut <파일.ncut>`, `.ncut` 파일 인자, 시작 화면의 Cut 카드)은 `main.js`의 `openCut`과 `main/cut-launcher.js`로 갑니다. 프로그램을 분리해서 띄우고, 프로젝트를 첫 인자로, `CUT_HOME`(작업 폴더), `CUT_SIDECAR_DIR`(Python 서버 세 개의 폴더), `CUT_CLAUDE_PATH`(Claude Code CLI, 없으면 넣지 않음), `CUT_STUDIO_SETTINGS`(Nano Studio의 `settings.json`), `CUT_STUDIO_APP`(Nano Studio를 다시 띄우는 명령, JSON 배열), `CUT_STUDIO_VERSION`(설치된 버전)을 환경 변수로 줍니다. 변수의 뜻은 `main/cut-launcher.js` 맨 위에 있습니다.
+- Electron은 창을 만들지 않고 프로그램이 5초 살아 있으면 끝납니다. 그 뒤의 수명은 프로그램의 것입니다. 프로그램이 없거나, Windows가 띄우지 않거나, 5초 안에 오류 코드로 끝나면 메시지 상자와 IDE 로그(`#cut`)에 이유가 남습니다. 두 번째로 열면 Cut이 하나 더 뜹니다(JavaScript Cut과 같습니다).
+- 프로그램 위치는 설치본에서 `resources\cut\nano-studio-cut.exe`(Python 서버는 `resources\cut\sidecars`), 소스 실행에서 `cut-rs\target\release\nano-studio-cut.exe`(서버는 `main\ai`)입니다. 테스트는 `PYIDE_CUT_EXE`로 다른 프로그램을 줍니다.
+
+### 설치본의 JavaScript Cut을 쓰던 사람이 잃지 않는 것
+
+Rust 쪽은 `cut-rs/crates/cut-app/src/studio.rs`, `crash.rs`, `update.rs`, `export/journal.rs`, `ai/claude.rs`이고, 테스트는 `cut-rs/crates/cut-app/tests/installed.rs`(아래 표의 테스트 이름)와 `verify/cut-rust-update.mjs`입니다.
+
+- **설정.** JavaScript Cut은 `%APPDATA%\Nano Studio\settings.json`에 `cut.*`로 설정을 두었고, Rust Cut은 `<작업 폴더>\.cut-rs\settings.json`에 `cut.`을 뺀 이름으로 둡니다. `cut.*`는 처음 시작할 때 한 번 옮기고(`studio::carry_over`), `studioCarriedOver` 표시를 남깁니다. 이제 `cut.*`를 쓰는 설치된 프로그램이 없어서 읽어 오기를 계속해도 얻는 것이 같고, 한 번 옮기면 Rust 파일만 보면 되며, Rust에서 지운 값이 옛 파일에서 되살아나지 않습니다. Rust 쪽에 이미 값이 있으면 그대로 둡니다. Nano Studio 파일에는 아무것도 쓰지 않습니다(`app.lastMode`는 main.js가 씁니다).
+- **언어와 테마.** `appearance.language`, `appearance.theme`은 Code와 Craft가 계속 바꾸므로 옮기지 않고, Rust Cut에 자기 값이 없는 동안 시작할 때마다 읽습니다. `system`이면 언어는 Windows 표시 언어(`sys-locale`, `GetUserPreferredUILanguages`, `navigator.language`와 같은 값), 테마는 창이 받은 Windows 테마입니다. 설정 파일이 아직 없으면(새 설치) 둘 다 `system`, 파일은 있는데 테마가 없으면 Dark입니다(`renderer/core/i18n.js`와 같습니다). Rust Cut의 설정 창에서 고르면 그 뒤로는 Rust 값이 이깁니다.
+- **내보내기 저널.** JavaScript의 `%APPDATA%\Nano Studio\cut-exports`(`CUT_STUDIO_SETTINGS`의 폴더)를 Rust의 자기 저널과 같은 규칙(`sink.js`의 `sweep`)으로 시작할 때 쓸어 냅니다. 끝난 실행의 목록에 있는 `.part`, `.faststart.tmp`만 지우고, 목록에 없는 파일과 살아 있는 실행의 목록은 건드리지 않습니다. 비면 다음 시작에는 할 일이 없습니다.
+- **Claude Code.** `CUT_CLAUDE_PATH`가 있으면 그 파일, `none`이면 없음, 없으면 `main/ai/claude.js`처럼 `~\.local\bin\claude.exe` 다음 PATH(`ai::claude::switch_of`, `Cli::find`).
+- **충돌.** panic 훅이 `<작업 폴더>\.cut-rs\crash.log`에 panic과 backtrace를 쓰고, "Nano Studio Cut" 제목의 메시지 상자에 무슨 일인지와 다음 시작에 자동 저장본을 묻는다는 것을 앱 언어로 보여 줍니다. release 프로필은 panic에 abort하고 훅이 먼저 돕니다. `CUT_TEST_PANIC=1`이 첫 프레임에서 일부러 panic합니다.
+- **업데이트.** 설치 프로그램은 설치 폴더 아래 프로세스를 모두 끝내므로, `updater.js`의 `install()`이 먼저 `main/cut-close.js`로 그 폴더에서 띄운 `nano-studio-cut.exe`에 닫기를 요청합니다(제목이 "Nano Studio Cut"으로 끝나는 보이는 창에 WM_CLOSE, 닫기 단추와 같음). 저장할 것이 없는 Cut은 세션을 끝내고 나가고, 있는 Cut은 자동 저장본을 바로 쓴 뒤 저장할지 묻습니다. 모두 끝나야 설치하고, 60초 뒤에도 남아 있으면 설치하지 않고 그렇다고 말합니다(IDE 창의 메시지, 시작 화면에서는 메시지 상자). 강제로 끝내는 일은 없습니다.
+- **업데이트 확인.** Rust Cut의 도움말 › 업데이트 확인…이 `CUT_STUDIO_APP`(없으면 설치 폴더의 `Nano Studio.exe`)을 `--check-updates`로 띄웁니다. main.js가 시작 화면을 열고 시작 시 확인 설정과 상관없이 바로 확인하며, 시작 화면의 업데이트 아이콘이 내려받고 설치합니다. 도움말 › Nano Studio Cut 정보가 설치된 버전(`CUT_STUDIO_VERSION`)을 보여 줍니다.
+
+설정 표(`studio::TABLE`). "옮김"은 Rust가 읽는 이름, "보관"은 아직 읽지 않지만 다음 버전을 위해 옮겨 두는 이름입니다. `installed.rs`의 `the_table_lists_every_setting_of_the_javascript_and_the_guide_lists_the_table`이 JavaScript 소스의 `'cut.*'` 이름이 모두 표에 있는지, 이 문서가 표의 모든 줄을 담는지 봅니다. 모든 줄은 `every_javascript_setting_is_carried_once_to_its_name`(값이 그 이름에 감, 한 번만, Rust 값 유지)이 덮고, 굵게 쓴 것은 `the_carried_settings_are_what_the_app_reads`가 앱이 읽는 값까지 봅니다.
+
+| JavaScript | Rust | 시험 |
+|---|---|---|
+| `cut.keyPreset` | 옮김 `keyPreset` | **읽는 값** |
+| `cut.keys` | 옮김 `keys` | 옮김 |
+| `cut.workspace` | 옮김 `workspace` | **읽는 값** |
+| `cut.autosave.minutes` | 옮김 `autosaveMinutes` | **읽는 값** |
+| `cut.autosave.keep` | 옮김 `autosaveKeep` | 옮김, Rust 값 유지 |
+| `cut.cacheLimitGB` | 옮김 `cacheLimitGB` | **읽는 값** |
+| `cut.transitionSeconds` | 옮김 `transitionSeconds` | 옮김 |
+| `cut.stillSeconds` | 옮김 `stillSeconds` | 옮김 |
+| `cut.quality` | 옮김 `quality` | 옮김 |
+| `cut.program.quality` | 옮김 `quality`(모니터가 재생하던 값이라 `cut.quality`보다 우선) | **읽는 값** |
+| `cut.source.quality` | 보관 `source.quality`(Rust는 두 모니터가 `quality` 하나) | 옮김 |
+| `cut.program.safe` | 옮김 `program.safe` | **읽는 값** |
+| `cut.source.safe` | 보관 `source.safe` | 옮김 |
+| `cut.program.buttons` | 옮김 `program.buttons` | 옮김 |
+| `cut.source.buttons` | 옮김 `source.buttons` | 옮김 |
+| `cut.proxy` | 옮김 `proxy` | **읽는 값** |
+| `cut.proxy.offer` | 옮김 `proxyOffer` | **읽는 값** |
+| `cut.proxy.height` | 옮김 `proxyHeight` | **읽는 값** |
+| `cut.proxy.dismissed` | 옮김 `proxyDismissed` | 옮김 |
+| `cut.timelineTools` | 옮김 `timelineTools` | **읽는 값** |
+| `cut.speech.model` | 옮김 `speech.model` | 옮김 |
+| `cut.speech.language` | 옮김 `speech.language` | 옮김 |
+| `cut.speech.lineChars` | 옮김 `speech.lineChars` | 옮김 |
+| `cut.speech.markUncertain` | 옮김 `speech.markUncertain` | **읽는 값** |
+| `cut.speech.isolateVoice` | 옮김 `speech.isolateVoice` | 옮김 |
+| `cut.speech.highlight` | 옮김 `speech.highlight` | 옮김 |
+| `cut.ai.model` | 옮김 `ai.model` | 옮김 |
+| `cut.ai.acknowledged` | 옮김 `ai.acknowledged` | 옮김 |
+| `cut.ai.highlights` | 옮김 `ai.highlights` | 옮김 |
+| `cut.ai.shortsFit` | 옮김 `ai.shortsFit` | 옮김 |
+| `cut.auto.<작업>` | 옮김 `auto.<작업>`(beats, clipLoudness, duck, loudness, scenes, silence, fillers) | 옮김 |
+| `cut.color.collapsed` | 옮김 `color.collapsed` | 옮김 |
+| `cut.scopes.show` | 옮김 `scopes.show` | 옮김 |
+| `cut.effectFavorites` | 옮김 `effectFavorites` | 옮김 |
+| `cut.defaultVideoTransition` | 옮김 `defaultVideoTransition` | 옮김 |
+| `cut.defaultAudioTransition` | 옮김 `defaultAudioTransition` | 옮김 |
+| `cut.export.preset` | 보관 `export.preset` | 옮김 |
+| `cut.project.view` | 보관 `project.view` | 옮김 |
+| `cut.speakers.captions` | 보관 `speakers.captions` | 옮김 |
+| `cut.toolGroups` | 보관 `toolGroups` | 옮김 |
+| `cut.addedPanels` | 보관 `addedPanels` | 옮김 |
+| `cut.aiDock` | 보관 `aiDock` | 옮김 |
+| `cut.control.external` | 보관 `control.external`(사람이 켰던 외부 AI 허용) | 옮김 |
+| `cut.assistant.acknowledged` | 보관 `assistant.acknowledged` | 옮김 |
+| `ai.idleUnloadMinutes` | 옮김 `ai.idleUnloadMinutes`(앱 전체 설정, 한 번 옮김) | 옮김 |
+| `cut.layoutSaved` | 옮기지 않음: JavaScript는 DOM 줄과 칸의 flex 비율, Rust는 분할선마다 포인트와 탭을 저장합니다. 옮기면 크기가 틀어집니다 | 옮기지 않음 |
+| `cut.layout.<작업 영역>` | 옮기지 않음: 같은 flex 비율 | 옮기지 않음 |
+| `cut.exportSpeed` | 옮기지 않음: settings.json이 아니라 페이지의 localStorage에 있었습니다. 첫 내보내기에서 다시 잽니다 | 옮기지 않음 |
+| `appearance.language` | 옮기지 않고 시작할 때마다 읽음(`studio::language_of`, `system`은 Windows) | `language_and_theme_follow_nano_studio_and_windows` |
+| `appearance.theme` | 옮기지 않고 시작할 때마다 읽음(`studio::theme_of`, `system`은 Windows) | `language_and_theme_follow_nano_studio_and_windows` |
+
+- 아래 내용은 `PYIDE_CUT_JS=1`로 띄운 JavaScript Cut의 이야기입니다.
 
 - 시작 화면에서는 세 번째 카드(`#chooseCut`, "영상 편집")를 누릅니다.
 - 작업 폴더는 `%USERPROFILE%\Nano Studio Cut`입니다. main.js가 만들고, 신뢰하고, 프로젝트(`ide.root`)로 엽니다. 안에 `Projects`(프로젝트 기본 위치), `Autosave`(자동 저장과 `.sessions` 세션 표시), `Cache`(썸네일, 파형, 프록시), 음성 분리를 처음 쓰면 `Media`(분리한 음성 WAV, 캐시 한도 밖)가 있습니다. 내보내기 저널은 `<userData>\cut-exports`에 있습니다.
@@ -116,7 +193,9 @@ npm start -- --mode=cut
 
 | 파일 | 맡은 일 |
 | --- | --- |
-| `main.js` | `--mode=cut`, `cutHome()`(`PYIDE_CUT_HOME`), 작업 폴더 만들기와 신뢰 |
+| `main.js` | `--mode=cut`과 `.ncut` 인자, `openCut`(Rust Cut 띄우기, 시작 화면이 닫힌 동안 끝나지 않기, 메시지 상자, `app.lastMode`), `PYIDE_CUT_JS`, `cutHome()`(`PYIDE_CUT_HOME`), 작업 폴더 만들기와 신뢰 |
+| `main/cut-launcher.js` | Rust Cut의 위치(`resources\cut`, 소스 실행은 `cut-rs\target\release`, `PYIDE_CUT_EXE`), 넘기는 환경 변수(`CUT_HOME`, `CUT_SIDECAR_DIR`, `CUT_CLAUDE_PATH`, `CUT_STUDIO_SETTINGS`, `CUT_STUDIO_APP`, `CUT_STUDIO_VERSION`), 분리해서 띄우고 5초 지켜보기, 실패 문구 |
+| `main/cut-close.js` | 업데이트 설치 전에 설치 폴더에서 띄운 Rust Cut의 주 창에 닫기를 요청하고(WM_CLOSE) 끝나기를 기다리기(`updater.js`의 `install()`, 테스트는 `PYIDE_UPDATE_INSTALL_DIR`, `PYIDE_UPDATE_CUT_WAIT_MS`) |
 | `main/windows.js`, `main/plugin-manager.js` | 창 제목, 시작 화면의 `cut` 선택, 플러그인 모드 `cut` |
 | `main/features/cut.js` | `cut:*` IPC 등록, 폴더, 대화상자(`PYIDE_CUT_DIALOG`), 읽기 |
 | `main/cut/paths.js` | 경로 검사(로컬 일반 파일, realpath, 네트워크 경로 거부)와 확장자 목록 |
@@ -366,10 +445,13 @@ npm start -- --mode=cut
 | `verify/cut-ai-tools.mjs` | 앱 | 9808 | AI 조작의 나머지 도구를 대본 CLI로 실제 앱에서(한국어, 실제 마우스와 키, 가짜 Whisper와 가짜 설치): run_action(시작·종료 표시, 추출, 선택이 없어 거부된 잔물결 삭제, 마커, 한 단계), 속도 램프와 정지, 마스크 키프레임, Lumetri 커브와 HSL, 믹서(패널에 보임), 가져오기(프로젝트 폴더 밖 파일만 대화상자에 나오고, 가져오지 않음은 아무것도 바꾸지 않음), 자동 자막(설치 대화상자의 취소는 거부, 단계에 진행, 정지하면 그대로, 끝까지 하면 자막 트랙 한 단계), 두 테마 화면 |
 | `verify/cut-ai-chat.mjs` | 앱 | 9807 | AI 어시스턴트와 외부 AI를 한국어 화면에서 실제 마우스와 키로: 창 > AI 어시스턴트, 처음 안내, 턴이 도는 동안 바뀌는 타임라인(단계, 반짝임, 재생 위치), Ctrl+Z 한 번에 턴 전체, 거부된 단계, 정지, 내보내기 전에 묻기(내보내지 않기, 내보내기), 사용 한도 설명, 외부 허용은 기본 꺼짐, 적용, 명령과 JSON 복사, 토큰 없음과 틀린 토큰 거부, 대본 외부 클라이언트의 실시간 편집과 배너, 연결 끊기; 화면 캡처 (`CUT_CHAT_ONLY`로 일부만) |
 | `verify/cut-voice.mjs` | 앱 | 9767 | 음성 분리를 가짜 백엔드로 실제 화면에서: 처음 쓸 때의 대화상자와 진행률, 자동화 메뉴의 음성 분리(작업 폴더 `Media`의 WAV, 원본 옆에는 쓰지 않음, 같은 빈에 가져오기, 오디오 클립만 새 소리, 자리·in/out·링크 그대로, 한 단계, Ctrl+Z/Ctrl+Shift+Z, 다시 하면 같은 파일), 취소(WAV, `.part`, 임시 파일, 미디어, 단계 모두 남지 않음), 프로젝트 패널의 음성 분리, 음성 인식 전 분리(자동 자막 대화상자와 설정의 체크, 캐시의 분리한 소리, 따로 캐시되는 대본); 실제 백엔드와 빈 `HF_HUB_CACHE`로 모델이 없을 때의 대화상자와 설정의 Download…(아무것도 내려받지 않음); `CUT_VOICE_REAL=1`이면 실제 HTDemucs (`CUT_VOICE_ONLY`로 일부만) |
-| `verify/app-mode.mjs` | 앱 | 9758(Cut 부분) | `--mode=cut` 창, 작업 폴더와 신뢰, 플러그인, `__cutReady` |
+| `verify/app-mode.mjs` | 앱 | 9758(Cut 부분) | `--mode=cut` 창(`PYIDE_CUT_JS=1`), 작업 폴더와 신뢰, 플러그인, `__cutReady` |
+| `verify/cut-rust-launch.mjs` | 앱 | 9908(시작 화면) | Rust Cut 띄우기: 대역 프로그램(`verify/cut-launch-stub.cs`를 .NET Framework의 `csc.exe`로 빌드, 인자와 환경을 기록)으로 `--mode=cut`, 프로젝트, `.ncut` 인자(절대, 상대), 폴더 인자, 시작 화면의 Cut 카드, 두 번째 실행; `CUT_HOME`, `CUT_SIDECAR_DIR`의 서버 세 개, `CUT_CLAUDE_PATH`, `CUT_STUDIO_SETTINGS`, 작업 폴더; Electron이 남지 않고 프로그램은 살아 있음; `app.lastMode`; 프로그램 없음, 충돌(0xC0000005), 오류 코드(한국어)의 메시지 상자와 로그, 바로 끝난 정상 종료는 조용히. `--real`은 실제 `nano-studio-cut.exe`가 프로젝트를 그 작업 폴더에서 여는지(창 제목, 폴더), `--stub`은 대역만, `--exe <Nano Studio.exe>`는 빌드한 앱 |
+| `verify/cut-rust-update.mjs` | 앱 | 9918(IDE), 9919, 9927(시작 화면) | 업데이트와 Rust Cut: `main/cut-close.js`가 설치 폴더의 Cut만 찾고, 저장할 것 없는 Cut은 닫기 요청에 세션을 끝내고 나가며, 자동 저장 사본을 연 Cut은 자동 저장본을 바로 쓰고 남아 있음; 그때 IDE의 Restart to Update가 설치하지 않고 이유를 말함; `--check-updates`가 시작 시 확인이 꺼져 있어도 폴더 피드를 바로 확인하고, 없으면 확인하지 않음; Rust Cut의 업데이트 확인(`CUT_ACTIONS=checkForUpdates`)이 그 시작 화면을 띄움. `--cut <exe>`로 Cut 프로그램을 고름(기본은 `target\debug`, `release` 중 새것) |
 
+- CI에는 Cut의 Node 테스트, `app-mode`의 Cut 부분, `cut-rust-launch --stub`이 있습니다. JavaScript Cut의 앱 테스트(위 표의 "앱", `cut-rust-launch` 말고)는 설치본에 들어가지 않는 코드를 시험하므로 CI에서 뺐습니다. 명세를 고칠 때는 로컬에서 하나씩 돌립니다. CI의 `cut-rs` job이 Rust Cut을 빌드하고 `cut-rust-launch --real`과 `cargo test --workspace`를 돌립니다(`.github/workflows/ci.yml`).
 - Node 테스트는 `node verify/cut-<이름>.mjs`로 돌립니다.
-- 앱 테스트는 `launch({ fixture: 'core', port, name, mode: 'cut', env: { PYIDE_CUT_HOME: <임시 폴더> } })`로 띄우고 `window.__cutReady === true`를 기다립니다. 쓰는 모듈마다 `Cut[name]`이 있는지 먼저 확인합니다. 로드에 실패한 모듈은 쓰기 전까지 증상이 없습니다.
+- 앱 테스트는 `launch({ fixture: 'core', port, name, mode: 'cut', env: { PYIDE_CUT_HOME: <임시 폴더> } })`로 띄우고(`launch()`가 `PYIDE_CUT_JS=1`을 넣어 JavaScript Cut이 뜹니다) `window.__cutReady === true`를 기다립니다. 쓰는 모듈마다 `Cut[name]`이 있는지 먼저 확인합니다. 로드에 실패한 모듈은 쓰기 전까지 증상이 없습니다.
 - 앱 테스트는 하나씩 숨겨진 데스크톱에서 돌립니다: `powershell -NoProfile -ExecutionPolicy Bypass -File verify/on-desktop.ps1 -Out verify/out/<이름>.log -TimeoutMinutes 20 node verify/<이름>.mjs`.
 - 클릭은 실제 마우스 이벤트(`Input.dispatchMouseEvent`), 키는 `press`로 보냅니다. 창 크기는 실행마다 다르니 좌표는 매번 페이지에서 계산합니다.
 

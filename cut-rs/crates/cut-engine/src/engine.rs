@@ -118,6 +118,8 @@ pub struct Engine {
     /// The size of the sequence the last render showed (the scopes count its box).
     shown: Option<(f64, f64)>,
     counts: Counts,
+    /// "Speaker {n}" in the screen's language: the name burned-in captions give an unnamed speaker.
+    speaker_label: String,
 }
 
 /// What an engine holds, in bytes ([`Engine::memory`]).
@@ -222,7 +224,13 @@ impl Engine {
             waker: None,
             shown: None,
             counts: Counts::default(),
+            speaker_label: "Speaker {n}".into(),
         }
+    }
+
+    /// The name burned-in captions give an unnamed speaker, `{n}` its place in the list ("Speaker {n}" until set).
+    pub fn set_speaker_label(&mut self, unnamed: &str) {
+        unnamed.clone_into(&mut self.speaker_label);
     }
 
     /// Loads the fonts text and captions need now (on a thread of the caller's choosing) instead of at the first
@@ -346,7 +354,7 @@ impl Engine {
             Captions::First => Which::First,
             Captions::Tracks(ids) => Which::Ids(ids),
         };
-        let caps = plan::captions_at(seq, t, which);
+        let caps = plan::captions_at(seq, t, which, project.speakers.as_ref(), &self.speaker_label);
         let (sw, sh) = (seq.w as f64, seq.h as f64);
         let overlay = if caps.is_empty() {
             None
@@ -357,17 +365,24 @@ impl Engine {
             let mut sig = format!("{w}x{h}|{sw}x{sh}");
             for c in &caps {
                 let lit = c.style.get("highlight").and_then(serde_json::Value::as_bool) == Some(true);
-                sig.push_str(&format!("|{:?}|{:?}|{}", c.style, c.items, if lit { c.t } else { -1.0 }));
+                sig.push_str(&format!("|{:?}|{:?}|{:?}|{}", c.style, c.items, c.shown, if lit { c.t } else { -1.0 }));
             }
             let owned: Vec<_> = caps
                 .iter()
-                .map(|c| (c.style.clone(), c.t, c.items.iter().map(|&i| i.clone()).collect::<Vec<_>>()))
+                .map(|c| {
+                    (c.style.clone(), c.t, c.items.iter().map(|&i| i.clone()).collect::<Vec<_>>(), c.shown.clone())
+                })
                 .collect();
             self.drawn(CAPTIONS, &sig, (w, h), opts.wait, &mut complete, move || {
                 Box::new(move |text| {
                     let caps: Vec<plan::Captions<'_>> = owned
                         .iter()
-                        .map(|(style, t, items)| plan::Captions { style, t: *t, items: items.iter().collect() })
+                        .map(|(style, t, items, shown)| plan::Captions {
+                            style,
+                            t: *t,
+                            items: items.iter().collect(),
+                            shown: shown.clone(),
+                        })
                         .collect();
                     text.captions(&caps, sw, sh, w, h)
                 })

@@ -53,6 +53,7 @@
 - **IPC 처리기가 throw하면 호출한 쪽이 처리해도 로그에 ERROR가 남습니다.** 이름이 바뀐 파일의 옛 경로를 읽는 일은 정상이라 `fs:read`는 ENOENT를 값으로 돌려주고 `preload.js`가 거부로 바꿉니다.
 - **`Menu.setApplicationMenu`를 부르지 않으면 `autoHideMenuBar` 뒤에 Electron 기본 메뉴가 살아 있습니다.** 그 단축키(Ctrl+R, Ctrl+Shift+R, Ctrl+W, Ctrl+M, Ctrl+-, Ctrl+0, F11, Ctrl+Shift+I)가 페이지가 처리하지 않은 키를 가져갔습니다. 이제 `main.js`가 ready 전에 `Menu.setApplicationMenu(null)`을 부르고, 소스 폴더 실행에서만 F12가 DevTools를 엽니다(`main/windows.js`). 창 수준 키를 더하려면 메뉴가 아니라 페이지의 키맵에 넣습니다.
 - **`quitAndInstall`은 설치 프로그램을 먼저 띄우고 `app.quit()`을 부르며, NSIS 설치 프로그램은 약 1.3초 뒤 설치 폴더의 프로세스를 끝냅니다.** will-quit의 quit gate는 기다릴 틈이 없어 서버가 `stop` 없이 남았습니다(java.exe는 설치 폴더 밖이라 살아남음). 설치 전에 `quitAhead(begin)`으로 gate의 일을 먼저 끝내고, 창은 `closeWithoutAsking`으로 묻지 않고 닫습니다.
+- **Rust Cut(`resources\cut\nano-studio-cut.exe`)도 설치 폴더 아래라 업데이트가 저장 안 한 편집째 끝냅니다.** Electron 창이 아니라 quit gate도 `updater:running`도 모릅니다. `install()`이 먼저 `main/cut-close.js`로 그 폴더의 Cut 주 창에 WM_CLOSE를 보내고, 모두 끝나야 설치합니다. `/F` 없는 `taskkill`은 "종료 신호를 보냈습니다"라고 성공하지만 Cut은 끝나지 않았습니다. 최상위 창 하나에만 보내는데 그것이 winit의 숨은 이벤트 창이었습니다. 창 메시지는 EnumWindows로 찾은 보이는 주 창에 PostMessage합니다. 저장할 것이 있는 Cut은 자동 저장본을 바로 쓰고 묻습니다. 60초 안에 끝나지 않으면 설치하지 않고 말합니다(`verify/cut-rust-update.mjs`). 설치 폴더 아래에 오래 사는 프로그램을 더하면 같은 확인을 넣습니다.
 - **정리는 before-quit이 아니라 will-quit에서 합니다.** before-quit 뒤에 창이 저장 확인을 묻고, 거기서 취소하면 종료가 멈추지만 이미 정리한 터미널과 DB 연결은 돌아오지 않습니다. `app.relaunch()`도 한 번 부르면 취소할 수 없어 will-quit에서 부릅니다. 취소는 렌더러가 `window:closeCancelled`로 알립니다.
 - **main 안의 알림을 `ipcMain.emit`으로 보내지 않습니다.** `main/ipc-guard.js`가 앱 페이지가 보내지 않은 메시지를 거절해서, 응답 없는 창의 네이티브 취소가 다시 시작을 취소하지 못했습니다. main 안에서는 모듈의 함수로 알립니다(`windows.onCloseCancelled`).
 - **자식 프로세스는 트리째 끝냅니다.** Kotlin 언어 서버는 cmd.exe로 시작해서 `proc.kill()`이 cmd.exe만 끝내고 JVM이 남았습니다. `taskkill /T /F`를 쓰고, 종료할 때는 동기로, 이미 끝난 pid에는 보내지 않습니다(다른 프로그램의 pid일 수 있음).
@@ -97,7 +98,9 @@
 - **`ide.openProject`, `ide.closeProject`는 Craft에서 거부됩니다.**
 - **플러그인의 `required`는 모든 모드에서 불러옵니다.** 한 모드에서만 끌 수 없게 하려면 `requiredIn`을 씁니다. `required`를 Minecraft에 쓰면 Code와 Craft 분리가 깨집니다.
 - **Cut에도 필수 플러그인(diagnostics, terminal, run, settings 등)이 로드됩니다.** Cut 화면은 `#cutHost`가 창을 채우고 IDE 영역은 CSS로 숨깁니다. 설정 페이지는 Craft처럼 `craft: true`인 것만 나옵니다.
-- **시작 화면에서 Cut을 고르면 기본(내장) GPU를 씁니다.** 모드는 app ready 뒤에 정해져서 `force_high_performance_gpu` 스위치를 줄 수 없습니다. 이 PC에서는 AMD 내장 GPU가 잡힙니다.
+- **시작 화면에서 JavaScript Cut을 고르면 기본(내장) GPU를 씁니다.** 모드는 app ready 뒤에 정해져서 `force_high_performance_gpu` 스위치를 줄 수 없습니다. 이 PC에서는 AMD 내장 GPU가 잡힙니다. 설치본의 Rust Cut은 자기 프로세스라 GPU를 스스로 고릅니다(`cut_engine::gpu::pick_adapter`).
+- **창이 하나도 없으면 `window-all-closed`가 앱을 끝냅니다.** Rust Cut은 Electron 창이 아니라서, 시작 화면을 닫는 순간 Cut이 뜨기도 전에 Electron이 끝나 시작 실패를 알릴 곳이 없어집니다. `main.js`의 `openCut`은 `cutStarting`을 켜서 그동안 끝나지 않고, 시작이 어떻게 됐는지 안 뒤에 스스로 끝납니다.
+- **Electron보다 오래 사는 자식 프로세스는 `stdio: 'ignore'`로 띄웁니다.** 파이프를 주면 Electron이 끝난 뒤 읽는 쪽이 없어 자식의 출력이 실패합니다. Rust의 `eprintln!`은 쓰기가 실패하면 panic합니다(`main/cut-launcher.js`).
 - **시작 화면 카드가 늘면 키보드 테스트의 화살표 수가 바뀝니다.** Cut 카드가 생겨 `app-mode`의 업데이트 아이콘 검사가 오른쪽 세 번이 됐습니다.
 
 ## 공통: 번역
@@ -596,6 +599,10 @@
 - **종료 표시(Out)는 그 프레임을 포함합니다.** 1초에서 3초까지 추출하면 2초와 한 프레임이 빠집니다. 길이를 재는 검사는 한 프레임을 셉니다(`verify/cut-ai-tools.mjs`).
 - **시간 다시 매핑을 끄면 클립의 길이는 그대로이고 속도는 첫 프레임의 속도가 됩니다.** 끈 뒤의 in/out을 원래 값으로 기대하면 틀립니다. 기대값은 그때의 `out - in`에서 계산합니다.
 
+- **`Get-Process`의 `MainWindowTitle`은 Electron에서 보이는 창이 아니라 Chromium의 숨은 창을 가리킬 수 있습니다.** 메시지 상자가 떠 있는데도 제목이 빈 문자열이라 `verify/cut-rust-launch.mjs`가 한 번은 통과하고 한 번은 실패했습니다. 창 제목은 `EnumWindows`로 그 프로세스의 보이는 창을 모두 읽습니다(창에 아무것도 보내지 않습니다).
+- **JavaScript Cut의 설정 이름을 Rust Cut이 그대로 쓴다고 보면 안 됩니다.** 대부분은 `cut.`만 빼지만 `cut.autosave.minutes`는 `autosaveMinutes`, `cut.proxy.offer`는 `proxyOffer`처럼 바뀐 것이 있고, `cut.layoutSaved`는 같은 이름이라도 값의 모양(flex 비율과 분할선 포인트)이 달라 옮기면 배치가 틀어집니다. 옮기는 규칙은 `cut-rs/crates/cut-app/src/studio.rs`의 `TABLE` 한 곳이고, `tests/installed.rs`가 JavaScript 소스의 `'cut.*'` 이름이 모두 표에 있는지 봅니다. JavaScript에 설정을 더하면 표와 [cut-app.md](cut-app.md)의 표에 줄을 더합니다.
+- **Rust 테스트의 `r#"..."#` 안에 `"#`가 있으면 거기서 문자열이 끝납니다.** 창 클래스 `"#32770"`을 찾는 PowerShell 조각이 컴파일되지 않았습니다. `r##"..."##`를 씁니다.
+- **JavaScript Cut의 앱 테스트는 `PYIDE_CUT_JS=1`이 있어야 뜹니다.** 없으면 `--mode=cut`이 Rust Cut을 띄우고 Electron이 끝나 CDP 페이지가 나오지 않습니다. `verify/lib.mjs`의 `launch({ mode: 'cut' })`가 넣어 주므로 직접 Electron을 띄우는 테스트만 신경 씁니다. 설치본은 이 변수를 지우고 JavaScript Cut도 들어 있지 않습니다.
 - **AI 도구 목록 전체에 75,000자 상한이 있습니다(`verify/cut-control-core.mjs`).** 도구 설명은 700자까지이고, 목록 전체가 요청마다 모델에 가므로 크기를 지킵니다. 그래픽 레이어처럼 필드가 많은 인자는 필드마다 스키마를 쓰지 않고 안내 문장 하나로 설명하며, 자세한 검사와 거절 문장은 코드(`graphic.validate`)가 맡습니다. 같은 스키마를 여러 도구에 복사하지 않습니다.
 - **1024x720에서는 작업 영역 탭이 » 메뉴로 숨고 타임라인 레인은 약 480 px입니다.** 100 px/초에서 5초 뒤의 시간은 화면 밖입니다. 작업 영역은 `cutWorkspace`로 바꾸고, 시간 좌표는 보이는 레인 안에 들도록 스크롤하거나 줌을 맞춥니다. 깃발 사이 거리를 시험하는 곳은 줌 대신 스크롤합니다. 125% 캔버스의 2 px 선은 한 점이 아니라 주변 몇 점에서 읽습니다.
 

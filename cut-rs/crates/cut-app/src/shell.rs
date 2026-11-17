@@ -77,6 +77,7 @@ pub enum LowerTab {
     Effects,
     Markers,
     History,
+    Transcript,
 }
 
 /// The editor window's state.
@@ -132,6 +133,7 @@ impl Shell {
             .ok()
             .and_then(|l| Lang::from_code(&l))
             .or_else(|| doc.setting("language").and_then(Lang::from_code))
+            .or_else(crate::studio::language)
             .unwrap_or(Lang::Ko);
         i18n::set_lang(lang);
         let theme = match doc.setting("theme") {
@@ -235,6 +237,11 @@ impl Shell {
             Some(serde_json::Value::Array(a)) => Some(a.iter().filter_map(|x| x.as_str()).map(PathBuf::from).collect()),
             _ => None,
         })
+    }
+
+    /// Whether a file dialog of [`Shell::ask`] is open (the control API waits for its answer).
+    pub fn asking(&self) -> bool {
+        self.asking.is_some()
     }
 
     /// Opens a file dialog (`cut:pickMedia`, `cut:pickProject`, `cut:saveAs`); `CUT_DIALOG` names a JSON file that
@@ -405,10 +412,13 @@ impl Shell {
             self.app.report(trf("The folder could not be read: {error}", &[("error", &e.to_string())]));
             return Vec::new();
         }
-        let list = import::list_folder(root);
+        let (list, truncated) = import::list_folder(root);
         if list.is_empty() {
             self.app.toast(tr("There are no media files in that folder."));
             return Vec::new();
+        }
+        if truncated {
+            self.app.toast(tr("The folder has too many files; only the first ones were imported."));
         }
         let name = root.file_name().map_or_else(|| "Folder".to_owned(), |n| n.to_string_lossy().into_owned());
         self.app.history.begin(&tr("Import"));
@@ -443,7 +453,8 @@ impl Shell {
         out
     }
 
-    fn poll_import(&mut self) {
+    /// Takes in the probes that finished (each frame; the control API's import waits on it too).
+    pub fn poll_import(&mut self) {
         let got = self.importer.poll();
         if got.is_empty() {
             return;
@@ -618,6 +629,8 @@ impl Shell {
                 self.doc.end();
             } else {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                // an update asks to close this way (main/cut-close.js): what is unsaved is on disk before the question
+                self.doc.autosave_now(&self.app);
                 if self.dialog.is_none() {
                     self.dialog = Some(Dialog::SaveChanges { then: Then::Close, closing: true });
                 }

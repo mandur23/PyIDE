@@ -127,7 +127,11 @@ pub fn program(s: &mut Shell, ui: &mut egui::Ui) {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.add_space(8.0);
-        ui.label(RichText::new(timecode(s.app.t, fps)).monospace().color(pal.accent).size(14.0));
+        let id = ui.scope_id().with("cut-program-tc");
+        let look = (egui::FontId::monospace(14.0), pal.accent);
+        if let Some(t) = super::timecode::inline(ui, id, (s.app.t, fps), look, &tr("Playhead position")) {
+            s.app.set_time(t.max(0));
+        }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.add_space(8.0);
             ui.label(RichText::new(timecode(duration, fps)).monospace().color(pal.gray[9]));

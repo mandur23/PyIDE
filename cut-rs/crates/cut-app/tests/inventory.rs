@@ -17,70 +17,18 @@ use std::path::{Path, PathBuf};
 
 /// The gaps with the reason each is left: (kind, text, reason).
 const KNOWN: &[(&str, &str, &str)] = &[
-    // ---- AI and speech recognition: out of scope (NEXT.md) ----
-    ("text", "ui-ai.js", AI),
-    ("text", "ui-assistant.js", AI),
-    ("text", "ui-control.js", "the control API an AI drives the editor through: AI"),
-    ("text", "ui-speech.js", SPEECH),
-    ("text", "ui-speakers.js", SPEECH),
-    ("text", "ui-voice.js", "voice isolation (HTDemucs model): AI"),
-    ("absent", "AI Assistant", AI),
-    ("absent", "Add as Chapter Markers", AI),
-    ("absent", "Ask Claude", AI),
-    ("absent", "Claude", AI),
-    ("absent", "Continue", AI),
-    ("absent", "Create Shorts Sequence", AI),
-    ("absent", "Disconnect", AI),
-    ("absent", "Edit Command…", AI),
-    ("absent", "Every caption of the track", AI),
-    ("absent", "Fill the frame (crops the sides)", AI),
-    ("absent", "Find Highlights", AI),
-    ("absent", "Fit inside the frame (bars above and below)", AI),
-    ("absent", "Highlights to Shorts…", AI),
-    ("absent", "New Token", AI),
-    ("absent", "Polish", AI),
-    ("absent", "Polish Captions with Claude…", AI),
-    ("absent", "Select None", AI),
-    ("absent", "Send", AI),
-    ("absent", "Stop", AI),
-    ("absent", "The captions from In to Out", AI),
-    ("absent", "The selected caption", AI),
-    ("absent", "Translate", AI),
-    ("absent", "Translate Captions with Claude…", AI),
-    ("absent", "YouTube Title, Description and Chapters…", AI),
-    ("text", "Polish or translate the captions with Claude", AI),
-    ("text", "AI Assistant", AI),
-    ("text", "Speakers", SPEECH),
-    ("text", "unknown error", "the JavaScript's text for an error without a message; native errors always have one"),
-    (
-        "text",
-        "Starting…",
-        "the export's and the AI runtime's first progress line; the native Export shows its phase instead",
-    ),
-    ("absent", "Change Speaker", SPEECH),
-    ("absent", "New Speaker", SPEECH),
-    ("absent", "Rename Speaker…", SPEECH),
-    ("absent", "Select Words of {name}", SPEECH),
-    ("absent", "Create Captions", SPEECH),
-    ("absent", "Detect automatically", SPEECH),
-    ("absent", "Download", SPEECH),
-    ("absent", "Fillers…", SPEECH),
-    ("absent", "Korean", SPEECH),
-    ("absent", "Next Uncertain Word", SPEECH),
-    ("absent", "Previous Uncertain Word", SPEECH),
-    ("absent", "Transcribe", SPEECH),
-    ("absent", "Use {name}", SPEECH),
-    ("absent", "Word List…", SPEECH),
-    ("disabled", "Auto Captions…", SPEECH),
-    ("disabled", "Label Speakers", SPEECH),
-    ("disabled", "Remove Filler Words…", SPEECH),
-    ("disabled", "Isolate Voice", "voice isolation (HTDemucs model): AI"),
-    ("text", "Create captions from the speech (on this PC)", SPEECH),
+    // ---- speech recognition, voice and the control API (NEXT.md) ----
+    ("text", "Speech recognition is not available.", NO_STATUS),
+    ("text", "Speaker labels are not available.", NO_STATUS),
+    ("text", "Voice isolation is not available.", NO_STATUS),
+    ("text", "Apply to allow it; then this shows how to connect.", APPLY),
+    ("text", "Apply to stop allowing it; external AIs are then refused.", APPLY),
     // ---- screens not built ----
     (
         "text",
         "Window: {panel}",
-        "the Window menu's group title of the JavaScript's panel list; the native menu lists them flat",
+        "the Electron IDE's command palette entry of each panel (`ide.registerAction`); the native Window menu and \
+         Find Action list the panels",
     ),
     (
         "text",
@@ -91,14 +39,8 @@ const KNOWN: &[(&str, &str, &str)] = &[
     // ---- words only: labels for screen readers, tooltips, the IDE around the JavaScript editor, unreachable ----
     ("text", "Clip indicator", LABEL),
     ("text", "Curve Channel", LABEL),
-    ("text", "Favorite", LABEL),
     ("text", "Menu Bar", LABEL),
     ("text", "Pan", LABEL),
-    ("text", "Playhead Position", LABEL),
-    ("text", "Playhead position", LABEL),
-    ("text", "Sync Lock", LABEL),
-    ("text", "Drag to change the track height", LABEL),
-    ("text", "Burns in the caption track shown in the Captions panel: {name}", LABEL),
     ("text", "Creating proxy for {name}", IDE),
     (
         "text",
@@ -120,7 +62,6 @@ const KNOWN: &[(&str, &str, &str)] = &[
         "This clip does not match the sequence settings. Change the sequence to match the clip?",
         "the timeline's own question, unreachable: the Project panel's matchSequence (built) runs instead",
     ),
-    ("text", "Measuring loudness…", "Match Loudness without its dialog: the control API's path (AI)"),
     (
         "text",
         "The analysis failed: {error}",
@@ -130,16 +71,12 @@ const KNOWN: &[(&str, &str, &str)] = &[
     ("text", "The export engine is not available.", LOAD),
     ("text", "This panel could not start.", LOAD),
     ("text", "Choose a preset.", "the native Export form always has a preset chosen"),
-    (
-        "text",
-        "The folder has too many files; only the first ones were imported.",
-        "the native folder import has no file limit",
-    ),
 ];
 
-const AI: &str = "AI (Claude): out of scope";
-const SPEECH: &str = "speech recognition and speakers (Whisper, local models): out of scope";
-const LABEL: &str = "a screen-reader label or tooltip only";
+const NO_STATUS: &str = "the JavaScript's message when main does not answer a model's status call; the native backends always \
+     answer";
+const APPLY: &str = "the JavaScript settings page's pending check box until Apply; the native Preferences apply the external-AI setting at once (`control::panel`)";
+const LABEL: &str = "a screen-reader label only (`aria-label`, never shown)";
 const IDE: &str = "the Electron IDE around the JavaScript editor (its task list, settings page, keymap)";
 const FALLBACK: &str = "ui-keys.js's fallback handler, replaced in the JavaScript by the timeline's own (whose words the \
      native app uses)";

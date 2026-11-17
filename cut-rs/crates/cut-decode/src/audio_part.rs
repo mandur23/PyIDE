@@ -2,7 +2,7 @@
 //! stamped with its sample's time, the way the JavaScript's `decoder.audioReader` decodes a window of a long file (it
 //! creates an AudioDecoder per read). AAC goes through the AAC decoder; MP3, FLAC and Opus through Media Foundation's
 //! own decoders ([`Format`]), each given the codec-private data the container carries; ALAC through this crate's
-//! own decoder ([`crate::alac`]).
+//! own decoder ([`crate::alac`]), Vorbis through lewton ([`crate::vorbis`]).
 //!
 //! The container's times already place the sound: an Opus track's pre-skip is in its pts (Matroska's CodecDelay, an
 //! MP4 edit list), so the decoder is told none and the priming lands before 0, where `assemble` leaves it out, as
@@ -38,10 +38,6 @@ pub struct Blocks {
     pub pieces: Vec<(f64, Vec<Vec<f32>>)>,
 }
 
-/// The sentence the import showed for an Opus track of more than two channels before this crate decoded them
-/// (`cut-app/src/import.rs` still refuses such tracks with it).
-pub const OPUS_SURROUND: &str = "Opus audio with more than two channels is not supported yet.";
-
 /// How a codec string reaches a decoder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Route {
@@ -74,13 +70,13 @@ pub fn audio_decoder_names() -> Vec<(&'static str, Vec<String>)> {
 }
 
 /// Whether [`decode_audio_samples`] decodes a track of this codec string on this PC (AAC, MP3, FLAC, Opus when a
-/// decoder this crate may use is listed; ALAC always); asked once a codec.
+/// decoder this crate may use is listed; ALAC and Vorbis always); asked once a codec.
 pub fn decodes_audio(codec: &str) -> bool {
     static ANSWERS: OnceLock<Mutex<HashMap<Route, bool>>> = OnceLock::new();
-    let Some(r) = route(codec).filter(|r| *r != Route::Other(Format::Vorbis)) else {
+    let Some(r) = route(codec) else {
         return false;
     };
-    if r == Route::Other(Format::Alac) {
+    if matches!(r, Route::Other(Format::Alac | Format::Vorbis)) {
         return true;
     }
     let mut answers = ANSWERS.get_or_init(Default::default).lock().unwrap_or_else(|p| p.into_inner());
@@ -99,14 +95,16 @@ pub fn audio_refusal(codec: &str) -> &'static str {
     }
 }
 
-/// Samples `[i0, i1)` of an AAC, MP3, FLAC, Opus or ALAC track decoded by a fresh decoder, the blocks in the order
-/// they come out.
+/// Samples `[i0, i1)` of an AAC, MP3, FLAC, Opus, ALAC or Vorbis track decoded by a fresh decoder, the blocks in the
+/// order they come out.
 pub fn decode_audio_samples<R: Reader + ?Sized>(reader: &R, track: &Track, i0: usize, i1: usize) -> Result<Blocks> {
     let Media::Audio(a) = &track.media else {
         return Err(DecodeError::Unsupported("not an audio track".into()));
     };
-    if route(&track.codec) == Some(Route::Other(Format::Alac)) {
-        return decode_alac(reader, track, i0, i1);
+    match route(&track.codec) {
+        Some(Route::Other(Format::Alac)) => return decode_alac(reader, track, i0, i1),
+        Some(Route::Other(Format::Vorbis)) => return decode_vorbis(reader, track, i0, i1),
+        _ => {}
     }
     if route(&track.codec) == Some(Route::Other(Format::Opus))
         && let Some(d) = track.description.as_deref()
@@ -187,7 +185,8 @@ fn feed(mft: &mut Transform, out: &mut Output, pieces: &mut Pieces, bytes: &[u8]
 type Pieces = Vec<(f64, Vec<Vec<f32>>)>;
 
 /// Samples `[i0, i1)` of an Opus track of more than two channels: each stream through a decoder of its own
-/// ([`crate::opus`]), the channels put in the track's order.
+/// ([`crate::opus`]), the channels put in the track's order, which for mapping family 1 (Vorbis order) is then
+/// WebCodecs' ([`crate::vorbis::wave_order`]), so the first two channels are left and right.
 fn decode_opus_streams<R: Reader + ?Sized>(
     reader: &R,
     track: &Track,
@@ -195,7 +194,12 @@ fn decode_opus_streams<R: Reader + ?Sized>(
     i0: usize,
     i1: usize,
 ) -> Result<Blocks> {
-    let layout = crate::opus::Layout::of(head.channels.into(), &head.mapping)?;
+    let mut layout = crate::opus::Layout::of(head.channels.into(), &head.mapping)?;
+    if head.family == 1
+        && let Some(order) = crate::vorbis::wave_order(layout.sources.len())
+    {
+        layout.sources = order.iter().map(|&k| layout.sources[k]).collect();
+    }
     let mut streams = (0..layout.streams)
         .map(|k| {
             let channels = layout.channels_of(k);
@@ -247,27 +251,53 @@ fn decode_opus_streams<R: Reader + ?Sized>(
     Ok(Blocks { rate: streams[0].1.rate, channels: head.channels.into(), pieces })
 }
 
-/// Samples `[i0, i1)` of an ALAC track: each frame a block at its sample's time.
-fn decode_alac<R: Reader + ?Sized>(reader: &R, track: &Track, i0: usize, i1: usize) -> Result<Blocks> {
-    let cookie = track.description.as_deref().ok_or_else(|| DecodeError::Damaged("ALAC without its config".into()))?;
-    let mut dec = crate::alac::AlacDecoder::new(crate::alac::AlacConfig::parse(cookie)?);
+/// Samples `[i0, i1)` decoded packet by packet by one of this crate's own decoders, which gives each packet's planes
+/// and how many seconds after its sample's time they start: a block there (a packet that gives none adds no block).
+fn per_packet<R: Reader + ?Sized>(
+    reader: &R,
+    track: &Track,
+    i0: usize,
+    i1: usize,
+    mut decode: impl FnMut(&[u8]) -> Result<(f64, Vec<Vec<f32>>)>,
+) -> Result<Pieces> {
     let s = &track.samples;
     let (i0, i1) = (i0.min(s.count()), i1.min(s.count()));
-    let mut pieces = Vec::with_capacity(i1 - i0);
+    let mut pieces = Vec::with_capacity(i1.saturating_sub(i0));
     let mut failed = None;
     read_samples(reader, track, i0, i1, |i, bytes| {
         if failed.is_none() {
-            match dec.decode(bytes) {
-                Ok(planes) => pieces.push((s.pts[i] as f64 / TICKS as f64, planes)),
+            match decode(bytes) {
+                Ok((after, planes)) if planes.first().is_some_and(|p| !p.is_empty()) => {
+                    pieces.push((s.pts[i] as f64 / TICKS as f64 + after, planes));
+                }
+                Ok(_) => {}
                 Err(e) => failed = Some(e),
             }
         }
     })?;
-    if let Some(e) = failed {
-        return Err(e);
-    }
+    failed.map_or(Ok(pieces), Err)
+}
+
+/// Samples `[i0, i1)` of an ALAC track: each frame a block at its sample's time.
+fn decode_alac<R: Reader + ?Sized>(reader: &R, track: &Track, i0: usize, i1: usize) -> Result<Blocks> {
+    let cookie = track.description.as_deref().ok_or_else(|| DecodeError::Damaged("ALAC without its config".into()))?;
+    let mut dec = crate::alac::AlacDecoder::new(crate::alac::AlacConfig::parse(cookie)?);
+    let pieces = per_packet(reader, track, i0, i1, |b| Ok((0.0, dec.decode(b)?)))?;
     let c = dec.config();
     Ok(Blocks { rate: c.sample_rate, channels: c.channels.into(), pieces })
+}
+
+/// Samples `[i0, i1)` of a Vorbis track: each packet's finished samples a block at its sample's time; a packet the
+/// decoder refuses leaves a gap of silence.
+fn decode_vorbis<R: Reader + ?Sized>(reader: &R, track: &Track, i0: usize, i1: usize) -> Result<Blocks> {
+    let headers =
+        track.description.as_deref().ok_or_else(|| DecodeError::Damaged("Vorbis without its headers".into()))?;
+    let mut dec = crate::vorbis::VorbisDecoder::new(headers)?;
+    let rate = f64::from(dec.rate());
+    let pieces = per_packet(reader, track, i0, i1, |b| {
+        Ok(dec.decode(b).map_or_else(Default::default, |(lead, planes)| (lead as f64 / rate, planes)))
+    })?;
+    Ok(Blocks { rate: dec.rate(), channels: dec.channels(), pieces })
 }
 
 /// A decoder made for a track.
@@ -432,7 +462,7 @@ mod tests {
         assert_eq!(route("mp4a.40.2"), Some(Route::Aac));
         assert_eq!(route("opus"), Some(Route::Other(Format::Opus)));
         assert_eq!(route("vp8"), None);
-        assert!(!decodes_audio("vorbis"));
-        assert_eq!(audio_refusal("vorbis"), "Vorbis audio is not supported yet.");
+        assert_eq!(route("vorbis"), Some(Route::Other(Format::Vorbis)));
+        assert!(decodes_audio("vorbis"), "lewton decodes Vorbis on any PC");
     }
 }

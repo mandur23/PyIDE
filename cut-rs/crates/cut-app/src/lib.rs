@@ -9,11 +9,14 @@
 //! ([`thumbs`]).
 
 pub mod actions;
+pub mod ai;
 pub mod audio;
 pub mod auto;
 pub mod captions;
 pub mod cmd;
+pub mod control;
 pub mod controls;
+pub mod crash;
 pub mod doc;
 pub mod edit;
 pub mod export;
@@ -28,12 +31,17 @@ pub mod panels;
 pub mod picture;
 pub mod prefs;
 pub mod shell;
+pub mod speakers;
+pub mod speech;
 pub mod state;
+pub mod studio;
 pub mod text_ui;
 pub mod theme;
 pub mod thumbs;
 pub mod timeline;
 pub mod transport;
+pub mod update;
 pub mod view;
+pub mod voice;
 pub mod windows;
 pub mod workspaces;

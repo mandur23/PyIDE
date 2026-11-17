@@ -464,6 +464,39 @@ fn a_proxy_is_made_without_a_step_and_plays_when_the_original_is_gone() {
 }
 
 #[test]
+fn a_proxy_lists_its_part_file_in_the_export_journal_while_it_is_made() {
+    let (mut h, dir) = open("proxy-journal", 0);
+    let file = clip_copy(&dir.join("media"), "j.mp4");
+    h.state_mut().import_paths(vec![file], None);
+    assert!(until(&mut h, 60, |s| s.app.project().media.len() == 1), "imported");
+    let id = h.state().app.project().media[0].id;
+    prefs::set(h.state_mut(), "proxyHeight", json!(360));
+    let journals = h.state().doc.home.home.join(".cut-rs").join("cut-exports");
+    let listed = |part: &mut Vec<String>| {
+        for e in std::fs::read_dir(&journals).into_iter().flatten().flatten() {
+            let text = std::fs::read_to_string(e.path()).unwrap_or_default();
+            let v: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+            part.extend(v["parts"].as_array().into_iter().flatten().filter_map(|p| p.as_str().map(str::to_owned)));
+        }
+    };
+    assert_eq!(prefs::proxy::create(h.state_mut(), &[id]), 1, "queued");
+    let seen = std::cell::RefCell::new(Vec::new());
+    let made = until(&mut h, 120, |s| {
+        listed(&mut seen.borrow_mut());
+        s.app.project().media[0].proxy.is_some()
+    });
+    assert!(made, "the proxy is made");
+    let p = h.state().app.project().media[0].proxy.clone().unwrap().path;
+    let part = format!("{p}.part");
+    assert!(seen.borrow().contains(&part), "the journal listed {part} while it was written: {:?}", seen.borrow());
+    assert!(!Path::new(&part).exists() && Path::new(&p).is_file(), "the part became the proxy");
+    let mut after = Vec::new();
+    listed(&mut after);
+    assert!(after.is_empty(), "nothing left in the journal: {after:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn offline_media_is_found_in_a_folder_and_a_wrong_file_is_refused() {
     let (mut h, dir) = open("relink", 0);
     let file = clip_copy(&dir.join("media"), "a.mp4");

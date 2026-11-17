@@ -37,7 +37,7 @@ pub const MODES: [&str; 2] = ["color", "box"];
 
 /// JavaScript's `\s`: Unicode's space separators and line ends plus U+FEFF, without U+0085 (Rust's `is_whitespace`
 /// differs on both).
-pub(crate) fn is_space(c: char) -> bool {
+pub fn is_space(c: char) -> bool {
     matches!(
         c,
         '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'
@@ -77,7 +77,8 @@ pub fn spans(line: &str) -> Vec<Range<usize>> {
     out
 }
 
-fn is_punct_or_symbol(c: char) -> bool {
+/// `\p{P}` or `\p{S}` of the JavaScript's regular expressions (Unicode 16).
+pub fn is_punct_or_symbol(c: char) -> bool {
     PUNCT_OR_SYMBOL.partition_point(|&x| x <= c as u32) % 2 == 1
 }
 

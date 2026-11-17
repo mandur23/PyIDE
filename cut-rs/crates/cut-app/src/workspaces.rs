@@ -323,6 +323,7 @@ pub fn has_panel(id: &str) -> bool {
             | "essential"
             | "captions"
             | "text"
+            | "transcript"
     )
 }
 
@@ -337,6 +338,7 @@ pub(crate) fn focus_of(id: &str) -> Option<Panel> {
         "program" => Some(Panel::Program),
         "timeline" => Some(Panel::Timeline),
         "controls" => Some(Panel::Controls),
+        "transcript" => Some(Panel::Transcript),
         _ => None,
     }
 }
@@ -373,6 +375,7 @@ fn draw_panel(s: &mut Shell, ui: &mut egui::Ui, id: &str) {
         "queue" => crate::export::queue_panel(s, ui),
         "controls" => crate::controls::panel(s, ui),
         "text" => crate::text_ui::panel::show(s, ui),
+        "transcript" => crate::speech::panel::show(s, ui),
         _ => {
             ui.centered_and_justified(|ui| {
                 ui.label(RichText::new(tr("This panel is not available.")).color(pal.gray[8]));
@@ -392,6 +395,7 @@ fn lower_id(t: LowerTab) -> &'static str {
         LowerTab::Effects => "effects",
         LowerTab::Markers => "markers",
         LowerTab::History => "history",
+        LowerTab::Transcript => "transcript",
     }
 }
 
@@ -401,6 +405,7 @@ fn lower_of(id: &str) -> Option<LowerTab> {
         "effects" => Some(LowerTab::Effects),
         "markers" => Some(LowerTab::Markers),
         "history" => Some(LowerTab::History),
+        "transcript" => Some(LowerTab::Transcript),
         _ => None,
     }
 }
@@ -575,6 +580,9 @@ pub fn run(s: &mut Shell, id: &str, ctx: &egui::Context) -> bool {
         }
         s.features.workspace.open_panel(p);
         let ws = s.features.workspace.current;
+        if let Some(t) = lower_of(p).filter(|_| ws.slot_of(p).is_some_and(|(ri, si)| is_lower(ws, ri, si))) {
+            s.lower_tab = t;
+        }
         s.doc.set_setting("workspace", ws.id());
         return true;
     }

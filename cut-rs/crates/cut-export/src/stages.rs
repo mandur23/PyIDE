@@ -98,6 +98,8 @@ pub(crate) struct RenderJob<'a> {
     pub gpu: Option<(wgpu::Device, wgpu::Queue)>,
     pub frame_limit: Duration,
     pub gate: Option<std::sync::Arc<AtomicBool>>,
+    /// "Speaker {n}", translated: the name burned-in captions give an unnamed speaker.
+    pub speaker_label: &'a str,
 }
 
 fn codecs_of(project: &Project, seq: &Sequence) -> String {
@@ -133,6 +135,7 @@ fn render_frames(
         Some((d, q)) => Engine::new(d.clone(), q.clone()),
         None => Engine::headless().map_err(|e| gpu_fail(e.to_string()))?,
     };
+    engine.set_speaker_label(job.speaker_label);
     let (w, h) = job.size;
     let mut nv = Nv12::new(engine.device(), engine.queue(), w, h, device_lost.clone());
     let mut spare = nv.frames();

@@ -55,6 +55,11 @@ fn hardware_frames_are_the_software_frames_byte_for_byte() {
         }
         write_png(&format!("clip-hw{adapter}-30.png"), &hard[30]);
     }
+    // A CI runner has no GPU: DXGI lists only its software adapter there.
+    if checked == 0 && cut_decode::adapters().iter().all(|a| a.contains("Basic Render")) {
+        eprintln!("skipped: no GPU here ({:?})", cut_decode::adapters());
+        return;
+    }
     assert!(checked > 0, "no GPU decodes H.264 here");
 }
 

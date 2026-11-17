@@ -59,12 +59,9 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
 }
 
 /// The top bar's Automation menu (`ui-auto.js`'s `ITEMS`): Remove Silence, the loudness matches, Auto Ducking and
-/// Auto Color and scene and beat detection run ([`crate::auto`]); speech recognition and the voice model
-/// are listed greyed, as the native app does not have them.
+/// Auto Color and scene and beat detection run ([`crate::auto`]); speech recognition ([`crate::speech`]), speaker
+/// labels ([`crate::speakers`]) and voice isolation ([`crate::voice`]).
 pub fn automation_menu(s: &mut Shell, ui: &mut egui::Ui) {
-    let later = |ui: &mut egui::Ui, label: &str| {
-        ui.add_enabled(false, egui::Button::new(tr(label))).on_disabled_hover_text(tr("Not available yet"));
-    };
     let run = |s: &mut Shell, ui: &mut egui::Ui, id: &str, label: &str| {
         if ui.add_enabled(s.action_enabled(id), egui::Button::new(tr(label))).clicked() {
             let ctx = ui.ctx().clone();
@@ -77,9 +74,13 @@ pub fn automation_menu(s: &mut Shell, ui: &mut egui::Ui) {
         run(s, ui, "auto.scenes", "Detect Scene Changes…");
         run(s, ui, "auto.beats", "Detect Beats…");
         ui.separator();
-        for label in ["Auto Captions…", "Remove Filler Words…", "Label Speakers"] {
-            later(ui, label);
-        }
+        run(s, ui, "auto.captions", "Auto Captions…");
+        run(s, ui, "auto.fillers", "Remove Filler Words…");
+        run(s, ui, "auto.speakers", "Label Speakers");
+        run(s, ui, "auto.nextUncertain", "Next Uncertain Word");
+        run(s, ui, "auto.prevUncertain", "Previous Uncertain Word");
+        ui.separator();
+        crate::ai::menu_items(s, ui);
         ui.separator();
         for (id, label) in [
             ("auto.loudness", "Match Loudness…"),
@@ -88,7 +89,7 @@ pub fn automation_menu(s: &mut Shell, ui: &mut egui::Ui) {
         ] {
             run(s, ui, id, label);
         }
-        later(ui, "Isolate Voice");
+        run(s, ui, "auto.isolateVoice", "Isolate Voice");
         ui.separator();
         run(s, ui, "auto.color", "Auto Color");
     });

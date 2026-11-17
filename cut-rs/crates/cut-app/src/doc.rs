@@ -381,6 +381,20 @@ impl Doc {
         wrote
     }
 
+    /// Writes the latest autosave now, without the 2 s wait, and waits for it (a close asked from outside, as an
+    /// update does, before the question about unsaved changes) -> whether one was written.
+    pub fn autosave_now(&mut self, app: &App) -> bool {
+        let rev = app.history.revision();
+        if !self.dirty(app) || self.autosaved_revision == Some(rev) {
+            return false;
+        }
+        let Ok(job) = self.projects.autosave_job(&self.key, true, files::KEEP) else { return false };
+        self.writer.write(job, app.history.project().clone());
+        self.autosaved_revision = Some(rev);
+        self.flush();
+        true
+    }
+
     /// How long until [`Doc::tick`] has something to write (ms), for the window to wake then; `None` while nothing
     /// is due (no unsaved change, or a drag still grouping its edits).
     pub fn next_due(&self, app: &App, now: i64) -> Option<i64> {

@@ -1,6 +1,6 @@
 //! Essential Sound (`ui-audiofx.js`'s panel): the selected clips' audio type (the clip role Auto Ducking reads) and
 //! one-click actions that add effects with settings for speech (`audiofx.ESSENTIAL`), or open the loudness matches.
-//! Isolate Voice (speech separation) stays greyed: it needs a voice model this app does not have.
+//! Isolate Voice runs [`crate::voice::isolate`].
 
 use cut_model::commands::build as C;
 use cut_model::{Clip, Id, Role, TrackKind};
@@ -12,7 +12,7 @@ use crate::shell::Shell;
 use crate::state::App;
 
 /// An Essential Sound action: the effects it adds, with the settings that differ from the defaults.
-fn preset(name: &str) -> Vec<(&'static str, Json)> {
+pub fn preset(name: &str) -> Vec<(&'static str, Json)> {
     match name {
         "clarity" => vec![
             (
@@ -177,8 +177,9 @@ pub fn panel(s: &mut Shell, ui: &mut egui::Ui) {
                         add_effects(&mut s.app, name, undo);
                     }
                 }
-                ui.add_enabled(false, button(s, "Isolate Voice", false, ui.available_width()))
-                    .on_disabled_hover_text(tr("Not available yet"));
+                if action(ui, s, "Isolate Voice", some) {
+                    crate::voice::isolate(s);
+                }
                 title(ui, s, "Music");
                 if action(ui, s, "Auto Ducking…", true) {
                     let ctx = ui.ctx().clone();

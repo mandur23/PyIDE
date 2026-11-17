@@ -1,6 +1,7 @@
 //! The Preferences window (`ui-settings.js`'s Video Editor page and the settings window's Appearance and Language
 //! pages): a list of pages on the left, the page's settings on the right, each change saved at once as the settings
-//! window's fields are. The AI and speech recognition sections are not part of this app.
+//! window's fields are. Speech recognition's page is [`crate::speech::settings`]; the AI section is not part of this
+//! app.
 
 use std::sync::mpsc::{Receiver, channel};
 
@@ -21,18 +22,24 @@ pub enum Page {
     Timeline,
     Playback,
     Proxies,
+    Speech,
+    Claude,
+    AiControl,
     Appearance,
     Language,
     Keyboard,
 }
 
 impl Page {
-    pub const ALL: [Page; 8] = [
+    pub const ALL: [Page; 11] = [
         Page::Autosave,
         Page::Cache,
         Page::Timeline,
         Page::Playback,
         Page::Proxies,
+        Page::Speech,
+        Page::Claude,
+        Page::AiControl,
         Page::Appearance,
         Page::Language,
         Page::Keyboard,
@@ -52,6 +59,9 @@ impl Page {
             Page::Timeline => "Timeline",
             Page::Playback => "Playback",
             Page::Proxies => "Proxies",
+            Page::Speech => "Speech Recognition",
+            Page::Claude => "Claude (Text AI)",
+            Page::AiControl => "AI Control",
             Page::Appearance => "Appearance",
             Page::Language => "Language",
             Page::Keyboard => "Keyboard Shortcuts",
@@ -123,104 +133,115 @@ fn check(s: &mut Shell, ui: &mut egui::Ui, key: &str, label: &str) {
 fn body(s: &mut Shell, ui: &mut egui::Ui, ctx: &egui::Context, page: Page) {
     ui.heading(tr(page.title()));
     ui.add_space(8.0);
-    egui::Grid::new(("cut-prefs", page.title())).num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| match page {
-        Page::Autosave => {
-            row(ui, "Keep a copy every:", |ui| {
-                field(s, ui, "autosaveMinutes", 1.0, 120.0, 0.2);
-                ui.label(tr("minutes (1 – 120)"));
-            });
-            row(ui, "Copies to keep:", |ui| {
-                field(s, ui, "autosaveKeep", 1.0, 100.0, 0.2);
-                ui.label("1 – 100");
-            });
-        }
-        Page::Cache => {
-            row(ui, "Cache limit:", |ui| {
-                field(s, ui, "cacheLimitGB", 1.0, 2000.0, 0.5);
-                ui.label(tr("GB; the least recently used files go first"));
-            });
-            row(ui, "In use:", |ui| {
-                let size = match s.features.prefs.page.cache {
-                    Some((bytes, n)) => trf(
-                        "{size} in {n} files",
-                        &[("size", &crate::export::format_bytes(bytes)), ("n", &n.to_string())],
-                    ),
-                    None => tr("Measuring…").into_owned(),
-                };
-                ui.label(size);
-                if ui.button(tr("Clear Cache")).clicked() {
-                    s.features.prefs.page.confirm_clear = true;
-                }
-            });
-        }
-        Page::Timeline => {
-            let mut changed = false;
-            row(ui, "Default transition length:", |ui| {
-                changed |= field(s, ui, "transitionSeconds", 0.1, 60.0, 0.05);
-                ui.label(tr("seconds"));
-            });
-            row(ui, "Default still image length:", |ui| {
-                changed |= field(s, ui, "stillSeconds", 0.1, 3600.0, 0.1);
-                ui.label(tr("seconds"));
-            });
-            if changed {
-                super::apply_durations(s);
+    egui::Grid::new(("cut-prefs", page.title())).num_columns(2).spacing([12.0, 10.0]).max_col_width(330.0).show(
+        ui,
+        |ui| match page {
+            Page::Autosave => {
+                row(ui, "Keep a copy every:", |ui| {
+                    field(s, ui, "autosaveMinutes", 1.0, 120.0, 0.2);
+                    ui.label(tr("minutes (1 – 120)"));
+                });
+                row(ui, "Copies to keep:", |ui| {
+                    field(s, ui, "autosaveKeep", 1.0, 100.0, 0.2);
+                    ui.label("1 – 100");
+                });
             }
-        }
-        Page::Playback => {
-            row(ui, "Playback quality:", |ui| choice(s, ui, "quality", &[(1.0, "Full"), (0.5, "1/2"), (0.25, "1/4")]));
-        }
-        Page::Proxies => {
-            ui.label("");
-            check(s, ui, "proxy", "Play proxies in the monitors");
-            ui.end_row();
-            ui.label("");
-            check(s, ui, "proxyOffer", "Offer proxies when importing 4K, HEVC or long-GOP video");
-            ui.end_row();
-            row(ui, "Proxy size:", |ui| {
-                choice(s, ui, "proxyHeight", &[(540.0, "540p"), (720.0, "720p"), (1080.0, "1080p")]);
-                ui.label(tr("H.264, a keyframe every 15 frames"));
-            });
-        }
-        Page::Appearance => {
-            row(ui, "Appearance", |ui| {
-                if ui.selectable_label(!s.palette.light(), tr("Dark")).clicked() {
-                    s.set_theme(ctx, ThemeKind::Dark);
-                }
-                if ui.selectable_label(s.palette.light(), tr("Light")).clicked() {
-                    s.set_theme(ctx, ThemeKind::Light);
-                }
-            });
-        }
-        Page::Language => {
-            row(ui, "Language", |ui| {
-                if ui.selectable_label(lang() == Lang::Ko, "한국어").clicked() {
-                    s.set_lang(Lang::Ko);
-                }
-                if ui.selectable_label(lang() == Lang::En, "English").clicked() {
-                    s.set_lang(Lang::En);
-                }
-            });
-        }
-        Page::Keyboard => {
-            row(ui, "Keyboard Layout Preset", |ui| {
-                for p in [Preset::Premiere, Preset::Classic] {
-                    if ui.selectable_label(s.preset == p, tr(p.title())).clicked() {
-                        s.preset = p;
-                        s.doc.set_setting("keyPreset", p.code());
+            Page::Cache => {
+                row(ui, "Cache limit:", |ui| {
+                    field(s, ui, "cacheLimitGB", 1.0, 2000.0, 0.5);
+                    ui.label(tr("GB; the least recently used files go first"));
+                });
+                row(ui, "In use:", |ui| {
+                    let size = match s.features.prefs.page.cache {
+                        Some((bytes, n)) => trf(
+                            "{size} in {n} files",
+                            &[("size", &crate::export::format_bytes(bytes)), ("n", &n.to_string())],
+                        ),
+                        None => tr("Measuring…").into_owned(),
+                    };
+                    ui.label(size);
+                    if ui.button(tr("Clear Cache")).clicked() {
+                        s.features.prefs.page.confirm_clear = true;
                     }
+                });
+            }
+            Page::Timeline => {
+                let mut changed = false;
+                row(ui, "Default transition length:", |ui| {
+                    changed |= field(s, ui, "transitionSeconds", 0.1, 60.0, 0.05);
+                    ui.label(tr("seconds"));
+                });
+                row(ui, "Default still image length:", |ui| {
+                    changed |= field(s, ui, "stillSeconds", 0.1, 3600.0, 0.1);
+                    ui.label(tr("seconds"));
+                });
+                if changed {
+                    super::apply_durations(s);
                 }
-            });
-            row(ui, "Keyboard Shortcuts", |ui| {
-                if ui.button(tr("Edit Shortcuts…")).clicked() {
-                    s.features.prefs.screen = Some(Screen::Shortcuts(super::keymap::Draft::new(s.preset)));
-                }
-            });
-            row(ui, "Folder", |ui| {
-                ui.label(RichText::new(s.doc.home.home.to_string_lossy()).monospace().size(11.0));
-            });
-        }
-    });
+            }
+            Page::Playback => {
+                row(ui, "Playback quality:", |ui| {
+                    choice(s, ui, "quality", &[(1.0, "Full"), (0.5, "1/2"), (0.25, "1/4")])
+                });
+            }
+            Page::Proxies => {
+                ui.label("");
+                check(s, ui, "proxy", "Play proxies in the monitors");
+                ui.end_row();
+                ui.label("");
+                check(s, ui, "proxyOffer", "Offer proxies when importing 4K, HEVC or long-GOP video");
+                ui.end_row();
+                row(ui, "Proxy size:", |ui| {
+                    choice(s, ui, "proxyHeight", &[(540.0, "540p"), (720.0, "720p"), (1080.0, "1080p")]);
+                    ui.label(tr("H.264, a keyframe every 15 frames"));
+                });
+            }
+            Page::Speech => {
+                crate::speech::settings::rows(s, ui);
+                crate::voice::settings_rows(s, ui);
+            }
+            Page::Claude => crate::ai::notice::settings_section(s, ui),
+            Page::AiControl => crate::control::panel::rows(s, ui),
+            Page::Appearance => {
+                row(ui, "Appearance", |ui| {
+                    if ui.selectable_label(!s.palette.light(), tr("Dark")).clicked() {
+                        s.set_theme(ctx, ThemeKind::Dark);
+                    }
+                    if ui.selectable_label(s.palette.light(), tr("Light")).clicked() {
+                        s.set_theme(ctx, ThemeKind::Light);
+                    }
+                });
+            }
+            Page::Language => {
+                row(ui, "Language", |ui| {
+                    if ui.selectable_label(lang() == Lang::Ko, "한국어").clicked() {
+                        s.set_lang(Lang::Ko);
+                    }
+                    if ui.selectable_label(lang() == Lang::En, "English").clicked() {
+                        s.set_lang(Lang::En);
+                    }
+                });
+            }
+            Page::Keyboard => {
+                row(ui, "Keyboard Layout Preset", |ui| {
+                    for p in [Preset::Premiere, Preset::Classic] {
+                        if ui.selectable_label(s.preset == p, tr(p.title())).clicked() {
+                            s.preset = p;
+                            s.doc.set_setting("keyPreset", p.code());
+                        }
+                    }
+                });
+                row(ui, "Keyboard Shortcuts", |ui| {
+                    if ui.button(tr("Edit Shortcuts…")).clicked() {
+                        s.features.prefs.screen = Some(Screen::Shortcuts(super::keymap::Draft::new(s.preset)));
+                    }
+                });
+                row(ui, "Folder", |ui| {
+                    ui.label(RichText::new(s.doc.home.home.to_string_lossy()).monospace().size(11.0));
+                });
+            }
+        },
+    );
     ui.add_space(6.0);
     match page {
         Page::Autosave => {
@@ -234,6 +255,7 @@ fn body(s: &mut Shell, ui: &mut egui::Ui, ctx: &egui::Context, page: Page) {
         Page::Timeline => note(ui, s, "New projects take these, and the open project changes to them."),
         Page::Playback => note(ui, s, "while playing; a paused frame is always full quality"),
         Page::Proxies => note(ui, s, "Export always reads the original media."),
+        Page::Speech => note(ui, s, crate::speech::settings::NOTE),
         _ => {}
     }
 }

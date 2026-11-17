@@ -1,0 +1,14 @@
+[package]
+name = "cut-sidecar"
+description = "The private AI Python environment and the JSON-lines sidecar protocol of Nano Studio Cut (port of main/ai/runtime.js)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde_json = "1"
+
+[lints]
+workspace = true

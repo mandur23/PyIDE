@@ -402,6 +402,7 @@ fn encode_once(
                 gpu,
                 frame_limit,
                 gate,
+                speaker_label: &job.speaker_label,
             };
             let ej = EncodeJob { config: cfg, choices, plan, key_interval: u64::from(v.key_interval) };
             let (sh1, sh2) = (&sh, &sh);

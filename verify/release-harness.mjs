@@ -22,7 +22,7 @@ process.env.NANO_RELEASE_KEY = KEY_FILE;
 process.env.PYIDE_RELEASE_PUBLIC_KEY = keys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
 const R = await import(pathToFileURL(path.join(ROOT, 'scripts', 'release.mjs')).href);
 const releaseKey = createRequire(import.meta.url)('../main/release-key.js');
-const { io, state, configure, failureAdvice, run, INSTALL_DIR, previousVersion, oldAssets, liveBeta } = R;
+const { io, state, configure, failureAdvice, run, INSTALL_DIR, previousVersion, oldAssets, liveBeta, CUT_BUILT, CUT_PACKED } = R;
 const REPO_ARG = 'mandur23/Portfolio-Nano-';
 
 const V = '0.2.1';
@@ -66,6 +66,7 @@ function world({ version = V, failAt = null, originMaster = 'abc', tagOnOrigin =
   const files = new Map([
     [PKG, pkgText], [LOCK, lockText], [path.join(ROOT, 'CHANGELOG.md'), changelog],
     [KEY_FILE, pemOf(keys)], [INDEX, INDEX_BODY], [`${INDEX}.sig`, sigText(INDEX_BODY)],
+    [CUT_BUILT, 'cut exe'], [CUT_PACKED, 'cut exe'],
     [exe, exeBody], [`${exe}.blockmap`, blockmapOf(exeBody.length)], [path.join(DIST, `NanoStudio-${version}.msi`), 'msi'], [PREV, 'prev exe'],
     [path.join(DIST, version.includes('-') ? 'beta.yml' : 'latest.yml'), ymlText(ymlVersion, path.basename(exe), sha)],
   ]);
@@ -205,6 +206,23 @@ ok(code === 1 && /node_modules is a link/.test(text()) && !has('npm run dist') &
 world({ failAt: 'npm run dist' });
 code = await run([V, '--skip-tests']);
 ok(code === 1 && pkgVersion() === '0.2.0' && /Nothing was committed/.test(text()) && /put back to 0.2.0/.test(text()), 'build fails: version restored, nothing committed');
+
+world({ failAt: 'cargo' });
+code = await run([V, '--skip-tests']);
+ok(code === 1 && /cargo was not found/.test(text()) && /rustup/.test(text()) && !has('npm run dist') && !has(' commit ') && pkgVersion() === '0.2.0', 'no cargo: stops in step 3 with a clear message, nothing packed, version restored');
+
+world({ failAt: 'cargo build' });
+code = await run([V, '--skip-tests']);
+ok(code === 1 && /cargo build --release --locked -p cut-app/.test(text()) && !has('npm run dist') && !has(' commit ') && pkgVersion() === '0.2.0', 'the Cut build fails: stops before npm run dist, version restored');
+
+world();
+W.files.delete(CUT_PACKED);
+code = await run([V, '--skip-tests']);
+ok(code === 1 && /after npm run dist: .*nano-studio-cut.exe is not the Nano Studio Cut just built/.test(text()) && !has(' commit '), 'an installer without the Cut exe: stops before committing');
+
+world();
+code = await run([V, '--dry-run', '--skip-tests']);
+ok(code === 0 && idx('cargo build --release --locked -p cut-app') >= 0 && idx('cargo build') < idx('npm run dist'), 'a dry run builds Cut too, before npm run dist');
 
 world({ failAt: ' tag -a' });
 code = await run([V, '--skip-tests']);

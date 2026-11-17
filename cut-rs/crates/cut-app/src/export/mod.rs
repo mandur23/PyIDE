@@ -7,7 +7,7 @@
 
 mod form;
 mod journal;
-mod queue;
+pub mod queue;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};

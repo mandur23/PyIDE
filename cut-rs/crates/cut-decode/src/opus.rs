@@ -1,8 +1,8 @@
 //! Opus of more than two channels (mapping families 1 and 255) through Microsoft's Opus decoder, which takes one or
 //! two channels: each packet carries one Opus stream per coupled pair or single channel (RFC 7845 section 5.1.1),
 //! all but the last in the self-delimiting framing of RFC 6716 appendix B. Each stream is split out as a plain
-//! packet for a decoder of its own; the mapping table puts the streams' channels in the track's order (Vorbis
-//! order, as WebCodecs gives them), 255 a silent channel.
+//! packet for a decoder of its own; the mapping table puts the streams' channels in the track's order, 255 a silent
+//! channel (family 1's Vorbis order is then put in WebCodecs' order by `audio_part`).
 
 use crate::error::{DecodeError, Result};
 

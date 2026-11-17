@@ -200,7 +200,12 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui) {
         if ui.button(icons::PEN).on_hover_text(tr("Caption Style…")).clicked() {
             super::style::open(s);
         }
-        ui.add_enabled(false, Button::new(tr("Auto Captions…"))).on_disabled_hover_text(tr("Not available yet"));
+        if ui.button(tr("Auto Captions…")).on_hover_text(tr("Create captions from the speech (on this PC)")).clicked()
+        {
+            let ctx = ui.ctx().clone();
+            s.run_action("auto.captions", &ctx);
+        }
+        crate::ai::captions_menu(s, ui);
     });
     ui.separator();
     let items = shown.as_ref().map_or(&[][..], |t| t.items.as_slice());

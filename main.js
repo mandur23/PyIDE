@@ -541,7 +541,8 @@ ipcMain.on('settings:loadSync', (e) => {
 // instances on one user data folder (and the detached windows) keep each other's settings; a key whose value is
 // undefined is removed. Without it, or with no settings file to merge onto, the window's settings are written whole.
 // Answers true, or why the write failed (disk full, the file locked by a virus scanner); the renderer tries again later.
-ipcMain.on('settings:saveSync', (e, settings, changed) => {
+ipcMain.on('settings:saveSync', (e, settings, changed) => { e.returnValue = saveSettings(settings, changed); });
+function saveSettings(settings, changed) {
   // Per process: two instances writing at once must not write into one temporary file.
   const tmp = `${SETTINGS_FILE}.${process.pid}.tmp`;
   try {
@@ -559,13 +560,13 @@ ipcMain.on('settings:saveSync', (e, settings, changed) => {
       fs.writeFileSync(tmp, JSON.stringify(merged, null, 2));
       patiently(() => fs.renameSync(tmp, SETTINGS_FILE), ['EPERM', 'EBUSY', 'EACCES']);
     });
-    e.returnValue = true;
+    return true;
   } catch (err) {
     settingsLog.warn(`saving settings failed: ${err.message}`);
     try { fs.rmSync(tmp, { force: true }); } catch {}
-    e.returnValue = err.message || String(err);
+    return err.message || String(err);
   }
-});
+}
 
 // The OS light/dark mode for the "Sync with OS" theme (theme:system, theme:systemChanged).
 require('./main/system-theme').register({ ipcMain });
@@ -672,6 +673,40 @@ const craftHome = () => path.resolve(process.env.PYIDE_CRAFT_HOME || path.join(r
 const cutHome = () => path.resolve(process.env.PYIDE_CUT_HOME || path.join(require('os').homedir(), 'Nano Studio Cut'));
 const appHome = (mode) => (mode === 'craft' ? craftHome() : mode === 'cut' ? cutHome() : null);
 
+// Cut is the Rust program (main/cut-launcher.js); this process starts it and quits. PYIDE_CUT_JS=1 (a test hook, for the
+// JavaScript Cut's own suites in a source run) keeps the JavaScript editor in this window instead.
+const jsCut = !app.isPackaged && process.env.PYIDE_CUT_JS === '1';
+let cutStarting = false;
+async function openCut(project) {
+  const launcher = require('./main/cut-launcher');
+  const log = diagnostics.logger('#cut');
+  cutStarting = true;
+  windows.closeChooser();
+  const home = cutHome();
+  try { await fs.promises.mkdir(home, { recursive: true }); } catch (err) { log.warn(`cannot create the Cut workspace ${home}: ${err.message}`); }
+  const { exe, sidecars } = launcher.locate({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, appDir: __dirname });
+  const claude = process.env.PYIDE_CLAUDE_PATH === 'none' ? 'none' : require('./main/ai/claude').findClaude();
+  const studioApp = [process.execPath, ...(app.isPackaged ? [] : [__dirname]), ...process.argv.filter((a) => a === '--pyide-test-env')];
+  const env = launcher.cutEnv({ home, sidecars, claude, settingsFile: SETTINGS_FILE, studioApp, version: app.getVersion() });
+  log.info(`starting ${exe}${project ? ` with ${project}` : ''} (${launcher.ENV.home}=${home})`);
+  const result = await launcher.start({ exe, project, env, cwd: path.dirname(exe) });
+  log.info(`Cut ${result.state}${result.pid ? ` (pid ${result.pid})` : ''}${'code' in result ? `, exit code ${result.code}` : ''}${result.error ? `: ${result.error}` : ''}`);
+  if (result.state === 'running') {
+    let settings = null;
+    try { settings = readSettings(); } catch {}
+    // The chooser puts the app used last first; there is no Cut window here to say so.
+    if (settings) saveSettings({ 'app.lastMode': 'cut' }, ['app.lastMode']);
+  }
+  let lang = 'en';
+  try { lang = readSettings()?.['appearance.language']; } catch {}
+  if (!['en', 'ko'].includes(lang)) lang = app.getLocale().toLowerCase().startsWith('ko') ? 'ko' : 'en';
+  const told = launcher.failure(result, { packaged: app.isPackaged, tr: launcher.translator(__dirname, lang) });
+  if (told) {
+    log.warn(`${told.message} ${told.detail.replace(/\s+/g, ' ')}`);
+    await dialog.showMessageBox({ type: 'error', title: 'Nano Studio Cut', noLink: true, message: told.message, detail: told.detail });
+  }
+}
+
 // The chooser checks for updates from before any feature module runs, so the updater registers here unless its plugin
 // is off. Its update survives the chooser: a download goes on, and the main window takes it from there.
 function chooseMode() {
@@ -685,7 +720,8 @@ function chooseMode() {
   // A settings file that stays locked must not stop the app from starting.
   const settings = () => { try { return readSettings(); } catch { return null; } };
   const picked = windows.choose(updates && { state: updates.state, update: () => updates.updateNow(settings()) });
-  updates?.checkAtStart(settings());
+  // --check-updates: Cut's Help › Check for Updates… started this run, so the check runs whatever the settings say.
+  updates?.checkAtStart(settings(), { force: process.argv.includes('--check-updates') });
   return picked;
 }
 
@@ -700,8 +736,13 @@ async function createWindow() {
     stat = await Promise.race([fs.promises.stat(full).catch(() => null), new Promise((r) => { setTimeout(r, 3000, null); })]);
     if (stat) { target = full; break; }
   }
-  const mode = modeArg || (target ? 'code' : await chooseMode());
+  const project = target && !stat.isDirectory() && /\.ncut$/i.test(target) ? target : null;
+  const mode = modeArg || (project ? 'cut' : target ? 'code' : await chooseMode());
   if (!mode) return false;
+  if (mode === 'cut' && !jsCut) {
+    await openCut(project);
+    return false;
+  }
   appMode = mode;
   plugins.setMode(mode);
   diagnostics.logger('#app').info(`mode ${mode}${modeArg ? ' (--mode)' : target ? ' (path argument)' : ' (chooser)'}`);
@@ -728,7 +769,8 @@ app.whenReady().then(async () => {
   // A page that never gets that far (it crashed, or hangs) still gets them, for its reload.
   setTimeout(registerFeatures, 3000);
 });
-app.on('window-all-closed', () => app.quit());
+// While Cut starts there is no window (the chooser has closed), and openCut quits once it knows how the start went.
+app.on('window-all-closed', () => { if (!cutStarting) app.quit(); });
 // will-quit, not window-all-closed: app.quit() (a relaunch, a plugin's deferred quit) closes the windows without
 // emitting window-all-closed, and the programs started here must not outlive the IDE either way.
 app.on('will-quit', () => {

@@ -23,18 +23,32 @@ use crate::shell::Shell;
 use crate::state::App;
 
 /// The top bar's Automation items in their order (`ITEMS`), with the actions the native app has.
-const AUTOMATION: [&[(&str, Option<&str>)]; 4] = [
+const AUTOMATION: [&[(&str, Option<&str>)]; 5] = [
     &[
         ("Remove Silence…", Some("auto.silence")),
         ("Detect Scene Changes…", Some("auto.scenes")),
         ("Detect Beats…", Some("auto.beats")),
     ],
-    &[("Auto Captions…", None), ("Remove Filler Words…", None), ("Label Speakers", None)],
+    &[
+        ("Auto Captions…", Some("auto.captions")),
+        ("Remove Filler Words…", Some("auto.fillers")),
+        ("Label Speakers", Some("auto.speakers")),
+        ("Next Uncertain Word", Some("auto.nextUncertain")),
+        ("Previous Uncertain Word", Some("auto.prevUncertain")),
+    ],
+    &[
+        ("Polish Captions with Claude…", Some("auto.aiPolish")),
+        ("Translate Captions with Claude…", Some("auto.aiTranslate")),
+        ("YouTube Title, Description and Chapters…", Some("auto.aiMetadata")),
+        ("Highlights to Shorts…", Some("auto.aiHighlights")),
+        ("Edit Command…", Some("auto.aiCommand")),
+        ("AI Assistant", Some("auto.aiAssistant")),
+    ],
     &[
         ("Match Loudness…", Some("auto.loudness")),
         ("Match Clip Loudness…", Some("auto.clipLoudness")),
         ("Auto Ducking…", Some("auto.duck")),
-        ("Isolate Voice", None),
+        ("Isolate Voice", Some("auto.isolateVoice")),
     ],
     &[("Auto Color", Some("auto.color"))],
 ];

@@ -4,8 +4,8 @@
 //! a dialog ([`style`]); the timeline's caption rows move, trim, select and delete captions ([`track`]).
 //!
 //! The shown track (the panel's choice, else the sequence's first) is also the one the Program monitor draws and
-//! export burns in. Every change is a command through the history. The Transcript tab stays greyed: its words come
-//! only from speech recognition's transcripts, which this app does not make or read.
+//! export burns in. Every change is a command through the history. The Transcript tab is speech recognition's
+//! (`crate::speech::panel`).
 
 pub mod files;
 pub mod panel;
@@ -74,7 +74,10 @@ pub fn run(s: &mut Shell, id: &str, _ctx: &egui::Context) -> bool {
         "captions.import" => files::ask_import(s),
         "captions.export" => files::ask_export(s),
         "captions.style" => style::open(s),
-        "delete" | "rippleDelete" => track::delete_selected(&mut s.app, &mut s.timeline.captions),
+        // only when it is this feature's Delete (another panel's may be asked first in the chain)
+        "delete" | "rippleDelete" if enabled(s, id).is_some() => {
+            track::delete_selected(&mut s.app, &mut s.timeline.captions)
+        }
         _ => return false,
     }
     true

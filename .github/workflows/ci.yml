@@ -18,6 +18,61 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Nano Studio Cut is the Rust program in cut-rs: its release exe is built (as scripts/release.mjs builds it for the
+  # installer), the app is checked to start it (verify/cut-rust-launch.mjs --real; the shards run the same suite against
+  # a stand-in), then cut-rs's own tests run. The runner has no GPU (wgpu draws on WARP, Direct3D 12's software adapter)
+  # and no HEVC Video Extension; the tests that need a GPU's decoder or that extension say "skipped" and return, as the
+  # crates' tests already do without a sound device.
+  cut-rs:
+    name: cut-rs (build, launch, cargo test)
+    runs-on: windows-latest
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24.11.0'
+          cache: npm
+
+      - name: npm ci
+        run: npm ci
+
+      # cut-rs/Cargo.toml's rust-version.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.99'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cut-rs -> target
+
+      - name: cargo build --release -p cut-app
+        run: cargo build --release --locked -p cut-app --manifest-path cut-rs/Cargo.toml
+
+      - name: the app starts the built Cut
+        timeout-minutes: 10
+        run: node verify/cut-rust-launch.mjs --real
+
+      - name: cargo test --workspace
+        timeout-minutes: 45
+        run: cargo test --workspace --locked --manifest-path cut-rs/Cargo.toml
+
+      - name: Upload verify/out
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: verify-out-cut-rs
+          path: verify/out/
+          if-no-files-found: ignore
+          retention-days: 14
+
   verify:
     name: verify (shard ${{ matrix.shard }} of 6)
     runs-on: windows-latest

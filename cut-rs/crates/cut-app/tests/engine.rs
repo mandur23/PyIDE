@@ -251,7 +251,7 @@ fn import_asks_the_picture_and_sound_engines_what_this_pc_decodes() {
         eprintln!("{codec}: {}", if ok { "decoded on this PC" } else { "not decoded" });
         assert!(ok, "{codec} is decoded through Media Foundation or as PCM");
     }
-    assert!(!import::decodable_audio("vorbis"), "no Vorbis decoder this app may use");
+    assert!(import::decodable_audio("vorbis"), "Vorbis through lewton on any PC");
     let webm = import::probe_file(&demo::media::fixture("video/voice.webm")).result.expect("Opus in WebM is imported");
     assert_eq!(webm["audio"]["codec"].as_str(), Some("opus"));
 }

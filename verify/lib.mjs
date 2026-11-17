@@ -243,7 +243,9 @@ export async function launch({ fixture, port, name = fixture, lang = 'en-US', us
     // models in every test instance. verify/semantic.mjs and verify/ai-complete.mjs opt in to the real ones.
     // Test instances keep their Claude Code IDE lock files to themselves (a killed instance cannot remove its own).
     // Test projects are temporary copies: trusted, so no Trust and Open Project question (verify/trust.mjs turns it off).
-    env: { PYIDE_SEMANTIC_BACKEND: 'fake', PYIDE_AI_COMPLETE_BACKEND: 'fake', PYIDE_TRUST_ALL: '1', PYIDE_CLAUDE_IDE_DIR: path.join(work, 'claude-ide'), ...process.env, ...env, PYIDE_USER_DATA: userData || path.join(work, 'userdata') },
+    // mode 'cut' is the JavaScript Cut, the Rust editor's specification (PYIDE_CUT_JS, main.js); verify/cut-rust-launch.mjs
+    // tests the Rust program the app starts.
+    env: { PYIDE_SEMANTIC_BACKEND: 'fake', PYIDE_AI_COMPLETE_BACKEND: 'fake', PYIDE_TRUST_ALL: '1', PYIDE_CLAUDE_IDE_DIR: path.join(work, 'claude-ide'), ...(mode === 'cut' ? { PYIDE_CUT_JS: '1' } : {}), ...process.env, ...env, PYIDE_USER_DATA: userData || path.join(work, 'userdata') },
     stdio: 'ignore',
   });
   runningPids.add(child.pid);

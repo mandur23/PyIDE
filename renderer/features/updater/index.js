@@ -180,7 +180,10 @@
       if (stopping) stopping.el.id = 'updateStopping';
       let result;
       try { result = await ide.api.invoke('updater:install'); } finally { stopping?.close(); }
-      if (result?.late) {
+      if (result?.cutOpen) {
+        message(tr('Restart to Update'), [tr('Nano Studio Cut is still open, so Nano Studio was not updated.'),
+          tr('Save your work in Cut and close it, then update again.')], [{ label: tr('Close'), primary: true }]);
+      } else if (result?.late) {
         message(tr('Restart to Update'), [tr('{count} of them did not stop in time, so Nano Studio was not updated.', { count: result.late }),
           tr('Stop them, then choose Restart to Update again.')], [{ label: tr('Close'), primary: true }]);
       } else if (result && !result.installed) {

@@ -464,56 +464,60 @@ pub fn vpx_webm(name: &str, codec: Codec, width: u32, height: u32, frames: u32) 
     })
 }
 
-/// A WebM with VP9 video (the frame-number picture, 30 frames) and, when `with_video` or alone, a Vorbis track
-/// whose packets are never decoded (this PC has no Vorbis decoder it may use): its headers in CodecPrivate as
-/// Matroska carries them (Xiph-laced), its blocks placeholders.
-pub fn vorbis_webm(name: &str, with_video: bool) -> PathBuf {
+/// The test tone of Vorbis-order channel `c` at sample `t` (48 kHz): a quarter of full scale at 440 Hz on the
+/// first, an eighth at 660, 880, 1100 ... Hz on the others.
+pub fn vorbis_tone(c: usize, t: i64) -> f64 {
+    let (amp, hz) = if c == 0 { (0.25, 440.0) } else { (0.125, 440.0 + 220.0 * c as f64) };
+    amp * (2.0 * std::f64::consts::PI * hz * t as f64 / f64::from(RATE)).sin()
+}
+
+/// A WebM with `channels` of [`vorbis_tone`] coded by [`super::vorbis`] in `blocks` blocks (long and short mixed),
+/// and, when `with_video`, VP9 video first (the frame-number picture, 30 frames).
+pub fn vorbis_webm(name: &str, channels: u8, blocks: usize, with_video: bool) -> PathBuf {
     cached(name, || {
-        let mut id = vec![1];
-        id.extend(b"vorbis");
-        id.extend(0u32.to_le_bytes());
-        id.push(2);
-        id.extend(48000u32.to_le_bytes());
-        id.extend([0u8; 12]);
-        id.extend([0xb8, 1]);
-        let comment = b"\x03vorbis\0\0\0\0\0\0\0\0\x01".to_vec();
-        let setup = b"\x05vorbis\0".to_vec();
-        let mut private = vec![2, id.len() as u8, comment.len() as u8];
-        private.extend(id);
-        private.extend(comment);
-        private.extend(setup);
-        let audio = MkvTrack {
-            codec_id: "A_VORBIS",
-            private: Some(private),
+        let stream = super::vorbis::encode(channels, &super::vorbis::sizes(blocks), vorbis_tone);
+        vorbis_file(channels, &stream, super::vorbis::private(channels, RATE), with_video)
+    })
+}
+
+/// A WebM of a Vorbis stream with the headers `private`, and VP9 video first when `with_video`. Each packet is a
+/// block at the sample its output starts at (the first one, which gives none, at 0), the last one with its length.
+pub fn vorbis_file(channels: u8, stream: &super::vorbis::Stream, private: Vec<u8>, with_video: bool) -> Vec<u8> {
+    let ns = |t: i64| (i128::from(t) * 1_000_000_000 / i128::from(RATE)) as i64;
+    let audio = MkvTrack {
+        codec_id: "A_VORBIS",
+        private: Some(private),
+        codec_delay_ns: 0,
+        seek_pre_roll_ns: 0,
+        audio: Some((f64::from(RATE), channels.into())),
+        video: None,
+    };
+    let mut tracks = vec![audio];
+    let mut blocks = Vec::new();
+    if with_video {
+        let e =
+            encode_vpx(Codec::Vp9, 320, 240, [30, 1], 30, |i, px| make::draw(i, px, 320, 240, false)).expect("encoded");
+        for (k, f) in e.samples.into_iter().enumerate() {
+            let time_ns = k as i64 * 1_000_000_000 / 30;
+            blocks.push(Block { track: 1, data: f.data, time_ns, key: f.key, duration_ns: None });
+        }
+        let video = MkvTrack {
+            codec_id: "V_VP9",
+            private: None,
             codec_delay_ns: 0,
             seek_pre_roll_ns: 0,
-            audio: Some((48000.0, 2)),
-            video: None,
+            audio: None,
+            video: Some((320, 240)),
         };
-        let mut tracks = vec![audio];
-        let mut blocks = Vec::new();
-        if with_video {
-            let e = encode_vpx(Codec::Vp9, 320, 240, [30, 1], 30, |i, px| make::draw(i, px, 320, 240, false))
-                .expect("encoded");
-            for (k, f) in e.samples.into_iter().enumerate() {
-                let time_ns = k as i64 * 1_000_000_000 / 30;
-                blocks.push(Block { track: 1, data: f.data, time_ns, key: f.key, duration_ns: None });
-            }
-            let video = MkvTrack {
-                codec_id: "V_VP9",
-                private: None,
-                codec_delay_ns: 0,
-                seek_pre_roll_ns: 0,
-                audio: None,
-                video: Some((320, 240)),
-            };
-            tracks.insert(0, video);
-        }
-        let track = tracks.len() as u8;
-        for k in 0..50 {
-            blocks.push(Block { track, data: vec![0; 40], time_ns: k * 20_000_000, key: true, duration_ns: None });
-        }
-        blocks.sort_by_key(|b| b.time_ns);
-        write(true, &tracks, &blocks)
-    })
+        tracks.insert(0, video);
+    }
+    let track = tracks.len() as u8;
+    let last = stream.packets.len().saturating_sub(1);
+    for (k, (data, start)) in stream.packets.iter().enumerate() {
+        let time_ns = ns(start.unwrap_or(0));
+        let duration_ns = (k == last).then(|| ns(stream.length) - time_ns);
+        blocks.push(Block { track, data: data.clone(), time_ns, key: true, duration_ns });
+    }
+    blocks.sort_by_key(|b| b.time_ns);
+    write(true, &tracks, &blocks)
 }

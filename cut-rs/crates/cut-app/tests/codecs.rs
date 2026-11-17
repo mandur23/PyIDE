@@ -28,19 +28,66 @@ fn opus_vp9_vp8_flac_and_mp3_import() {
     eprintln!("AV1 decoded here: {}", import::decodable_video("av01.0.04M.08"));
 }
 
-#[test]
-fn vorbis_is_refused_with_its_sentence_and_its_video_still_plays() {
-    let alone = import::probe_file(&more::vorbis_webm("vorbis-alone.webm", false));
-    let r = alone.result.expect_err("Vorbis alone is refused");
-    assert_eq!(r.code, "unsupported");
-    assert_eq!(import::refusal_text(&r), "Vorbis audio is not supported yet.");
+/// The RMS of each channel of the offline mix (as the export mixes) of `[from, to)` seconds of a project holding
+/// only `file`, placed on A1 at 0.
+fn heard(name: &str, file: &std::path::Path, from: f64, to: f64) -> [f64; 2] {
+    use cut_model::Id;
+    let home = std::env::temp_dir().join(format!("cut-app-codecs-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).expect("a home");
+    let mut s = cut_app::shell::Shell::new(cut_app::files::Home::at(home));
+    s.dialog = None;
+    let entry = import::probe_file(file).result.expect("imported");
+    let r = s.app.exec(&cut_app::cmd::import_media(vec![entry], None)).expect("into the project");
+    let media = Id::new(r["ids"][0].as_str().expect("an id"));
+    let seq = s.app.sequence_id.expect("a sequence");
+    s.app.exec(&cut_app::cmd::place(seq, media, None, Some(Id::new("A1")), 0, "overwrite")).expect("placed");
+    let mut m = cut_audio::Mixer::new(48000, cut_app::transport::file_audio(cut_audio::Library::default()));
+    let ticks = |t: f64| (t * cut_time::TICKS as f64) as i64;
+    let out = cut_audio::offline::render(&mut m, s.app.project(), seq, ticks(from), ticks(to), 0.0);
+    out.map(|c| (c.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>() / c.len().max(1) as f64).sqrt())
+}
 
-    let both = import::probe_file(&more::vorbis_webm("vorbis-vp9.webm", true));
-    let e = both.result.expect("the VP9 video of the file is imported");
+#[test]
+fn vorbis_imports_alone_and_under_video_and_plays() {
+    let file = more::vorbis_webm("vorbis-tone-2ch-a.webm", 2, 120, false);
+    let alone = import::probe_file(&file);
+    let e = alone.result.expect("Vorbis in WebM is imported");
+    assert_eq!((e["kind"].as_str(), e["audio"]["codec"].as_str()), (Some("audio"), Some("vorbis")));
+    assert_eq!((e["audio"]["rate"].as_u64(), e["audio"]["channels"].as_u64()), (Some(48000), Some(2)));
+    assert_eq!(alone.note, None);
+
+    let both = import::probe_file(&more::vorbis_webm("vorbis-tone-vp9-a.webm", 2, 120, true));
+    let e = both.result.expect("the file is imported");
     assert_eq!(e["kind"].as_str(), Some("video"));
     assert!(e["video"]["codec"].as_str().is_some_and(|c| c.starts_with("vp09.")), "{}", e["video"]["codec"]);
-    assert!(e["audio"].is_null(), "without its sound");
-    assert_eq!(both.note, Some("Vorbis audio is not supported yet."));
+    assert_eq!(e["audio"]["codec"].as_str(), Some("vorbis"), "with its sound");
+    assert_eq!(both.note, None);
+
+    // 440 Hz at a quarter of full scale on the left, 660 Hz at an eighth on the right.
+    let [l, r] = heard("vorbis", &file, 0.25, 1.25);
+    eprintln!("Vorbis mixed: {l:.4} {r:.4}");
+    assert!((l - 0.25 / 2f64.sqrt()).abs() < 0.01 && (r - 0.125 / 2f64.sqrt()).abs() < 0.01, "{l} {r}");
+}
+
+#[test]
+fn opus_of_more_than_two_channels_imports_and_plays_its_left_and_right() {
+    for (to, side) in [(0u8, Some(0)), (2, Some(1)), (1, None)] {
+        let file = more::opus_routed_webm(&format!("opus-51-to{to}.webm"), 6, to);
+        let p = import::probe_file(&file);
+        let e = p.result.expect("5.1 Opus is imported");
+        assert_eq!((e["kind"].as_str(), e["audio"]["channels"].as_u64()), (Some("audio"), Some(6)));
+        assert_eq!(p.note, None);
+        // The fixture's 330 Hz at an eighth of full scale, routed to Vorbis channel `to` of L C R Ls Rs LFE. The mix
+        // keeps the first two channels of what the decoder gives, as the JavaScript keeps WebCodecs' first two
+        // (left and right): the centre is not heard.
+        let rms = heard(&format!("opus{to}"), &file, 0.2, 0.8);
+        eprintln!("Opus to {to}: {rms:?}");
+        for (c, v) in rms.iter().enumerate() {
+            let want = if side == Some(c) { 0.125 / 2f64.sqrt() } else { 0.0 };
+            assert!((v - want).abs() < 0.01, "Vorbis channel {to}: mix channel {c} {v}");
+        }
+    }
 }
 
 #[test]

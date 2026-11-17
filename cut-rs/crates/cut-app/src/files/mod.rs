@@ -21,6 +21,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 pub use atomic::{mtime_ms, now_ms, write_atomic};
+pub(crate) use names::js_space;
 pub use names::{autosave_name, hash_of, name_of, stamp_of, time_of_stamp};
 pub use paths::{ext_of, local_path};
 pub use projects::{Autosave, AutosaveJob, KEEP, MAX_KEEP, Offer, Projects, ReadOk, WriteOk};
