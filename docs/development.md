@@ -147,7 +147,7 @@ Cut의 기능은 AI도 쓸 수 있어야 합니다. 키보드 동작, 자동화 
 
 ### CI
 
-- `.github/workflows/ci.yml`이 master 푸시와 PR마다 `verify/ci-suites.json`의 테스트를 러너 6대에 나눠 돌립니다(약 15분). 같은 시간에 `cut-rs` job이 Rust 1.99(`cut-rs/Cargo.toml`의 `rust-version`)를 받아 Rust Cut을 릴리스로 빌드하고, 앱이 그것을 띄우는지(`verify/cut-rust-launch.mjs --real`) 보고, `cargo test --workspace`를 돌립니다. cargo의 빌드는 `Swatinem/rust-cache`로 캐시합니다. 러너에는 GPU가 없어(wgpu는 WARP로 그림) GPU 디코더나 HEVC 확장이 필요한 Rust 테스트는 "skipped"를 찍고 끝납니다.
+- `.github/workflows/ci.yml`이 master 푸시와 PR마다 `verify/ci-suites.json`의 테스트를 러너 6대에 나눠 돌립니다(약 15분). 같은 시간에 `cut-rs` job이 Rust 1.99(`cut-rs/Cargo.toml`의 `rust-version`)를 받아 Rust Cut을 릴리스로 빌드하고, 앱이 그것을 띄우는지(`verify/cut-rust-launch.mjs --real`) 보고, GPU와 이 PC의 코덱이 필요 없는 크레이트의 테스트를 돌립니다(`cargo test --workspace --exclude cut-app --exclude cut-engine --exclude cut-export --exclude cut-decode`). 러너에는 GPU가 없고(WARP) VP9 인코더와 HEVC 확장도 없어서 그 네 크레이트의 테스트는 러너에 없는 것 때문에 실패합니다. 네 크레이트를 포함한 전체 테스트(`CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast`)는 릴리스 전에 개발 PC에서 돌립니다. cargo의 빌드는 `Swatinem/rust-cache`로 캐시합니다.
 - 같은 브랜치에 새 푸시가 오면 진행 중인 실행이 취소됩니다. 결과가 필요하면 끝날 때까지 푸시하지 않습니다.
 - 실패하면 `gh run view <id> --log-failed`로 FAIL 줄을 봅니다. 로컬에서 그 테스트만 다시 돌려 재현되는지 확인합니다. 재현되지 않으면 `gh run rerun <id> --failed`로 다시 돌립니다.
 
