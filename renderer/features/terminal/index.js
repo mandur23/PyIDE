@@ -409,7 +409,7 @@
     t.tabEl.append(label);
     const n = leaves(t.root).length;
     if (n > 1) t.tabEl.append(el('span', 'term-tab-count', String(n)));
-    const close = ide.ui.glyph(el('button', 'term-tab-close'), '×');
+    const close = el('button', 'term-tab-close', '×');
     close.title = tr('Close Tab');
     close.onclick = (e) => { e.stopPropagation(); closeTabAsking(t); };
     t.tabEl.append(close);

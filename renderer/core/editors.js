@@ -573,7 +573,7 @@
       if (t.doc) t.doc.shownDirty = dirty;
       if (dirty) node.appendChild(el('span', 'dirty', '●'));
       if (t.pinned) node.appendChild(Object.assign(ide.icon('pin'), { className: 'ide-icon pin' }));
-      const close = ide.ui.glyph(el('button', 'close'), '×');
+      const close = el('button', 'close', '×');
       close.title = tr('Close');
       node.appendChild(close);
       node.onclick = () => { setActiveGroup(g); activateTab(g, t, { focus: true }); };

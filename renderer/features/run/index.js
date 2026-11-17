@@ -318,7 +318,7 @@
     const tabIcon = el('span', 'run-tab-icon');
     tabIcon.appendChild(ide.icon(typeIcon(cfg.type)));
     s.tab.append(tabIcon, tabTitle);
-    const close = ide.ui.glyph(el('button', 'run-tab-close'), '×');
+    const close = el('button', 'run-tab-close', '×');
     close.title = tr('Close');
     close.onclick = (e) => { e.stopPropagation(); closeSession(s); };
     s.tab.appendChild(close);
