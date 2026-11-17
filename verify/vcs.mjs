@@ -3,7 +3,7 @@ import { execFileSync } from 'child_process';
 import { mkdtempSync, writeFileSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
-import { clickMenuPath, launch, lensesShown, openFile, visiblePoint } from './lib.mjs';
+import { branchItem, clickMenuPath, launch, lensesShown, menuRow, openBranchMenu, openFile, visiblePoint } from './lib.mjs';
 
 // Isolate git from the user's global/system config (identity, autocrlf, default branch, hooks).
 const gitHome = mkdtempSync(path.join(tmpdir(), 'pyide-vcs-git-'));
@@ -202,10 +202,11 @@ try {
   await press('Ctrl+F4');
 
   // --- branches ---
-  await t.click('.vcs-branch');
-  await until(`document.querySelector('.popup-item.active')?.textContent.includes('New Branch')`, 'branch popup');
-  check(await js(`[...document.querySelectorAll('.popup-item')].some(i => i.textContent.includes('main') && i.textContent.includes('current'))`), 'branch popup lists local branches');
-  await press('Enter');
+  await openBranchMenu(t);
+  check(await js(`${menuRow('main')}?.textContent.includes('current') && document.querySelector('#vcsBranches > .menu-item .menu-label').textContent === 'New Branch…'`), 'the branch menu starts with New Branch… and lists the local branches, the current one marked');
+  check(await js(`(() => { const m = document.querySelector('#vcsBranches').getBoundingClientRect(), b = document.querySelector('.vcs-branch').getBoundingClientRect(); return Math.abs(m.left - b.left) < 2 && m.top >= b.bottom && m.top - b.bottom < 12; })()`), 'the menu hangs from the branch widget, as the project widget\'s does');
+  await press('Escape');
+  await branchItem(t, 'New Branch…');
   await until(`document.querySelector('#popupIn').placeholder === 'New branch name'`, 'branch name prompt');
   await type('feature-x');
   await press('Enter');
@@ -213,13 +214,33 @@ try {
   check(git(project, 'branch', '--show-current') === 'feature-x', 'New Branch creates and checks out the branch');
   writeFileSync(path.join(project, 'README.md'), '# VCS fixture\n\nChanged on feature-x.\n');
   git(project, 'commit', '-qam', 'Feature work');
-  await t.click('.vcs-branch');
-  await until(`!document.querySelector('#popup').classList.contains('hidden')`, 'branch popup');
-  await type('main');
-  await until(`document.querySelector('.popup-item.active')?.textContent.startsWith('★main') || document.querySelector('.popup-item.active .label')?.textContent === 'main'`, 'main item');
+
+  // Typing in the branch menu narrows it to the names that hold what was typed.
+  await openBranchMenu(t);
+  const shownRows = () => js(`[...document.querySelectorAll('#vcsBranches > .menu-item:not(.hidden) .menu-label')].map((n) => n.textContent)`);
+  const before = await shownRows();
+  await sleep(150); // the menu takes keys one task after it opens
+  for (const k of ['f', 'e', 'a']) await press(k);
+  check(JSON.stringify(await shownRows()) === JSON.stringify(['feature-x']) && await js(`document.querySelector('#vcsBranches .menu-filter').textContent === 'fea' && document.querySelector('#vcsBranches .menu-item.active .menu-label')?.textContent === 'feature-x'`),
+    `typing fea leaves feature-x alone, selected, with the typed text shown (${JSON.stringify(await shownRows())})`);
+  check(await js(`[...document.querySelectorAll('#vcsBranches > .menu-header, #vcsBranches > .menu-sep')].every((n) => getComputedStyle(n).display === 'none')`), 'headers and separators go while a filter is typed');
+  await press('Backspace');
+  check((await shownRows()).includes('feature-x') && await js(`document.querySelector('#vcsBranches .menu-filter').textContent === 'fe'`), 'Backspace takes one letter back');
+  for (const k of ['z', 'z']) await press(k);
+  check(!(await shownRows()).length && await js(`!!document.querySelector('#vcsBranches .menu-none:not(.hidden)')`), 'a text nothing holds says Nothing found');
+  await press('Escape');
+  check(JSON.stringify(await shownRows()) === JSON.stringify(before) && await js(`!!document.querySelector('#vcsBranches') && document.querySelector('#vcsBranches .menu-filter').classList.contains('hidden')`), 'Esc clears the filter and the menu stays');
+  for (const k of ['m', 'a', 'i']) await press(k);
   await press('Enter');
+  await until(`!!document.querySelector('.context-menu[data-level="1"]')`, 'the actions of main by Enter');
+  check(await js(`document.querySelector('.context-menu[data-level="1"] .menu-item.active .menu-label')?.textContent === 'Checkout'`), 'Enter on the filtered branch opens its actions with Checkout selected');
+  await press('Escape');
+  await press('Escape');
+  await press('Escape');
+  await until(`!document.querySelector('#vcsBranches')`, 'the branch menu closed');
+  await branchItem(t, 'main');
   await until(`document.querySelector('.vcs-branch-name').textContent === 'main'`, 'back on main');
-  check(git(project, 'branch', '--show-current') === 'main' && !readFileSync(path.join(project, 'README.md'), 'utf8').includes('feature-x'), 'checkout from the branch popup switches branch and files');
+  check(git(project, 'branch', '--show-current') === 'main' && !readFileSync(path.join(project, 'README.md'), 'utf8').includes('feature-x'), 'Checkout in a branch\'s submenu switches branch and files');
 
   // Unsaved edits are saved before a checkout (like PyCharm), so they carry over instead of a later Ctrl+S writing
   // the old branch's text over the checked-out file.
@@ -227,19 +248,11 @@ try {
   await js(`ide.editor.focus(), ide.editor.setPosition({ lineNumber: 1, column: 1 })`);
   await type('# unsaved edit\n');
   check(await js(`ide.isDirty(ide.activeTab())`), 'main.py has unsaved changes before checkout');
-  await t.click('.vcs-branch');
-  await until(`!document.querySelector('#popup').classList.contains('hidden')`, 'branch popup');
-  await type('feature-x');
-  await until(`document.querySelector('.popup-item.active')?.textContent.includes('feature-x')`, 'feature-x item');
-  await press('Enter');
+  await branchItem(t, 'feature-x');
   await until(`document.querySelector('.vcs-branch-name').textContent === 'feature-x'`, 'on feature-x with edit');
   check(!(await js(`ide.isDirty(ide.activeTab())`)) && readFileSync(path.join(project, 'main.py'), 'utf8').startsWith('# unsaved edit')
     && readFileSync(path.join(project, 'README.md'), 'utf8').includes('feature-x'), 'checkout saves unsaved editors first and the edit carries over');
-  await t.click('.vcs-branch');
-  await until(`!document.querySelector('#popup').classList.contains('hidden')`, 'branch popup');
-  await type('main');
-  await until(`document.querySelector('.popup-item.active')?.textContent.startsWith('★main') || document.querySelector('.popup-item.active .label')?.textContent === 'main'`, 'main item');
-  await press('Enter');
+  await branchItem(t, 'main');
   await until(`document.querySelector('.vcs-branch-name').textContent === 'main'`, 'back on main again');
   git(project, 'checkout', '--', 'main.py');
   await js(`ide.reloadFromDisk()`);

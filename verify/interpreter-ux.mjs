@@ -36,7 +36,7 @@ try {
   const menu = await js(`[...document.querySelectorAll('.context-menu .menu-item')].map((r) => r.querySelector('.menu-detail')?.textContent || r.textContent)`);
   const notInMenu = installed.filter((p) => !menu.some((m) => m.toLowerCase().includes(p.toLowerCase())) && !listed.includes(real(p)));
   const labels = await menuLabels();
-  check(!notInMenu.length && labels.filter((l) => /\(Python \d/.test(l)).length >= installed.length, `the status-bar menu shows them (${S(labels)})`);
+  check(!notInMenu.length && labels.filter((l) => /Python \d/.test(l)).length >= installed.length, `the status-bar menu shows them (${S(labels)})`);
   check(labels.includes('Create Virtual Environment…'), `the status-bar menu offers Create Virtual Environment… (${S(labels)})`);
 
   // ---------- Add New Interpreter goes to the add step ----------

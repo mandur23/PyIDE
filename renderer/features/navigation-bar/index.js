@@ -115,7 +115,7 @@
       crumb.dataset.name = sym.name;
       const name = userText(el('span', 'nb-name', sym.name));
       name.onclick = () => jumpTo(ed, sym);
-      const drop = el('span', 'nb-drop', '▾');
+      const drop = ide.ui.glyph(el('span', 'nb-drop'), '▾');
       drop.title = tr('Show Siblings');
       drop.onclick = () => openMenu(crumb, siblings.map((s) => ({
         label: s.name, userText: true, iconEl: kindIcon(s.kind), current: s === sym, run: () => jumpTo(ed, s),
@@ -320,7 +320,7 @@
     row.dataset.depth = depth;
     row.style.paddingLeft = `${6 + depth * 16}px`;
     const leaf = n.recursive || (n.children && !n.children.length);
-    const arrow = el('span', 'nb-ch-arrow', leaf ? '' : n.expanded ? '▾' : '▸');
+    const arrow = ide.ui.twisty('nb-ch-arrow', leaf ? null : !!n.expanded);
     arrow.onclick = (e) => { e.stopPropagation(); if (!leaf) toggle(n); };
     const path = toPath(n.item.uri);
     const line = (n.sites[0] || n.item.selectionRange).start.line + 1;

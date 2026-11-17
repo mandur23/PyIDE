@@ -878,6 +878,34 @@ function closeMenus(level = 0) {
   if (!menuStack.length && menuCleanup) { menuCleanup(); menuCleanup = null; }
 }
 ide.ui.closeMenus = () => closeMenus(0);
+// A choice asked from a widget (a toolbar button, a status bar item), shown as a menu hanging from it like the project
+// and branch widgets' menus, with typing to filter: -> the chosen item's value (or the item), null when the menu was
+// closed. The items are ide.ui.pick's ({label, detail?, icon?, hint?, value?}; a hint of ✓ ticks the item), and with no
+// widget on the page the palette asks instead. ide.ui.pick stays for what is asked from the keyboard.
+ide.ui.pickAt = (anchor, { items, placeholder }) => {
+  if (!anchor?.isConnected || !anchor.getClientRects().length) return ide.ui.pick({ placeholder, items });
+  return new Promise((resolve) => {
+    let chosen = null;
+    const r = anchor.getBoundingClientRect();
+    const menu = ide.ui.contextMenu(r.left, r.bottom + 4, [
+      placeholder && { header: placeholder },
+      ...items.map((it) => ({
+        label: it.label, detail: it.detail, icon: it.icon, userText: it.userText ?? true,
+        checked: it.checked || it.hint === '✓', hint: it.hint === '✓' ? '' : it.hint,
+        run: () => { chosen = { value: it.value ?? it }; },
+      })),
+    ], { filter: true });
+    menu.classList.add('pick-menu');
+    // Below the widget when it fits, else above it (a status bar item).
+    const win = anchor.ownerDocument.defaultView;
+    if (r.bottom + 4 + menu.offsetHeight > win.innerHeight - 4) menu.style.top = `${Math.max(4, r.top - menu.offsetHeight - 4)}px`;
+    const closed = setInterval(() => {
+      if (menu.isConnected) return;
+      clearInterval(closed);
+      resolve(chosen ? chosen.value : null);
+    }, 50);
+  });
+};
 // A menu removed from the page by other code counts as closed (and its key handlers are dropped).
 function menusOpen() {
   if (menuStack.length && !menuStack[0].el.isConnected) closeMenus(0);
@@ -917,13 +945,17 @@ function showMenu(x, y, items, level, leftEdge) {
     const row = el('div', 'menu-item' + (it.disabled ? ' disabled' : '') + (it.submenu ? ' has-sub' : ''));
     row._item = it;
     const icon = el('span', 'menu-icon');
-    if (it.checked) icon.textContent = '✓';
+    const pictured = !!(it.icon || it.glyph);
+    if (it.checked) row.classList.add('checked');
+    if (it.checked && !pictured) icon.textContent = '✓';
     else if (it.icon) icon.appendChild(ide.icon(it.icon, it.glyph || ''));
     else if (it.glyph) icon.textContent = it.glyph;
     const label = el('span', 'menu-label', it.label);
     if (it.userText) label.dataset.userText = '';
     // The label stays the first child (callers read row.firstChild); CSS order draws the icon before it.
     row.append(label, icon);
+    // A ticked item with an icon of its own keeps the icon: its tick follows the name.
+    if (it.checked && pictured) row.appendChild(el('span', 'menu-tick', '✓'));
     if (it.detail) { const d = el('span', 'menu-detail', it.detail); d.dataset.userText = ''; row.appendChild(d); }
     const hint = it.keyAction ? ide.keymap.hint(it.keyAction) : it.hint;
     if (hint) row.appendChild(el('span', 'hint-right', hint));
@@ -952,18 +984,52 @@ function showMenu(x, y, items, level, leftEdge) {
   return menu;
 }
 
-ide.ui.contextMenu = (x, y, items) => {
+// opts.filter: typing narrows the menu to the items whose name or detail holds what was typed (Backspace takes a
+// letter back, Esc clears it before it closes the menu); the typed text shows at the top. For menus that list what the
+// user has (branches, recent projects, interpreters), where the list can be long.
+ide.ui.contextMenu = (x, y, items, opts = {}) => {
   closeMenus(0);
   menuWin = uiWin();
   const win = menuWin;
   const root = showMenu(x, y, items, 0);
+  let query = '';
+  const filterBox = el('div', 'menu-filter hidden');
+  if (opts.filter) root.prepend(filterBox);
+  const applyFilter = () => {
+    closeMenus(1);
+    const q = query.toLowerCase();
+    filterBox.textContent = query;
+    filterBox.classList.toggle('hidden', !query);
+    root.classList.toggle('filtered', !!query);
+    let first = null;
+    for (const row of root.querySelectorAll(':scope > .menu-item')) {
+      const text = `${row._item.label || ''} ${row._item.detail || ''}`.toLowerCase();
+      const shown = !q || text.includes(q);
+      row.classList.toggle('hidden', !shown);
+      if (shown && !first && !row.classList.contains('disabled')) first = row;
+    }
+    let none = root.querySelector(':scope > .menu-none');
+    if (q && !first && !none) { none = el('div', 'menu-none', tr('Nothing found')); root.appendChild(none); }
+    if (none) none.classList.toggle('hidden', !q || !!first);
+    setActiveRow(0, q ? first : null);
+  };
   const dismiss = (e) => { if (!e.target.closest?.('.context-menu')) closeMenus(0); };
   const keys = (e) => {
     if (!menusOpen()) return;
     const level = menuStack.length - 1;
     const m = menuStack[level];
     if (!m) return;
-    const rows = [...m.el.querySelectorAll('.menu-item:not(.disabled)')];
+    if (opts.filter && !e.ctrlKey && !e.altKey && !e.metaKey && !e.isComposing) {
+      const typed = e.key.length === 1 && (e.key !== ' ' || query) ? e.key : null;
+      if (typed || (e.key === 'Backspace' && query) || (e.key === 'Escape' && query)) {
+        e.preventDefault();
+        e.stopPropagation();
+        query = typed ? query + typed : e.key === 'Escape' ? '' : query.slice(0, -1);
+        applyFilter();
+        return;
+      }
+    }
+    const rows = [...m.el.querySelectorAll('.menu-item:not(.disabled):not(.hidden)')];
     const i = rows.indexOf(m.active);
     const handled = {
       ArrowDown: () => setActiveRow(level, rows[(i + 1) % rows.length]),
@@ -1412,6 +1478,8 @@ function renderAreaActions(area) {
     else b.title = a.title;
     b.onclick = a.run;
     if (a.id) b.dataset.action = a.id;
+    // domId: the button's element id, for code that hangs a menu from it (the Database window's New Data Source).
+    if (a.domId) b.id = a.domId;
     // A toggle action ({toggled: boolean}) shows its state like PyCharm's toggle buttons.
     if (typeof a.toggled === 'boolean') { b.classList.toggle('toggled', a.toggled); b.setAttribute('aria-pressed', String(a.toggled)); }
     area.actions.appendChild(b);
@@ -1836,6 +1904,36 @@ async function subtreeRows(entry, depth) {
 
 // A folder's chevron, turned down by CSS when the folder is open; parsed once and cloned for each row.
 const chevron = new DOMParser().parseFromString('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M6 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>', 'image/svg+xml').documentElement;
+
+// A button drawn as one character (⟳ × ▶ ■) gets the icon every other such button has: ide.ui.glyph(node, '×').
+// A character with no icon stays text.
+const GLYPH_ICONS = { '⟳': 'refresh', '×': 'closeSmall', '▶': 'runRun', '■': 'runStop', '▾': 'chevronDown' };
+ide.ui.glyph = (node, glyph) => {
+  const name = GLYPH_ICONS[glyph];
+  if (name && window.PYIDE_ICONS?.[name]) {
+    node.replaceChildren(ide.icon(name, glyph));
+    node.classList.add('glyph-icon');
+    node.dataset.glyph = glyph;
+  } else node.textContent = glyph;
+  return node;
+};
+
+// The same chevron for every tree that folds (tool windows, settings, results): ide.ui.twisty(cls, open) makes the
+// arrow, open true or false, or null for a row with nothing under it (the space stays, so names line up);
+// ide.ui.setTwisty(arrow, open) turns it and ide.ui.twistyOpen(arrow) reads it back.
+ide.ui.setTwisty = (arrow, open) => {
+  if (!arrow) return;
+  if (open === null || open === undefined) { arrow.replaceChildren(); delete arrow.dataset.open; arrow.classList.remove('open'); return; }
+  if (!arrow.firstChild) arrow.appendChild(arrow.ownerDocument.importNode(chevron, true));
+  arrow.dataset.open = String(!!open);
+  arrow.classList.toggle('open', !!open);
+};
+ide.ui.twisty = (cls, open) => {
+  const arrow = el('span', `tw ${cls}`);
+  ide.ui.setTwisty(arrow, open);
+  return arrow;
+};
+ide.ui.twistyOpen = (arrow) => (arrow?.dataset.open === undefined ? null : arrow.dataset.open === 'true');
 
 // A compacted row's name: one segment per folder, joined by dots; the selected one is marked.
 function compactLabel(chain) {
@@ -2594,8 +2692,30 @@ ide.currentInterp = () => {
   const it = ide.interps[$('interpSelect').selectedIndex];
   return it && !it.invalid ? it : null;
 };
+// Whether the open project has anything of Python in it (main/project-python.js): null while that is being found out,
+// true with no project. A Python file opened, or an interpreter chosen for the project, makes it one. The IDE's Python
+// parts (the status bar's interpreter, Pyright, the Workspace's virtual environments) show only for such a project;
+// 'pythonProjectChanged' follows every change.
+ide.pythonProject = true;
+function setPythonProject(value) {
+  if (ide.pythonProject === value) return;
+  ide.pythonProject = value;
+  document.body.classList.toggle('no-python', value === false);
+  ide.emit('pythonProjectChanged', value);
+}
+async function findPythonProject() {
+  const root = ide.root;
+  if (!root) return setPythonProject(true);
+  const chosen = !!ide.settings.get(`interpreter.${root}`, '') || ide.tabs.some((t) => /\.(py|pyw|pyi|ipynb|pyflow)$/i.test(t.path || ''));
+  const uses = chosen || await api.invoke('project:usesPython', root).catch(() => true);
+  if (ide.root === root) setPythonProject(uses);
+}
+ide.on('projectClosed', () => setPythonProject(true));
+ide.on('fileOpened', (tab) => { if (ide.pythonProject !== true && /\.(py|pyw|pyi|ipynb|pyflow)$/i.test(tab?.path || '')) setPythonProject(true); });
+ide.on('interpreterChanged', () => { if (ide.pythonProject === false && ide.root && ide.settings.get(`interpreter.${ide.root}`, '')) setPythonProject(true); });
 // python.exe paths of every working interpreter on this computer (not the remote ones plugins add).
 ide.localInterpPaths = () => (ide.interps || []).filter((it) => !it.invalid && !it.unsupported && /^[A-Za-z]:\\/.test(it.executable || '')).map((it) => it.executable);
+$('statusInterp').appendChild(ide.icon('chevronDown', '▾'));
 function showInterp(it) {
   $('statusInterpLabel').textContent = it?.invalid ? tr('Invalid interpreter: {name}', { name: it.name }) : it?.label || tr('No interpreter');
   $('statusInterp').classList.toggle('invalid', !!it?.invalid);
@@ -2829,7 +2949,9 @@ ide.openProject = async (dir) => {
       .filter((p) => typeof p?.path === 'string' && p.path && !samePath(p.path, dir));
     ide.settings.set('recentProjects', [{ path: dir, opened: Date.now() }, ...recent].slice(0, 15));
   }
+  setPythonProject(null);
   ide.emit('projectOpened', dir);
+  findPythonProject();
   return true;
 };
 

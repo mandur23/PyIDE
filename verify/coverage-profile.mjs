@@ -79,7 +79,7 @@ async function stripeBox(t, line) {
 const statsRows = (t) => t.js(`[...document.querySelectorAll('.pf-stats .pf-item')].map(r => ({ name: r.querySelector('.pf-label').textContent,
   loc: r.querySelector('.pf-loc')?.textContent || '', nums: [...r.querySelectorAll(':scope > .pf-num')].map(c => parseFloat(c.firstChild.textContent)) }))`);
 const treeRows = (t) => t.js(`[...document.querySelectorAll('.pf-tree .pf-item')].map(r => ({ name: r.querySelector('.pf-label').textContent, depth: +r.dataset.depth,
-  open: r.querySelector('.pf-arrow').textContent === '▾' }))`);
+  open: r.querySelector('.pf-arrow').classList.contains('open') }))`);
 const frames = (t) => t.js(`(() => { const c = document.querySelector('.pf-flame-canvas'); const W = c.clientWidth;
   return [...c.querySelectorAll('.pf-frame')].map(f => ({ name: f.dataset.name || '', w: f.offsetWidth / W, bottom: parseFloat(f.style.bottom), title: f.title, zoomed: f.classList.contains('zoomed') })); })()`);
 

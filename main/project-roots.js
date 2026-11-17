@@ -109,12 +109,28 @@ function venvDirs(root) {
   return found;
 }
 
-// The project's roots: its record, or the src layout's default. -> {sources, tests, excluded} (relative paths)
+// The folders a build tool writes its output to, in a project built by it: Gradle's build (and bin and out, which the
+// Eclipse and IntelliJ importers of a Gradle project write) and Maven's target. They hold compiled classes and copies of
+// the resources, which the tree, Go to File and Find in Files would otherwise show beside the sources.
+const BUILD_OUTPUTS = [
+  [['build.gradle', 'build.gradle.kts', 'settings.gradle', 'settings.gradle.kts'], ['build', 'bin', 'out']],
+  [['pom.xml'], ['target']],
+];
+function buildOutputs(root) {
+  const top = entries(root);
+  const files = new Set(top.filter((d) => d.isFile()).map((d) => d.name.toLowerCase()));
+  const dirs = new Map(top.filter((d) => d.isDirectory()).map((d) => [d.name.toLowerCase(), d.name]));
+  return BUILD_OUTPUTS.filter(([markers]) => markers.some((m) => files.has(m)))
+    .flatMap(([, outs]) => outs.filter((o) => dirs.has(o)).map((o) => dirs.get(o)));
+}
+
+// The project's roots: its record, or the defaults (the src layout's source root, a build tool's output folders
+// excluded). -> {sources, tests, excluded} (relative paths)
 function rootsOf(root) {
   if (!root) return clean(null);
   const rec = load()[keyOf(root)];
   if (rec) return clean(rec);
-  return { ...clean(null), sources: srcLayout(root) ? ['src'] : [] };
+  return { ...clean(null), sources: srcLayout(root) ? ['src'] : [], excluded: buildOutputs(root) };
 }
 
 const abs = (root, rels) => rels.map((r) => path.resolve(root, r));
@@ -158,4 +174,4 @@ function adoptDetected(root) {
   return 'src';
 }
 
-Object.assign(exports, { rootsOf, pythonPaths, excludedDirs, venvDirs, withSources, mark, onChange, srcLayout, adoptDetected });
+Object.assign(exports, { buildOutputs, rootsOf, pythonPaths, excludedDirs, venvDirs, withSources, mark, onChange, srcLayout, adoptDetected });

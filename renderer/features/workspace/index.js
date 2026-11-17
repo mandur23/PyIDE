@@ -6,7 +6,7 @@
   const invoke = (ch, ...args) => ide.api.invoke(`workspace:${ch}`, ...args);
   const userText = (tag, cls, text) => { const n = el(tag, cls, text); n.dataset.userText = ''; return n; };
   const button = (cls, text, title, onclick) => {
-    const b = el('button', cls, text);
+    const b = ide.ui.glyph(el('button', cls), text);
     if (title) b.title = title;
     b.onclick = (e) => { e.stopPropagation(); onclick(e); };
     return b;
@@ -379,7 +379,7 @@
       const closed = collapsed.has(k.kind);
       const head = el('div', `ws-group${closed ? ' closed' : ''}`);
       head.dataset.kind = k.kind;
-      head.append(el('span', 'ws-arrow', closed ? '▸' : '▾'), Object.assign(ide.icon(k.icon), { className: 'ide-icon ws-icon' }), el('span', 'ws-group-title', k.title), el('span', 'ws-count', String(group.length)));
+      head.append(ide.ui.twisty('ws-arrow', !closed), Object.assign(ide.icon(k.icon), { className: 'ide-icon ws-icon' }), el('span', 'ws-group-title', k.title), el('span', 'ws-count', String(group.length)));
       head.onclick = () => {
         closed ? collapsed.delete(k.kind) : collapsed.add(k.kind);
         ide.settings.set('workspace.collapsed', [...collapsed]);
@@ -663,11 +663,15 @@
     branch.title = tr('Git branch');
     branch.append(ide.icon('branch'), info.branch ? userText('span', 'ws-branch-name', info.branch) : el('span', null, tr('No Git repository')));
     chips.appendChild(branch);
-    const interp = ide.currentInterp();
-    const ic = el('span', 'ws-chip-info ws-interp');
-    ic.title = tr('Python interpreter');
-    ic.append(ide.icon('python'), interp ? userText('span', null, interp.label) : el('span', null, tr('No interpreter')));
-    chips.appendChild(ic);
+    // A project without Python (ide.pythonProject) shows neither an interpreter nor virtual environments.
+    const python = ide.pythonProject !== false || scanned.venvs.length > 0;
+    if (python) {
+      const interp = ide.currentInterp();
+      const ic = el('span', 'ws-chip-info ws-interp');
+      ic.title = tr('Python interpreter');
+      ic.append(ide.icon('python'), interp ? userText('span', null, interp.label) : el('span', null, tr('No interpreter')));
+      chips.appendChild(ic);
+    }
     title.appendChild(chips);
     hero.append(avatar(name, 'ws-avatar lg'), title, el('span', 'spacer'),
       button('ws-tool-btn ws-refresh', '⟳', tr('Refresh'), () => refresh()));
@@ -707,7 +711,7 @@
       vb.appendChild(row);
     }
     venvCard.appendChild(vb);
-    grid.appendChild(venvCard);
+    if (python) grid.appendChild(venvCard);
 
     const rm = info.readme;
     const readmeCard = card('README', 'ws-card-readme', rm ? [button('ws-link-btn', tr('Open'), rm.name, () => ide.openFile(rm.file))] : []);
@@ -779,6 +783,7 @@
     setTimeout(() => { if (ide.root && !ide.tabs.length && !closedHomeLast) openHome(); });
   });
   ide.on('interpreterChanged', () => { if (homeHost) renderHome(); if (selectedId) renderDetail(); });
+  ide.on('pythonProjectChanged', () => { if (homeHost) renderHome(); });
   // The branch chip follows Git (vcs plugin): creating the repository or a checkout changes no file the watcher reports.
   ide.on('vcsBranchChanged', async ({ root }) => {
     if (!ide.root || !samePath(root, ide.root)) return;

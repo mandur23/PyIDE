@@ -90,7 +90,7 @@ try {
   await a.until(`!!document.querySelector('.context-menu .menu-item')`, 'interpreter menu');
   const interpMenu = await menuLabels(a, '.context-menu');
   check(interpMenu.some((l) => /Python/.test(l)) && interpMenu.includes('Interpreter Settings…'), `status-bar interpreter widget lists interpreters (${interpMenu.join(', ')})`);
-  check(await a.js(`[...document.querySelectorAll('.context-menu .menu-item')].some(n => n.querySelector('.menu-icon').textContent === '✓')`), 'the current interpreter is checked');
+  check(await a.js(`[...document.querySelectorAll('.context-menu .menu-item.checked')].some(n => n.querySelector('.menu-tick')?.textContent === '✓' && !!n.querySelector('.menu-icon svg'))`), 'the current interpreter is checked');
   await a.js(`(${rowByLabel('.context-menu', 'Interpreter Settings…')}).dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`);
   await a.until(`document.querySelector('.settings-page')?.dataset.page === 'interpreter'`, 'interpreter settings');
   check(true, 'Interpreter Settings… opens the interpreter page');

@@ -199,7 +199,7 @@ try {
   check(cols[0].startsWith('id:INTEGER') && cols[0].endsWith(':key') && cols[1].startsWith('name:VARCHAR NOT NULL') && cols[2].startsWith('joined:DATE'), `columns show their types and the primary key (${q(cols)})`);
   await rightClickText(a, '#dbTree .db-node.db-table', 'orders');
   await clickText(a, '.context-menu .menu-item', 'Open Data');
-  await a.until(`ide.database.activeConsole()?.model.getValue().includes('SELECT * FROM "orders" LIMIT 200;') && ${activeConsole}.querySelectorAll('.db-grid tbody tr').length === 3`, 'open data');
+  await a.until(`ide.database.activeConsole()?.model.getValue().includes('SELECT * FROM "orders" LIMIT 500;') && ${activeConsole}.querySelectorAll('.db-grid tbody tr').length === 3`, 'open data');
   check(true, 'Open Data on the orders table shows its three rows');
   await a.shot('duckdb-tree.png');
 

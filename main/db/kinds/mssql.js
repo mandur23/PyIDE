@@ -298,7 +298,7 @@ module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, g
   }
 
   const [host, port, user, password, database] = NETWORK_FIELDS;
-  const OPEN = 'SELECT TOP 200 * FROM {qualified};';
+  const OPEN = 'SELECT TOP 500 * FROM {qualified};';
   return {
     packages: { mssql: 'mssql@12.7.4' },
     kinds: {

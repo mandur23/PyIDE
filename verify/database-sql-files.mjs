@@ -51,13 +51,16 @@ async function accept(t) {
 }
 const hideSuggest = (t) => t.js(`(ide.editor.trigger('t', 'hideSuggestWidget', {}), true)`);
 const statusText = `(() => { const n = document.querySelector('#statusSqlSource'); return n && !n.classList.contains('hidden') ? n.textContent : null; })()`;
-const popupShown = `!document.querySelector('#popup').classList.contains('hidden')`;
-const popupLabels = `[...document.querySelectorAll('#popup .popup-item .label')].map(n => n.textContent)`;
+// The picker: a menu hanging from the status bar widget when that asked (ide.ui.pickAt), else the palette.
+const pickMenu = `document.querySelector('.context-menu.pick-menu')`;
+const popupShown = `(!!${pickMenu} || !document.querySelector('#popup').classList.contains('hidden'))`;
+const pickRows = `(${pickMenu} ? [...${pickMenu}.querySelectorAll(':scope > .menu-item')].map((r) => ({ r, label: r.querySelector('.menu-label').textContent })) : [...document.querySelectorAll('#popup .popup-item')].map((r) => ({ r, label: r.querySelector('.label')?.textContent })))`;
+const popupLabels = `${pickRows}.map((x) => x.label)`;
 async function pickRow(t, label) {
-  await t.until(`${popupLabels}.includes(${q(label)})`, `popup row ${label}`);
-  await t.js(`([...document.querySelectorAll('#popup .popup-item')].find(r => r.querySelector('.label')?.textContent === ${q(label)}).dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })), true)`);
+  await t.until(`${popupLabels}.includes(${q(label)})`, `picker row ${label}`);
+  await t.js(`(${pickRows}.find((x) => x.label === ${q(label)}).r.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })), true)`);
   // Closed, or showing the next question (the schema picker).
-  await t.until(`!(${popupShown}) || !${popupLabels}.includes(${q(label)})`, 'popup closed');
+  await t.until(`!(${popupShown}) || !${popupLabels}.includes(${q(label)})`, 'picker closed');
 }
 // Puts text in the editor, the caret at `|` (or the selection between two `|`), focuses it and presses Ctrl+Enter.
 async function runIn(t, text) {

@@ -1185,7 +1185,7 @@
     row.dataset.key = nodePath;
     if (reselectKey === nodePath) { row.classList.add('selected'); reselectKey = null; }
     const expandable = v.variablesReference > 0;
-    const arrow = el('span', 'dbg-arrow', expandable ? '▸' : '');
+    const arrow = ide.ui.twisty('dbg-arrow', expandable ? false : null);
     // Scopes and debugpy's "special variables"/"function variables" buckets have no value of their own.
     const group = !v.error && (v.group || (expandable && !v.type && !v.value));
     const tip = `${v.name} = ${v.value ?? v.error ?? ''}`;
@@ -1215,7 +1215,7 @@
     const s = sess;
     const toggle = async (open = kids.classList.contains('hidden')) => {
       kids.classList.toggle('hidden', !open);
-      arrow.textContent = open ? '▾' : '▸';
+      ide.ui.setTwisty(arrow, open);
       if (open) expandedVars.add(nodePath); else expandedVars.delete(nodePath);
       if (!open || loaded || sess !== s || !suspended()) return;
       loaded = true;
@@ -1466,7 +1466,7 @@
       node.classList.add('dbg-watch');
       node.classList.toggle('selected', i === selectedWatch);
       node.firstChild.addEventListener('mousedown', () => { selectedWatch = i; watchesList.querySelectorAll('.dbg-watch').forEach((w, j) => w.classList.toggle('selected', j === i)); });
-      const del = el('button', 'dbg-watch-del', '×');
+      const del = ide.ui.glyph(el('button', 'dbg-watch-del'), '×');
       del.title = tr('Remove Watch');
       del.onclick = (e) => { e.stopPropagation(); removeWatch(i); };
       node.firstChild.appendChild(del);
@@ -1841,7 +1841,7 @@
       // Variables: Right/Left expand and collapse a value, Left on a child goes to its parent.
       ide.ui.listKeys(varsList, {
         rows: '.dbg-var:not(.muted)',
-        expanded: (row) => ({ '▾': true, '▸': false })[row.querySelector('.dbg-arrow')?.textContent] ?? null,
+        expanded: (row) => ide.ui.twistyOpen(row.querySelector('.dbg-arrow')),
         parent: (row) => (row.parentElement.parentElement.classList.contains('dbg-kids') ? row.parentElement.parentElement.previousElementSibling : null),
       });
       const watchPane = pane(tr('Watches'), [

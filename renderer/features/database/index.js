@@ -7,6 +7,7 @@
   const userEl = (tag, cls, text) => user(el(tag, cls, text));
   const SQLITE_FILE = /\.(sqlite3?|db)$/i;
   const MAX_ROWS = 500;
+  const GRID_CHUNK = 1000;
   // A cell value: null, a number, {$number: 'exact text'} (a number JS would print differently: SQLite REAL 2.0,
   // integers past 2^53), or text. The grid, Copy as CSV/TSV and Export Data all show a number by its database text.
   const isNumber = (v) => typeof v === 'number' || typeof v?.$number === 'string';
@@ -74,7 +75,24 @@
   // statementSeparator (see splitStatements), and openData, templates of the Open Data command per tree node kind
   // ({qualified} is the quoted schema.table, {schema} and {name} the raw names). Tree nodes may also carry their own
   // `open` command, which wins. SQL kinds need no ui: these defaults are SQL.
-  const SQL_OPEN = 'SELECT * FROM {qualified} LIMIT 200;';
+  // Open Data shows the first page; the result bar's Load More / Load All run the command again with a larger limit or
+  // none (pageOf reads and rewrites the limit of these templates and of the kinds' own).
+  const SQL_OPEN = 'SELECT * FROM {qualified} LIMIT 500;';
+  const PAGE_LIMITS = [
+    [/\bLIMIT (\d+)(?=;?\s*$)/i, (n) => `LIMIT ${n}`, /\s+LIMIT \d+(?=;?\s*$)/i],
+    [/^(\s*SELECT TOP )(\d+)(?= )/i, (n, m) => `${m[1]}${n}`, /(?<=^\s*SELECT) TOP \d+(?= )/i],
+    [/\bFETCH FIRST (\d+) ROWS ONLY(?=;?\s*$)/i, (n) => `FETCH FIRST ${n} ROWS ONLY`, /\s+FETCH FIRST \d+ ROWS ONLY(?=;?\s*$)/i],
+    [/\.limit\((\d+)\)(?=\s*$)/, (n) => `.limit(${n})`, /\.limit\(\d+\)(?=\s*$)/],
+  ];
+  // The row limit an Open Data command ends with: {limit, with(n) -> the command with that limit, all() -> without one}.
+  function pageOf(statement) {
+    for (const [find, write, clause] of PAGE_LIMITS) {
+      const m = find.exec(statement);
+      if (!m) continue;
+      return { limit: Number(m[2] ?? m[1]), with: (n) => statement.replace(find, write(n, m)), all: () => statement.replace(clause, '') };
+    }
+    return null;
+  }
   const uiOf = (kind) => {
     const ui = driverOf(kind)?.ui || {};
     const language = ui.language || 'sql';
@@ -332,7 +350,7 @@
     row.dataset.depth = r.depth;
     if (r.key) row.dataset.key = r.key;
     row.dataset.kind = r.kind;
-    row.append(el('span', 'db-arrow', r.leaf === false ? (r.open ? '▾' : '▸') : ''));
+    row.append(ide.ui.twisty('db-arrow', r.leaf === false ? !!r.open : null));
     const icon = Object.assign(ide.icon(r.node?.pk ? 'key' : ICONS[r.kind] ?? 'dataColumn'), { className: 'ide-icon db-icon' });
     row.append(icon);
     if (r.kind === 'source') {
@@ -414,15 +432,6 @@
 
   const selectedSource = () => (selectedKey ? sourceOf(JSON.parse(selectedKey)[0]) : null);
 
-  function toolButton(id, icon, title, run) {
-    const b = el('button', 'db-tool-btn');
-    b.id = id;
-    b.append(typeof icon === 'string' ? ide.icon(icon) : icon);
-    b.title = title;
-    b.onclick = (e) => run(e.currentTarget);
-    return b;
-  }
-
   function showAddMenu(anchor) {
     const r = anchor.getBoundingClientRect();
     ide.ui.contextMenu(r.left, r.bottom + 2, [
@@ -435,32 +444,31 @@
     id: 'Database', title: tr('Database'), icon: '⛁', iconName: 'database', side: 'bottom', order: 55,
     mount(container) {
       container.classList.add('db-tool');
-      const bar = el('div', 'db-toolbar');
-      bar.append(
-        toolButton('dbAdd', 'add', tr('New Data Source'), showAddMenu),
-        toolButton('dbRefresh', 'refresh', tr('Refresh'), () => {
-          const s = selectedSource();
-          if (s) refreshSchema(s.id);
-          else { schemas.clear(); reloadSources(); }
-        }),
-        toolButton('dbEdit', 'edit', tr('Edit Data Source…'), () => { const s = selectedSource(); if (s) editDataSource(s); }),
-        toolButton('dbRemove', 'remove', tr('Remove Data Source'), () => { const s = selectedSource(); if (s) removeDataSource(s); }),
-        el('span', 'db-sep'),
-        toolButton('dbConsole', 'terminal', tr('New Query Console'), () => openQueryConsole()),
-      );
       treeEl = el('div', 'db-tree');
       treeEl.id = 'dbTree';
       // Up/Down select, Right/Left open and close a node, Enter opens a node or a leaf's data (its double-click).
       ide.ui.listKeys(treeEl, {
         rows: '.db-node[data-key]',
         select: (row) => { selectedKey = row.dataset.key; renderTree(); },
-        expanded: (row) => ({ '▾': true, '▸': false })[row.querySelector('.db-arrow').textContent] ?? null,
-        open: (row) => (row.querySelector('.db-arrow').textContent ? row.click() : row.ondblclick()),
+        expanded: (row) => ide.ui.twistyOpen(row.querySelector('.db-arrow')),
+        open: (row) => (ide.ui.twistyOpen(row.querySelector('.db-arrow')) !== null ? row.click() : row.ondblclick()),
       });
-      container.append(bar, treeEl);
+      container.append(treeEl);
       renderTree();
     },
   });
+  // Its buttons are in the tool window's header, as every other tool window's are.
+  tw.setActions([
+    { icon: 'add', domId: 'dbAdd', title: tr('New Data Source'), run: (e) => showAddMenu(e?.currentTarget || document.querySelector('#dbAdd')) },
+    { icon: 'refresh', domId: 'dbRefresh', title: tr('Refresh'), run: () => {
+      const src = selectedSource();
+      if (src) refreshSchema(src.id);
+      else { schemas.clear(); reloadSources(); }
+    } },
+    { icon: 'edit', domId: 'dbEdit', title: tr('Edit Data Source…'), run: () => { const src = selectedSource(); if (src) editDataSource(src); } },
+    { icon: 'remove', domId: 'dbRemove', title: tr('Remove Data Source'), run: () => { const src = selectedSource(); if (src) removeDataSource(src); } },
+    { icon: 'terminal', domId: 'dbConsole', title: tr('New Query Console'), run: () => openQueryConsole() },
+  ]);
 
   // ---------- data source dialog ----------
   const FIELD_LABELS = () => ({ file: tr('File'), host: tr('Host'), port: tr('Port'), user: tr('User'), password: tr('Password'), database: tr('Database') });
@@ -741,7 +749,7 @@
     const line = el('div', 'db-json-line');
     line.style.paddingLeft = `${depth * 16 + 4}px`;
     const container = isContainer(v);
-    const arrow = el('span', 'db-arrow', container ? '▸' : '');
+    const arrow = ide.ui.twisty('db-arrow', container ? false : null);
     line.append(arrow, userEl('span', depth ? 'db-json-key' : 'db-json-index', label));
     if (container) line.append(userEl('span', 'db-json-summary', preview(v)));
     else {
@@ -758,7 +766,7 @@
           node.append(kids);
         } else kids.classList.toggle('hidden');
         const shown = !kids.classList.contains('hidden');
-        arrow.textContent = shown ? '▾' : '▸';
+        ide.ui.setTwisty(arrow, shown);
         node.classList.toggle('open', shown);
       };
       line.onclick = toggle;
@@ -780,19 +788,32 @@
     const thead = el('thead');
     thead.append(head);
     const tbody = el('tbody');
-    r.rows.forEach((row, i) => {
-      const line = el('tr');
-      line.append(el('td', 'db-rownum', String(i + 1)));
-      for (const v of row) {
-        const text = cellText(v);
-        const td = el('td', v === null ? 'db-null' : isNumber(v) ? 'db-num' : null, text);
-        if (v !== null) { user(td); if (text.length > 60) td.title = text; }
-        line.append(td);
+    // Rows are added GRID_CHUNK at a time as the end of the drawn ones scrolls near: a loaded table of a hundred
+    // thousand rows would otherwise build millions of cells before anything shows.
+    let shown = 0;
+    const addRows = () => {
+      const end = Math.min(r.rows.length, shown + GRID_CHUNK);
+      const part = document.createDocumentFragment();
+      for (let i = shown; i < end; i++) {
+        const line = el('tr');
+        line.append(el('td', 'db-rownum', String(i + 1)));
+        for (const v of r.rows[i]) {
+          const text = cellText(v);
+          const td = el('td', v === null ? 'db-null' : isNumber(v) ? 'db-num' : null, text);
+          if (v !== null) { user(td); if (text.length > 60) td.title = text; }
+          line.append(td);
+        }
+        part.append(line);
       }
-      tbody.append(line);
-    });
+      tbody.append(part);
+      shown = end;
+    };
+    addRows();
     table.append(thead, tbody);
     wrap.append(table);
+    // The scrolling pane asks for more as its end comes near (showResult's onscroll); null once every row is drawn.
+    wrap._more = () => { addRows(); if (shown >= r.rows.length) wrap._more = null; };
+    if (shown >= r.rows.length) wrap._more = null;
     return wrap;
   }
 
@@ -877,13 +898,18 @@
     const copyTsv = el('button', 'db-copy', tr('Copy as TSV'));
     const exportBtn = el('button', 'db-export', tr('Export Data…'));
     copyCsv.disabled = copyTsv.disabled = exportBtn.disabled = true;
-    resultBar.append(status, viewSwitch, copyCsv, copyTsv, exportBtn);
+    const loadMore = el('button', 'db-more db-load-more hidden', tr('Load More'));
+    const loadAll = el('button', 'db-more db-load-all hidden', tr('Load All'));
+    loadMore.title = tr('Read ten times as many rows');
+    loadAll.title = tr('Read every row');
+    resultBar.append(status, loadMore, loadAll, viewSwitch, copyCsv, copyTsv, exportBtn);
     const output = el('div', 'db-output');
     output.append(ide.keymap.text(el('div', 'db-placeholder muted'),
       () => tr('Use {action} to run the statement at the caret, or the selection.', { action: ide.keymap.withKeys(tr('Execute'), 'Database.RunStatement') })));
     results.append(resultBar, output);
 
     let last = null;
+    let ran = null;
     let lastDone = 0;
     let lastTotal = 0;
     const c = {
@@ -892,8 +918,10 @@
       // Runs each statement in order and shows the last result; an error stops the run. One run at a time: Ctrl+Enter
       // during a run would otherwise interleave two runs' statements and results.
       running: false,
-      async execute(statements) {
+      // opts.maxRows: the most rows read (MAX_ROWS); opts.open: the statements are an Open Data command.
+      async execute(statements, opts = {}) {
         const id = sourceId();
+        const maxRows = opts.maxRows || MAX_ROWS;
         if (!statements.length || c.running || !id) return;
         c.running = true;
         onBusy(true);
@@ -902,7 +930,7 @@
         let done = 0;
         try {
           for (const stmt of statements) {
-            r = await ide.database.query(id, stmt, { maxRows: MAX_ROWS });
+            r = await ide.database.query(id, stmt, { maxRows });
             c.lastStatement = stmt;
             c.lastSource = id;
             if (!r.ok) break;
@@ -913,6 +941,7 @@
           c.running = false;
           onBusy(false);
         }
+        ran = { statements, maxRows, open: !!opts.open };
         showResult(r, done, statements.length);
         c.runs++;
         return r;
@@ -932,6 +961,26 @@
       },
     };
 
+    // More rows of the shown result, or null when it is whole: an Open Data command that filled its limit runs again
+    // with ten times the limit (Load More) or none (Load All); a read-only statement cut at maxRows runs again reading
+    // more. Nothing else runs twice: a second INSERT … RETURNING would write twice.
+    const ALL_ROWS = Number.MAX_SAFE_INTEGER;
+    function moreOf(r) {
+      if (!r?.ok || !r.columns.length || !ran || c.running) return null;
+      const { statements, maxRows, open } = ran;
+      const lastStmt = statements[statements.length - 1];
+      const page = open ? pageOf(lastStmt) : null;
+      const again = (stmt, rows) => () => c.execute([...statements.slice(0, -1), stmt], { maxRows: rows, open });
+      if (page) {
+        if (r.rowCount < page.limit && !r.truncated) return null;
+        const n = Math.max(page.limit, r.rowCount) * 10;
+        return { next: again(page.with(n), n), all: again(page.all(), ALL_ROWS) };
+      }
+      if (!r.truncated || maxRows >= ALL_ROWS) return null;
+      if (!open && !(statements.length === 1 && ide.database.isReadOnlyStatement?.(lastStmt))) return null;
+      return { next: again(lastStmt, maxRows * 10), all: again(lastStmt, ALL_ROWS) };
+    }
+
     // Status line and output for a result: {columns, rows, rowCount, truncated, ms} plus, from some kinds, documents
     // (Grid/JSON views), affected (documents written), message (a reply such as Redis's OK, shown as data) and notice
     // ({text, args}: an English UI message from the kind, translated here).
@@ -945,6 +994,8 @@
       const parts = [];
       if (total > 1) parts.push(tr('{done} of {total} statements executed', { done, total }));
       if (!r.ok) {
+        loadMore.classList.add('hidden');
+        loadAll.classList.add('hidden');
         status.textContent = parts.join(' · ');
         const err = el('div', 'db-error');
         err.append(el('span', 'db-error-label', tr('Error')), userEl('span', 'db-error-text', r.missingDriver ? tr('Driver files are missing. Download them in the data source settings.') : r.error));
@@ -956,7 +1007,7 @@
       if (r.affected !== null && r.affected !== undefined) summary = docs ? tr('{n} documents affected', { n: r.affected }) : tr('{n} rows affected', { n: r.affected });
       else if (r.columns.length) {
         summary = docs ? tr('{n} documents', { n: r.rowCount }) : tr('{n} rows', { n: r.rowCount });
-        if (r.truncated) summary += ` · ${tr('showing the first {n}', { n: r.rowCount })}`;
+        if (r.truncated || moreOf(r)) summary += ` · ${tr('showing the first {n}', { n: r.rowCount })}`;
       } else if (r.rowCount !== null && r.rowCount !== undefined) summary = tr('{n} rows affected', { n: r.rowCount });
       else if (r.notice) summary = tr(r.notice.text, r.notice.args);
       else if (!r.message) summary = tr('Statement executed');
@@ -964,8 +1015,19 @@
       status.replaceChildren(parts.length ? `${parts.join(' · ')} · ` : '');
       if (r.message && r.columns.length) status.append(userEl('span', 'db-result-message', r.message), ' · ');
       status.append(`${r.ms} ms`);
+      const more = moreOf(r);
+      loadMore.classList.toggle('hidden', !more);
+      loadAll.classList.toggle('hidden', !more);
+      loadMore.onclick = more?.next || null;
+      loadAll.onclick = more?.all || null;
       for (const b of viewButtons) b.classList.toggle('selected', b.dataset.view === c.view());
-      if (r.columns.length) output.append(c.view() === 'json' ? jsonTree(r.documents) : grid(r));
+      output.onscroll = null;
+      if (r.columns.length) {
+        const shown = c.view() === 'json' ? jsonTree(r.documents) : grid(r);
+        output.append(shown);
+        // A long grid draws its next rows before the end of the drawn ones scrolls into view.
+        output.onscroll = () => { while (shown._more && output.scrollTop + output.clientHeight > output.scrollHeight - 800) shown._more(); };
+      }
       else if (r.message) output.append(userEl('div', 'db-message db-reply', r.message));
       else output.append(el('div', 'db-message', summary));
     }
@@ -1046,7 +1108,7 @@
         const language = src && consoleLanguage(src.kind);
         if (language && model.getLanguageId() !== language) monaco.editor.setModelLanguage(model, language);
       },
-      execute: (statements) => results.execute(statements),
+      execute: (statements, opts) => results.execute(statements, opts),
       runAtCaret() {
         const part = partToRun(editor, mode());
         if (!part) return null;
@@ -1054,7 +1116,7 @@
         return c.execute(runnable(part.text, mode()).map((s) => s.text));
       },
       // Appends command text on its own line(s) and runs every statement in it (Open Data).
-      appendAndRun(text) {
+      appendAndRun(text, opts) {
         const lines = model.getLineCount();
         const lastLine = model.getLineContent(lines);
         const prefix = lastLine.trim() ? '\n' : '';
@@ -1065,7 +1127,7 @@
         editor.setPosition({ lineNumber: end, column: 1 });
         editor.revealLine(end);
         flashRange(editor, from, from + text.length);
-        return c.execute(runnable(text, mode()).map((s) => s.text));
+        return c.execute(runnable(text, mode()).map((s) => s.text), opts);
       },
       insert(text) {
         const lines = model.getLineCount();
@@ -1089,7 +1151,7 @@
 
   async function openData(id, command) {
     const c = await openConsole(id);
-    return c?.appendAndRun(command);
+    return c?.appendAndRun(command, { open: true });
   }
 
   // ---------- Export Data ----------

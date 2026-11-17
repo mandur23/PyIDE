@@ -5,7 +5,7 @@ import { mkdtempSync, writeFileSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { closeBalloonsOver, launch, lensesShown, openFile } from './lib.mjs';
+import { branchItem, closeBalloonsOver, launch, lensesShown, menuRow, openBranchMenu, openFile } from './lib.mjs';
 import { englishLeaks, missingTranslations } from './i18n-lib.mjs';
 
 // Same git isolation as verify/vcs.mjs.
@@ -169,27 +169,25 @@ try {
   await press('Ctrl+F4');
 
   // --- branch popup and New Branch prompt ---
-  await t.click('.vcs-branch');
-  await until(`document.querySelector('.popup-item.active')?.textContent.includes('새 브랜치')`, 'branch popup');
-  check(await js(`document.querySelector('#popupIn').placeholder`) === 'Git 브랜치 — main', 'branch popup title is Korean');
-  check(await js(`[...document.querySelectorAll('.popup-item')].some(i => i.textContent.includes('main') && i.textContent.includes('현재'))`), 'current branch is marked 현재');
-  await noLeaks('#popup', 'branch popup', ['main']);
+  await openBranchMenu(t);
+  check(await js(`document.querySelector('#vcsBranches > .menu-item .menu-label').textContent`) === '새 브랜치…', 'the branch menu starts with 새 브랜치…');
+  check(await js(`${menuRow('main')}?.textContent.includes('현재')`), 'current branch is marked 현재');
+  await noLeaks('#vcsBranches', 'branch menu', ['main']);
   await shot('branches-ko.png');
-  await press('Enter');
+  await press('Escape');
+  await branchItem(t, '새 브랜치…');
   await until(`document.querySelector('#popupIn').placeholder === '새 브랜치 이름'`, 'new branch prompt');
   await noLeaks('#popup', 'New Branch prompt');
   await type('feature-x');
   await press('Enter');
   await until(`document.querySelector('.vcs-branch-name').textContent === 'feature-x'`, 'on feature-x');
   check(git(project, 'branch', '--show-current') === 'feature-x', 'New Branch from the Korean prompt creates the branch');
-  await t.click('.vcs-branch');
-  await until(`!document.querySelector('#popup').classList.contains('hidden')`, 'branch popup');
-  check(await js(`[...document.querySelectorAll('.popup-item .hint-right')].map(h => h.textContent).sort().join('|')`) === '로컬|현재', 'branch hints are 현재 / 로컬');
-  await noLeaks('#popup', 'branch popup with two branches', ['main', 'feature']);
-  await type('main');
-  await until(`document.querySelector('.popup-item.active .label')?.textContent === 'main'`, 'main item');
+  await openBranchMenu(t);
+  check(await js(`[...document.querySelectorAll('#vcsBranches .menu-header')].map(h => h.textContent).join('|')`) === '로컬' && await js(`${menuRow('feature-x')}.querySelector('.hint-right').textContent`) === '현재', 'the branches are under 로컬 and the current one says 현재');
+  await noLeaks('#vcsBranches', 'branch menu with two branches', ['main', 'feature']);
+  await press('Escape');
   await clearNotes();
-  await press('Enter');
+  await branchItem(t, 'main', '브랜치 전환');
   await until(noteWith('main 체크아웃됨'), 'checkout notification');
   await noLeaks('.ide-balloons', 'checkout notification');
   git(project, 'checkout', '-q', '--', 'main.py');

@@ -54,7 +54,7 @@ try {
   await caret(9, 13);
   await crumbsAre(['pkg', 'shapes.py', 'Outer', 'Inner', 'method'], 'caret in Inner.method: pkg › shapes.py › Outer › Inner › method');
   const text = (await js(`${bar()}.textContent`)).replace(/\s+/g, '');
-  check(text === 'pkg›shapes.py›COuter▾›CInner▾›mmethod▾', `separators and kind icons between the crumbs (${text})`);
+  check(text === 'pkg›shapes.py›COuter›CInner›mmethod', `separators and kind icons between the crumbs (${text})`);
   check(await js(`${bar()}.querySelectorAll('.nb-crumb[data-kind=path] .file-icon').length === 2 && ${bar()}.querySelector('.nb-crumb[data-kind=path] .file-icon').dataset.type === 'folder'`), 'path crumbs carry ide.fileIcon icons (folder, then the file)');
   const geometry = () => js(`(() => { const g = ide.activeGroup(); return [${bar()}.getBoundingClientRect().height, g.el.querySelector('.group-body').getBoundingClientRect().height, ide.editor.getLayoutInfo().height]; })()`);
   const geo0 = await geometry();

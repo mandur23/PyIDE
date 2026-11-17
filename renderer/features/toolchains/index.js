@@ -771,6 +771,71 @@ int main() {
   list('jdk');
   list('cpp');
 
+  // ---------- compiled classes ----------
+  // A .class file opens as its declaration: the members javap lists (signatures and constants, no bytecode), read-only,
+  // with a link to the source file it was compiled from when the project has it. Without a JDK the link still shows.
+  const SOURCE_DIRS = ['src/main/java', 'src/test/java', 'src/main/kotlin', 'src', ''];
+  // The .java a class was compiled from: its package folders under a source folder of the class file's module, looked
+  // for from the class file's folder up to the project.
+  async function sourceOfClass(file, text) {
+    const from = /Compiled from "([^"]+)"/.exec(text || '')?.[1] || `${basename(file).replace(/(\$.*)?\.class$/i, '')}.java`;
+    const qualified = /\b(?:class|interface|enum|record|@interface)\s+([\w.$]+)/.exec(text || '')?.[1] || '';
+    const pkg = qualified.includes('.') ? qualified.slice(0, qualified.lastIndexOf('.')).split('.') : [];
+    const stop = ide.root && isUnder(file, ide.root) ? ide.root.toLowerCase() : null;
+    for (let dir = dirname(file), i = 0; dir && i < 12; dir = dirname(dir), i++) {
+      for (const src of SOURCE_DIRS) {
+        const candidate = [dir, ...src.split('/'), ...pkg, from].filter(Boolean).reduce((a, b) => joinPath(a, b));
+        if (await ide.api.exists(candidate).catch(() => false)) return candidate;
+      }
+      if (!stop || dir.toLowerCase() === stop || dirname(dir) === dir) break;
+    }
+    return null;
+  }
+  function mountClass(host, { path }) {
+    host.classList.add('vw', 'tc-class');
+    const bar = el('div', 'vw-toolbar');
+    const title = el('span', 'vw-strong', basename(path));
+    title.dataset.userText = '';
+    const info = el('span', 'vw-muted tc-class-info', tr('Compiled Java class'));
+    const open = el('button', 'vw-btn tc-class-source hidden');
+    bar.append(title, info, el('span', 'spacer'), open);
+    const body = el('div', 'tc-class-body');
+    host.append(bar, body);
+    let editor = null;
+    let disposed = false;
+    const say = (text) => body.replaceChildren(el('div', 'tc-class-message muted', text));
+    const showSource = (source) => {
+      if (!source || disposed) return;
+      open.textContent = tr('Open {name}', { name: basename(source) });
+      open.title = source;
+      open.classList.remove('hidden');
+      open.onclick = () => ide.openFile(source);
+    };
+    (async () => {
+      const jdk = await resolve('jdk');
+      if (disposed) return;
+      if (!jdk) {
+        say(tr('A JDK shows what a compiled class declares. Install one in the Install Manager, or open the source file.'));
+        return showSource(await sourceOfClass(path, ''));
+      }
+      const r = await ide.api.invoke('toolchains:javap', path, jdk.id);
+      if (disposed) return;
+      if (!r.ok) {
+        say(tr('javap could not read this class: {error}', { error: r.error }));
+        return showSource(await sourceOfClass(path, ''));
+      }
+      info.textContent = `${tr('Compiled Java class')} · ${label(jdk)}`;
+      body.replaceChildren();
+      editor = ide.monaco.editor.create(body, {
+        value: r.text.replace(/\r\n/g, '\n'), language: 'java', readOnly: true, domReadOnly: true, automaticLayout: true,
+        minimap: { enabled: false }, scrollBeyondLastLine: false, renderLineHighlight: 'none', fontSize: ide.settings.get('editor.fontSize', 13),
+      });
+      showSource(await sourceOfClass(path, r.text));
+    })();
+    return { dispose() { disposed = true; editor?.getModel()?.dispose(); editor?.dispose(); } };
+  }
+  ide.registerFileViewer({ id: 'java-class', match: (p) => /\.class$/i.test(p), mount: mountClass });
+
   // installable(name, title, description, homepage): an Install Manager item for another built-in download of
   // main/installer/toolchains.js (java-lsp's Eclipse JDT Language Server).
   ide.toolchains = { list, refresh, resolve, label, install: installBuiltin, installable: toolchainItem, parseJavac, parseGcc,

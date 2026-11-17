@@ -155,7 +155,7 @@
         const head = el('div', 'sb-dep-group');
         head.dataset.group = g.name;
         const count = g.values.filter((d) => chosen.has(d.id)).length;
-        head.append(el('span', 'sb-twisty', open ? '▾' : '▸'), el('span', null, g.name), ...(count ? [el('span', 'sb-count', String(count))] : []));
+        head.append(ide.ui.twisty('sb-twisty', !!open), el('span', null, g.name), ...(count ? [el('span', 'sb-count', String(count))] : []));
         head.onclick = () => {
           if (collapsed.has(g.name)) collapsed.delete(g.name);
           else collapsed.add(g.name);
@@ -186,7 +186,7 @@
       added.replaceChildren(...(list.length ? list.map((d) => {
         const chip = el('div', 'sb-chip');
         chip.dataset.id = d.id;
-        const x = el('button', 'sb-chip-x', '×');
+        const x = ide.ui.glyph(el('button', 'sb-chip-x'), '×');
         x.title = tr('Remove');
         x.onclick = (e) => {
           e.preventDefault();

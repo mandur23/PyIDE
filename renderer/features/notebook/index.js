@@ -473,7 +473,7 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
     const runAboveBtn = tbtn(null, '⤒', tr('Run All Above'), () => runRange(0, sel), 'nb-run-above');
     const runBelowBtn = tbtn(null, '⤓', tr('Run Cell and All Below'), () => runRange(sel, cells.length), 'nb-run-below');
     const interruptBtn = tbtn('runStop', '■', tr('Interrupt Kernel'), () => interrupt(), 'nb-interrupt');
-    const restartBtn = tbtn(null, '⟳', tr('Restart Kernel'), () => restartKernel(), 'nb-restart');
+    const restartBtn = tbtn('refresh', '⟳', tr('Restart Kernel'), () => restartKernel(), 'nb-restart');
     const addCodeBtn = tbtn('add', '+', tr('Add Code Cell Below'), () => insertCell(sel + 1, 'code', { edit: true }), 'nb-add-code');
     const addMdBtn = tbtn(null, 'M↓', tr('Add Markdown Cell Below'), () => insertCell(sel + 1, 'markdown', { edit: true }), 'nb-add-md');
     const upBtn = tbtn(null, '↑', tr('Move Cell Up'), () => moveCell(sel, -1), 'nb-move-up');

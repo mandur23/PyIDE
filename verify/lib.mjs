@@ -474,3 +474,17 @@ export async function clickMenuPath(ctx, path) {
     if (level === path.length - 1) for (const type of ['mousePressed', 'mouseReleased']) await ctx.cdp('Input.dispatchMouseEvent', { type, x: p.x, y: p.y, button: 'left', clickCount: 1 });
   }
 }
+
+// The Git branch widget's menu (#vcsBranches, renderer/features/vcs showBranches): its own actions (New Branch…,
+// Merge into Current…) are rows, and each branch opens its actions in a submenu.
+export async function openBranchMenu(ctx) {
+  await ctx.click('.vcs-branch');
+  await ctx.until(`!!document.querySelector('#vcsBranches')`, 'the branch menu');
+}
+// Opens the branch menu and clicks the row `label`: an action runs; a branch runs `action` of its submenu (Checkout).
+export async function branchItem(ctx, label, action = 'Checkout') {
+  await openBranchMenu(ctx);
+  await ctx.until(`!!${menuRow(label)}`, `${label} in the branch menu`);
+  const branch = await ctx.js(`${menuRow(label)}.classList.contains('has-sub')`);
+  await clickMenuPath(ctx, branch ? [label, action] : [label]);
+}

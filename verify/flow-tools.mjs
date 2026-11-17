@@ -18,7 +18,7 @@ import http from 'http';
 import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { descendants, launch, processSnapshot } from './lib.mjs';
+import { descendants, launch, processSnapshot, branchItem as branchMenuItem, openBranchMenu } from './lib.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const APP = path.resolve(HERE, '..');
@@ -144,12 +144,8 @@ function helpers(t) {
     await sleep(100);
   }
   const popupOpen = `!document.querySelector('#popup').classList.contains('hidden')`;
-  async function branchItem(label) {
-    await mouse(`document.querySelector('.vcs-branch')`, { label: 'branch widget' });
-    await until(popupOpen, 'branch popup');
-    await type(label);
-    await until(`document.querySelector('.popup-item.active .label')?.textContent === ${q(label)}`, `popup item ${label}`);
-    await press('Enter');
+  async function branchItem(label, checkout = 'Checkout') {
+    await branchMenuItem(t, label, checkout);
   }
   async function pickInPopup(placeholder, name) {
     await until(`${popupOpen} && document.querySelector('#popupIn').placeholder === ${q(placeholder)}`, placeholder);

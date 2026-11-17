@@ -244,6 +244,8 @@ ipcMain.handle('fs:walk', (_e, root, excludedDirs = []) => fsScan('walk', root, 
 // IPC) would wait for it. The renderer checks the last project and recent projects with this.
 const exists = (p) => fs.promises.access(p).then(() => true, () => false);
 ipcMain.handle('fs:exists', (_e, p) => exists(p));
+// Whether the project has anything of Python in it (main/project-python.js): its Python parts show only then.
+ipcMain.handle('project:usesPython', (_e, root) => require('./main/project-python').usesPython(root));
 // 'exists', 'missing' or 'unreachable' within ms, for a recent project: a folder whose drive or network share is not
 // there (a share that does not answer, a drive that is not connected) cannot be reached, which is not the same as a
 // deleted folder. Each unanswered check holds one of libuv's four file threads for ~20 s, so a path being checked
@@ -434,7 +436,9 @@ ipcMain.handle('py:interpreters', async (_e, root, extraPaths = []) => {
     if (!(await exists(p))) continue;
     candidates.push([p, [], path.resolve(p).toLowerCase().startsWith(ownPython) ? 'Nano Studio Python' : path.basename(path.dirname(path.dirname(p))) || p]);
   }
-  candidates.push(['py', ['-3'], 'py launcher'], ['python', [], 'python']);
+  // The Python that `py` and `python` start has no name of its own: it is listed by its version alone ("Python 3.14.0"),
+  // not by the program that found it ("py launcher").
+  candidates.push(['py', ['-3'], null], ['python', [], null]);
   for (const p of await installedPythons()) candidates.push([p, [], path.basename(path.dirname(p))]);
   const infos = await Promise.all(candidates.map(([cmd, args]) => probeInterpreter(cmd, args)));
   const found = [];
@@ -445,7 +449,7 @@ ipcMain.handle('py:interpreters', async (_e, root, extraPaths = []) => {
     const info = infos[i];
     if (!info || seen.has(real[i].toLowerCase())) return;
     seen.add(real[i].toLowerCase());
-    found.push({ cmd, args, label: `${label} (Python ${info.version})`, executable: info.executable, version: info.version });
+    found.push({ cmd, args, label: label ? `${label} (Python ${info.version})` : `Python ${info.version}`, executable: info.executable, version: info.version });
   });
   interpLog.info(`${found.length} of ${candidates.length} candidates in ${Math.round(performance.now() - t0)} ms, ${probesStarted - started} probed`);
   return found;

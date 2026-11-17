@@ -461,7 +461,8 @@
     if (loadedFor !== ide.root) await loadHistory();
     const chats = history.chats.filter((c) => c.messages.length);
     const fmt = (t) => new Date(t).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
-    const choice = await ide.ui.pick({
+    const button = [...document.querySelectorAll('button, .tw-action')].find((b) => b.title === tr('Chat History') && b.getClientRects().length);
+    const choice = await ide.ui.pickAt(button, {
       placeholder: chats.length ? tr('Open a chat') : tr('No chats yet'),
       items: chats.map((c) => ({ label: c.title || tr('New Chat'), detail: fmt(c.updated), hint: tr('{n} messages', { n: c.messages.length }), value: c.id })),
     });
@@ -564,7 +565,7 @@
     chip.appendChild(el('span', 'aic-chip-icon', kind === 'selection' ? '⌶' : '📄'));
     chip.appendChild(userText('span', 'aic-chip-label', label));
     if (onRemove) {
-      const x = el('button', 'aic-chip-x', '×');
+      const x = ide.ui.glyph(el('button', 'aic-chip-x'), '×');
       x.title = tr('Remove');
       x.onclick = (e) => { e.stopPropagation(); onRemove(); renderChips(); };
       chip.appendChild(x);

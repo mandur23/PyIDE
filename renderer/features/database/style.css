@@ -48,8 +48,8 @@
 .db-results { flex: 1 1 45%; min-height: 60px; display: flex; flex-direction: column; overflow: hidden; }
 .db-result-bar { display: flex; align-items: center; gap: 6px; padding: 3px 8px; border-bottom: 1px solid var(--gray3); flex-shrink: 0; font-size: 12px; }
 .db-result-status { flex: 1; color: var(--gray9); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.db-copy { padding: 2px 8px; border-radius: 4px; color: var(--gray10); }
-.db-copy:hover:not(:disabled) { background: var(--gray3); }
+.db-copy, .db-more { padding: 2px 8px; border-radius: 4px; color: var(--gray10); }
+.db-copy:hover:not(:disabled), .db-more:hover { background: var(--gray3); }
 .db-copy:disabled { opacity: .4; cursor: default; }
 .db-export { padding: 2px 8px; border-radius: 4px; color: var(--gray10); }
 .db-export:hover:not(:disabled) { background: var(--gray3); }

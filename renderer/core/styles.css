@@ -11,6 +11,13 @@ html, body { margin: 0; height: 100%; background: var(--gray1); color: var(--gra
 body { display: flex; flex-direction: column; }
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
 input, select, textarea { font: inherit; }
+/* Every select box draws the chevron the menus and trees use instead of the system's arrow, and its list takes the
+   app's colours. !important: features set `background` as a whole, which would drop the chevron. */
+select:not([multiple]):not([size]) { appearance: none; -webkit-appearance: none; cursor: default; border-radius: 6px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%239da0a8' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") !important; background-repeat: no-repeat !important;
+  background-position: right 6px center !important; background-size: 14px 14px !important; padding-right: 24px !important; }
+select option, select optgroup { background: var(--gray2); color: var(--gray12); }
+select:disabled { opacity: .5; }
 .spacer { flex: 1; }
 .hidden { display: none !important; }
 
@@ -92,6 +99,30 @@ input, select, textarea { font: inherit; }
 .node .arrow svg { width: 16px; height: 16px; }
 .node .arrow.open svg { transform: rotate(90deg); }
 .node:hover .arrow, .node.selected .arrow { color: var(--gray12); }
+/* A tool window with nothing to show says so the same way everywhere: centred at its top, muted, in the UI font.
+   `body` makes the rule win over each feature's own (padding and alignment used to differ from window to window). */
+body :is(.vcs-empty, .dbg-empty, .ws-empty, .db-empty, .db-placeholder, .notes-empty, .fw-empty, .gh-empty, .sem-empty,
+  .ports-empty, .lh-empty, .http-empty, .ra-empty, .inst-empty, .diag-empty, .run-empty) {
+  padding: 24px 16px; text-align: center; color: var(--gray8); font: 13px/1.5 'Inter', 'Segoe UI', sans-serif; }
+body :is(.db-empty, .vcs-empty) { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+body .ws-empty-hint { padding: 0 16px 16px; text-align: center; }
+body .list-row.muted:only-child { height: auto; padding: 24px 16px; justify-content: center; text-align: center; color: var(--gray8); }
+/* ide.ui.glyph: a one-character button drawn with the shared icon. */
+.glyph-icon { display: inline-flex; align-items: center; justify-content: center; }
+.glyph-icon > .ide-icon { display: inline-flex; }
+.glyph-icon > .ide-icon svg { width: 16px; height: 16px; }
+.menu-filter { margin: 2px 4px 4px; padding: 3px 8px; border-radius: 4px; background: var(--gray3); color: var(--gray12);
+  font-size: 12px; white-space: pre; }
+.menu-filter::before { content: '⌕ '; color: var(--gray8); }
+.context-menu.filtered > .menu-sep, .context-menu.filtered > .menu-header { display: none; }
+.menu-none { padding: 6px 10px; color: var(--gray8); font-size: 12px; }
+.menu-tick { color: var(--blue7, var(--gray11)); font-size: 12px; margin-left: 2px; }
+/* ide.ui.twisty: the same chevron in every other tree. Two classes, so a tree's own arrow rule does not resize it. */
+.tw.tw { width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  color: var(--gray9); font-size: 0; cursor: default; }
+.tw.tw svg { width: 16px; height: 16px; }
+.tw.tw.open svg { transform: rotate(90deg); }
+:hover > .tw.tw, .selected > .tw.tw { color: var(--gray12); }
 /* Indent guides (rowNode sets --guides): a 1px line at the centre of each ancestor folder's chevron, from level 1. */
 .node::before { content: ''; position: absolute; top: 0; bottom: 0; left: 28px; width: var(--guides, 0); pointer-events: none;
   background: repeating-linear-gradient(to right, var(--tree-guide) 0 1px, transparent 1px 16px); }
@@ -356,7 +387,9 @@ body.app-cut #status:not(:has(:is(#bgTasks, #ideErrors, #updateStatus):not(.hidd
 .run-widget .run-target { height: 26px; }
 .status-interp { display: flex; align-items: center; gap: 4px; color: inherit; padding: 0 4px; border-radius: 3px; height: 20px; font: inherit; }
 .status-interp:hover { background: var(--gray3); }
-.status-interp::after { content: '▾'; font-size: 9px; color: var(--gray7); }
+body.no-python .status-interp { display: none; }
+.status-interp .ide-icon { color: var(--gray7); }
+.status-interp .ide-icon svg { width: 12px; height: 12px; }
 
 /* Welcome screen */
 #welcome { justify-content: flex-start; padding-top: 10vh; }

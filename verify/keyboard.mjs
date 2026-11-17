@@ -38,7 +38,9 @@ async function tabTrapped(n = 25) {
   }
   return true;
 }
-const selectedText = (sel) => js(`document.querySelector(${q(`${sel} .selected`)})?.textContent || ''`);
+// A tree row's text with its arrow as ▸ (closed) or ▾ (open): the arrows are drawn (ide.ui.twisty), not text.
+const ROW_TEXT = `((r) => { const a = r?.querySelector('.tw'); return r ? (a?.dataset.open === 'true' ? '▾' : a?.dataset.open === 'false' ? '▸' : '') + r.textContent : ''; })`;
+const selectedText = (sel) => js(`${ROW_TEXT}(document.querySelector(${q(`${sel} .selected`)}))`);
 
 try {
   await openFile(t, 'main.py');
@@ -371,10 +373,10 @@ try {
   await until(`document.activeElement?.id === 'dbgFrames'`, 'frames focused').then(() => check(true, 'Alt+5 puts the keyboard in the Frames list'), () => check(false, 'Alt+5 puts the keyboard in the Frames list'));
   await press('ArrowDown');
   await until(`window.__debugger.state().frameIdx === 1`, 'second frame').then(() => check(true, 'Down in Frames selects the caller frame'), () => check(false, 'Down in Frames selects the caller frame'));
-  await until(`[...document.querySelectorAll('#dbgVars .dbg-var')].some(r => r.textContent.startsWith('▸info'))`, 'module variables');
+  await until(`[...document.querySelectorAll('#dbgVars .dbg-var')].some(r => ${ROW_TEXT}(r).startsWith('▸info'))`, 'module variables');
   await press('Tab');
   check(await js(`document.activeElement?.id === 'dbgVars'`), 'Tab moves from Frames to Variables');
-  const infoIndex = await js(`[...document.querySelectorAll('#dbgVars .dbg-var:not(.muted)')].findIndex(r => r.textContent.startsWith('▸info'))`);
+  const infoIndex = await js(`[...document.querySelectorAll('#dbgVars .dbg-var:not(.muted)')].findIndex(r => ${ROW_TEXT}(r).startsWith('▸info'))`);
   await press('Home');
   for (let i = 0; i < infoIndex; i++) await press('ArrowDown');
   check((await selectedText('#dbgVars')).startsWith('▸info'), 'Down walks the variables to info');

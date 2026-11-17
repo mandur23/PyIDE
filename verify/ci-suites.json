@@ -118,6 +118,7 @@
  { "name": "error-help", "file": "verify/error-help.mjs", "timeout": 10, "seconds": 7 },
  { "name": "tree-drag-out", "file": "verify/tree-drag-out.mjs", "timeout": 10, "seconds": 12 },
  { "name": "tree-paste", "file": "verify/tree-paste.mjs", "timeout": 10, "seconds": 25 },
+ { "name": "project-kind", "file": "verify/project-kind.mjs", "timeout": 10, "seconds": 30 },
  { "name": "html-preview-app", "file": "verify/html-preview-app.mjs", "timeout": 10, "seconds": 6 },
  { "name": "html-preview-templates", "file": "verify/html-preview-templates.mjs", "timeout": 10, "seconds": 6 },
  { "name": "rerun-on-save", "file": "verify/rerun-on-save.mjs", "timeout": 10, "seconds": 20 },

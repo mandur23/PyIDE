@@ -294,7 +294,7 @@
         const name = nameCell(n.fn);
         name.style.paddingLeft = `${depth * 16 + 4}px`;
         const leaf = !childrenOf(n).length;
-        const arrow = el('span', 'pf-arrow', leaf ? '' : expanded.has(k) ? '▾' : '▸');
+        const arrow = ide.ui.twisty('pf-arrow', leaf ? null : expanded.has(k));
         arrow.onclick = (e) => { e.stopPropagation(); toggle(n); };
         name.prepend(arrow);
         row.append(name, el('span', 'pf-num', String(n.calls)), timeCell(n.time, true), timeCell(ownOf(n), false));

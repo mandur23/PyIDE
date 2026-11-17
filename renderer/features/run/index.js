@@ -318,7 +318,7 @@
     const tabIcon = el('span', 'run-tab-icon');
     tabIcon.appendChild(ide.icon(typeIcon(cfg.type)));
     s.tab.append(tabIcon, tabTitle);
-    const close = el('button', 'run-tab-close', '×');
+    const close = ide.ui.glyph(el('button', 'run-tab-close'), '×');
     close.title = tr('Close');
     close.onclick = (e) => { e.stopPropagation(); closeSession(s); };
     s.tab.appendChild(close);
@@ -946,7 +946,7 @@
     if (!running.length && debugActive) return ide.runAction('StopDebug');
     if (running.length === 1) return running[0].stop();
     if (running.length > 1) {
-      ide.ui.pick({ placeholder: tr('Stop process'), items: running.map((s) => ({ label: s.title, icon: 'runStop', value: s })) })
+      ide.ui.pickAt(stopBtn, { placeholder: tr('Stop process'), items: running.map((s) => ({ label: s.title, icon: 'runStop', value: s })) })
         .then((s) => s?.stop());
     }
   }

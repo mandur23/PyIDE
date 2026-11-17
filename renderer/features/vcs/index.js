@@ -312,31 +312,47 @@
     if (gitTw.isVisible()) loadLog();
   }
 
+  // The branch widget's menu, under the widget like the project widget's: New Branch and the plugins' actions, then
+  // the local and the remote branches, each with its own actions in a submenu (PyCharm's branch popup).
   async function showBranches() {
     if (!repo) return;
     const { local, remote } = await invoke('branches', ide.root);
-    const items = [{ label: tr('New Branch…'), icon: 'add', value: { create: true } }];
-    const extra = branchActions.flatMap((fn) => fn(repo, { local, remote }));
+    const extra = branchActions.flatMap((fn) => fn(repo, { local, remote }))
+      .map((it) => ({ label: it.label, icon: it.icon, run: it.value?.run || it.run }));
+    const create = { label: tr('New Branch…'), icon: 'add', run: newBranch };
+    const localRow = (b) => ({
+      label: b, userText: true, checked: b === repo.branch, icon: 'branch', hint: b === repo.branch ? tr('current') : '',
+      submenu: [
+        { label: tr('Checkout'), disabled: b === repo.branch, run: () => checkoutBranch({ name: b }, local) },
+        { label: tr('Rename…'), run: () => renameBranch(b) },
+        { label: tr('Delete'), disabled: b === repo.branch, run: () => deleteBranch(b) },
+      ],
+    });
+    const remoteRow = (b) => ({
+      label: b, userText: true, icon: 'web',
+      submenu: [{ label: tr('Checkout'), run: () => checkoutBranch({ name: b, remote: true }, local) }],
+    });
+    const r = branchBtn.getBoundingClientRect();
     // While an operation is stopped its Continue / Abort come first, as in PyCharm.
-    if (repo.op) items.unshift(...extra); else items.push(...extra);
-    for (const b of local) items.push({ label: b, icon: b === repo.branch ? '★' : '⑂', hint: b === repo.branch ? tr('current') : tr('Local'), value: { name: b } });
-    for (const b of remote) items.push({ label: b, icon: 'web', hint: tr('Remote'), value: { name: b, remote: true } });
-    const watch = watchBranchPopup(local);
-    const choice = await ide.ui.pick({ placeholder: tr('Git Branches — {branch}', { branch: repo.branch || repo.detached }), items });
-    watch.dispose();
-    if (watch.menu) return branchMenu(watch.menu, local);
-    if (!choice) return;
-    if (choice.run) return choice.run();
-    if (choice.create) {
-      const name = await ide.ui.prompt(tr('New branch name'), '');
-      if (!name) return;
-      await ide.saveAll(); // like PyCharm: unsaved edits reach disk before HEAD moves, so git sees (and carries) them
-      const r = await invoke('newBranch', ide.root, name.replace(/\s+/g, '-'));
-      logResult(r);
-      if (!r.ok) return notify(tr('Branch creation failed'), errorText(r), 'error', true);
-      return afterCheckout();
-    }
-    return checkoutBranch(choice, local);
+    const menu = ide.ui.contextMenu(r.left, r.bottom + 4, [
+      ...(repo.op ? [...extra, { separator: true }, create] : [create, ...extra]),
+      local.length && { separator: true },
+      local.length && { header: tr('Local') },
+      ...local.map(localRow),
+      remote.length && { separator: true },
+      remote.length && { header: tr('Remote') },
+      ...remote.map(remoteRow),
+    ], { filter: true });
+    if (menu) menu.id = 'vcsBranches';
+  }
+  async function newBranch() {
+    const name = await ide.ui.prompt(tr('New branch name'), '');
+    if (!name) return;
+    await ide.saveAll(); // like PyCharm: unsaved edits reach disk before HEAD moves, so git sees (and carries) them
+    const r = await invoke('newBranch', ide.root, name.replace(/\s+/g, '-'));
+    logResult(r);
+    if (!r.ok) return notify(tr('Branch creation failed'), errorText(r), 'error', true);
+    return afterCheckout();
   }
   branchBtn.onclick = showBranches;
 
@@ -388,41 +404,6 @@
       });
       dlg.el.id = 'vcsSmartCheckout';
     });
-  }
-
-  // A local branch's own actions, as in PyCharm's branch popup: Right on the selected branch, or a right-click on one,
-  // closes the popup and opens them beside that row. ide.ui.pick has no submenus, so the popup is watched while open.
-  function watchBranchPopup(local) {
-    const input = document.getElementById('popupIn');
-    const list = document.getElementById('popupList');
-    const watch = { menu: null };
-    const open = (row, e) => {
-      const v = row?._item?.value;
-      if (!v?.name || v.remote || !local.includes(v.name)) return;
-      e.preventDefault();
-      e.stopPropagation();
-      const r = row.getBoundingClientRect();
-      watch.menu = { name: v.name, x: Math.min(r.right - 8, r.left + 260), y: r.top };
-      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-    };
-    const onKey = (e) => {
-      if (e.key === 'ArrowRight' && input.selectionStart === input.value.length) open(list.querySelector('.popup-item.active'), e);
-    };
-    const onMouse = (e) => { if (e.button === 2) open(e.target.closest('.popup-item'), e); };
-    input.addEventListener('keydown', onKey, true);
-    list.addEventListener('mousedown', onMouse, true);
-    watch.dispose = () => { input.removeEventListener('keydown', onKey, true); list.removeEventListener('mousedown', onMouse, true); };
-    return watch;
-  }
-
-  function branchMenu({ name, x, y }, local) {
-    const current = name === repo?.branch;
-    const menu = ide.ui.contextMenu(x, y, [
-      { label: tr('Checkout'), disabled: current, run: () => checkoutBranch({ name }, local) },
-      { label: tr('Rename…'), run: () => renameBranch(name) },
-      { label: tr('Delete'), disabled: current, run: () => deleteBranch(name) },
-    ]);
-    if (menu) menu.id = 'vcsBranchMenu';
   }
 
   async function renameBranch(from) {
@@ -628,7 +609,7 @@
     cb.indeterminate = on > 0 && on < files.length;
     cb.disabled = !files.length || conflicts;
     cb.onchange = () => { for (const f of files) included.set(key(f.path), cb.checked); renderChanges(); };
-    head.append(el('span', 'arrow', '▾'), cb, el('span', 'vcs-group-title', title), el('span', 'muted', nFiles(files.length)));
+    head.append(ide.ui.twisty('arrow', true), cb, el('span', 'vcs-group-title', title), el('span', 'muted', nFiles(files.length)));
     if (conflicts && conflictHandler) {
       const link = el('a', 'vcs-resolve-link', tr('Resolve'));
       link.href = '#';
@@ -677,7 +658,7 @@
       cb.onclick = (e) => e.stopPropagation();
       cb.onchange = () => { for (const f of inDir) included.set(key(f.path), cb.checked); renderChanges(); };
       const name = userText('span', 'vcs-folder-name', samePath(dir, ide.root) ? basename(ide.root) : ide.util.rel(dir));
-      head.append(el('span', 'arrow', open ? '▾' : '▸'), cb, Object.assign(ide.fileIcon(dir, { dir: true }), { className: 'file-icon icon' }), name, el('span', 'muted', nFiles(inDir.length)));
+      head.append(ide.ui.twisty('arrow', !!open), cb, Object.assign(ide.fileIcon(dir, { dir: true }), { className: 'file-icon icon' }), name, el('span', 'muted', nFiles(inDir.length)));
       head.onclick = () => { folderOpen.set(key(dir), !open); renderChanges(); };
       head.oncontextmenu = (e) => { e.preventDefault(); changeMenu(e, inDir); };
       listEl.appendChild(head);
@@ -1862,7 +1843,7 @@
     logPane.classList.toggle('history', !!historyOf);
     historyChip.classList.toggle('hidden', !historyOf);
     if (!historyOf) { closePreview(); historyChip.replaceChildren(); return; }
-    const all = el('button', 'vcs-log-path-close', '×');
+    const all = ide.ui.glyph(el('button', 'vcs-log-path-close'), '×');
     all.title = tr('Show All Commits');
     all.onclick = () => showHistory(null);
     historyChip.replaceChildren(el('span', 'muted', tr('Path:')), userText('span', 'vcs-log-path-name', ide.util.rel(historyOf)), all);
@@ -2206,7 +2187,7 @@
       const open = shelfOpen.has(s.id);
       const row = el('div', 'vcs-shelf-row' + (s.id === shelfSel.id && !shelfSel.rels.size ? ' selected' : ''));
       Object.assign(row.dataset, { id: s.id, key: `s:${s.id}`, depth: '0' });
-      const arrow = el('span', 'arrow', open ? '▾' : '▸');
+      const arrow = ide.ui.twisty('arrow', !!open);
       arrow.onclick = (e) => { e.stopPropagation(); toggleShelf(s.id); };
       row.append(arrow, userText('span', 'vcs-shelf-name', s.name), el('span', 'muted vcs-shelf-count', nFiles(s.files.length)),
         el('span', 'muted vcs-shelf-date', fmtDate(s.time / 1000)));

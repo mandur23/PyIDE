@@ -5,7 +5,6 @@
   "0 hides the ruler": "0이면 눈금자를 숨깁니다",
   "Action": "액션",
   "Actions on Save": "저장 시 액션",
-  "Add Interpreter ▾": "인터프리터 추가 ▾",
   "Add Local Interpreter…": "로컬 인터프리터 추가…",
   "Added {name}": "추가했습니다: {name}",
   "Appearance": "외관",
@@ -204,5 +203,6 @@
   "Project View": "프로젝트 뷰",
   "Compact middle packages": "중간 패키지 압축",
   "This plugin comes from a Marketplace index that is not signed by Nano Studio.": "이 플러그인은 Nano Studio가 서명하지 않은 마켓플레이스 인덱스에서 제공돼요.",
-  "Install or remove packages in the Python Packages window": "패키지 설치와 제거는 Python 패키지 창에서 합니다"
+  "Install or remove packages in the Python Packages window": "패키지 설치와 제거는 Python 패키지 창에서 합니다",
+  "Add Interpreter": "인터프리터 추가"
 }

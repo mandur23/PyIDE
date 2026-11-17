@@ -195,7 +195,7 @@
         row.dataset.status = st;
         row.style.paddingLeft = `${depth * 16 + 4}px`;
         const hasKids = n.children?.length;
-        const arrow = el('span', 'tr-arrow', hasKids ? (n.collapsed ? '▸' : '▾') : '');
+        const arrow = ide.ui.twisty('tr-arrow', hasKids ? !n.collapsed : null);
         arrow.onclick = (e) => { e.stopPropagation(); n.collapsed = !n.collapsed; renderTree(); };
         const name = el('span', 'tr-name', n.name);
         // Test, class and file names are user data; the root and "collection error" rows are UI text.

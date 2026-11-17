@@ -58,12 +58,12 @@
     const head = el('div', 'list-row sn-file');
     const isCollapsed = collapsed.has(path.toLowerCase());
     g.classList.toggle('collapsed', isCollapsed);
-    const arrow = el('span', 'sn-arrow', isCollapsed ? '▸' : '▾');
+    const arrow = ide.ui.twisty('sn-arrow', !isCollapsed);
     head.append(arrow, Object.assign(fileIcon(path), { className: 'file-icon sn-ficon' }), userText(el('span', 'sn-fname', basename(path))),
       userText(el('span', 'sn-fdir', rel(dirname(path)))), el('span', 'sn-count', countText));
     head.onclick = () => {
       const c = g.classList.toggle('collapsed');
-      arrow.textContent = c ? '▸' : '▾';
+      ide.ui.setTwisty(arrow, !c);
       c ? collapsed.add(path.toLowerCase()) : collapsed.delete(path.toLowerCase());
     };
     const body = el('div', 'sn-children');
@@ -82,7 +82,7 @@
   function setAllCollapsed(list, collapsed, value) {
     for (const g of list.querySelectorAll('.sn-group')) {
       g.classList.toggle('collapsed', value);
-      g.querySelector('.sn-arrow').textContent = value ? '▸' : '▾';
+      ide.ui.setTwisty(g.querySelector('.sn-arrow'), !value);
     }
     collapsed.clear();
     if (value) for (const n of list.querySelectorAll('.sn-group .sn-file')) collapsed.add(n.parentElement.dataset.path);
@@ -670,7 +670,7 @@
   function renderStructure(tab, o) {
     structList.replaceChildren();
     const head = el('div', 'sn-node sn-root');
-    head.append(el('span', 'sn-arrow', '▾'), Object.assign(fileIcon(tab.path), { className: 'file-icon sn-ficon' }), userText(el('span', 'sn-name', tab.title)));
+    head.append(ide.ui.twisty('sn-arrow', true), Object.assign(fileIcon(tab.path), { className: 'file-icon sn-ficon' }), userText(el('span', 'sn-name', tab.title)));
     structList.append(head);
     if (o.error) structList.append(el('div', 'sn-node sn-err', o.error));
     const add = (items, depth, prefix) => {
@@ -681,7 +681,7 @@
         const row = el('div', 'sn-node');
         row.style.paddingLeft = `${depth * 16 + 4}px`;
         Object.assign(row.dataset, { key, line: it.line, end: it.endLine, name: it.name, kind: it.kind, depth, parent: it.children.length ? '1' : '' });
-        const arrow = el('span', 'sn-arrow', it.children.length ? (open ? '▾' : '▸') : '');
+        const arrow = ide.ui.twisty('sn-arrow', it.children.length ? !!open : null);
         arrow.onclick = (e) => {
           e.stopPropagation();
           open ? structCollapsed.add(key) : structCollapsed.delete(key);

@@ -90,7 +90,7 @@
       ...recent,
       ide.root && { separator: true },
       ide.root && act('CloseProject'),
-    ]));
+    ]), { filter: true });
   };
 
   // ---------- main menu ----------
@@ -222,12 +222,12 @@
     const r = $('statusInterp').getBoundingClientRect();
     const cur = ide.currentInterp();
     ide.ui.contextMenu(r.right - 300, r.top - 8, tidy([
-      ...ide.interps.map((it) => ({ label: it.label, detail: it.executable, userText: true, checked: cur && samePath(cur.executable, it.executable), icon: cur && samePath(cur.executable, it.executable) ? undefined : 'python', run: () => ide.setInterpreter(it.executable) })),
+      ...ide.interps.map((it) => ({ label: it.label, detail: it.executable, userText: true, checked: cur && samePath(cur.executable, it.executable), icon: cur && samePath(cur.executable, it.executable) ? 'python' : 'python', run: () => ide.setInterpreter(it.executable) })),
       { separator: true },
       ide.openSettings && { label: tr('Add New Interpreter…'), icon: 'add', run: () => ide.openSettings('interpreter', { add: 'menu' }) },
       ide.root && ide.actions.some((a) => a.id === 'CreateVirtualEnvironment') && { label: tr('Create Virtual Environment…'), icon: 'newFolder', run: () => ide.runAction('CreateVirtualEnvironment') },
       ide.openSettings && { label: tr('Interpreter Settings…'), icon: 'settings', run: () => ide.openSettings('interpreter') },
-    ]));
+    ]), { filter: true });
     // The menu opens upward from the status bar.
     const m = document.querySelector('#menuHost .context-menu');
     if (m) m.style.top = `${Math.max(4, r.top - m.offsetHeight - 4)}px`;
@@ -247,7 +247,7 @@
       const path = el('div', 'welcome-recent-path', p.path);
       name.dataset.userText = path.dataset.userText = '';
       text.append(name, path);
-      const remove = el('button', 'welcome-recent-remove', '×');
+      const remove = ide.ui.glyph(el('button', 'welcome-recent-remove'), '×');
       remove.title = tr('Remove from Recent Projects');
       remove.onclick = (e) => {
         e.stopPropagation();

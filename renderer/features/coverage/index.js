@@ -307,7 +307,7 @@
       row.dataset.kind = n.dir ? 'dir' : 'file';
       const name = el('span', 'cov-name');
       name.style.paddingLeft = `${depth * 16 + 4}px`;
-      const arrow = el('span', 'cov-arrow', n.dir ? (collapsed.has(key(n.path)) ? '▸' : '▾') : '');
+      const arrow = ide.ui.twisty('cov-arrow', n.dir ? !collapsed.has(key(n.path)) : null);
       arrow.onclick = (e) => { e.stopPropagation(); toggle(n); };
       const label = el('span', 'cov-label', n.name);
       label.dataset.userText = '';

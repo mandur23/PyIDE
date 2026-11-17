@@ -393,7 +393,7 @@
       if (node.children) {
         const g = el('div', 'settings-nav-row settings-group');
         g.dataset.group = node.group;
-        g.append(el('span', 'settings-arrow', '▾'), el('span', 'settings-nav-label', node.title()));
+        g.append(ide.ui.twisty('settings-arrow', true), el('span', 'settings-nav-label', node.title()));
         g.onclick = () => {
           if (collapsed.has(node.group)) collapsed.delete(node.group); else collapsed.add(node.group);
           renderCollapse();
@@ -415,7 +415,7 @@
       for (const node of TREE) {
         if (!node.children) continue;
         const isCollapsed = collapsed.has(node.group);
-        groupRows.get(node.group).querySelector('.settings-arrow').textContent = isCollapsed ? '▸' : '▾';
+        ide.ui.setTwisty(groupRows.get(node.group).querySelector('.settings-arrow'), !isCollapsed);
         for (const c of node.children) rows.get(c.id).classList.toggle('collapsed', isCollapsed);
       }
     }
@@ -1413,7 +1413,8 @@
     const top = el('div', 'interp-row');
     const sel = el('select', 'interp-select');
     sel.id = 'settingsInterp';
-    const addBtn = el('button', 'secondary', tr('Add Interpreter ▾'));
+    const addBtn = el('button', 'secondary', tr('Add Interpreter'));
+    addBtn.appendChild(ide.icon('chevronDown', '▾'));
     addBtn.id = 'addInterpBtn';
     top.append(el('span', null, tr('Python Interpreter:')), sel, addBtn);
     const status = el('div', 'muted settings-note');

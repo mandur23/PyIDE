@@ -69,7 +69,7 @@
     return a;
   };
   function closeButton(run) {
-    const x = el('span', 'venv-bar-close', '×');
+    const x = ide.ui.glyph(el('span', 'venv-bar-close'), '×');
     x.dataset.action = 'close';
     x.title = tr('Close');
     x.onclick = run;

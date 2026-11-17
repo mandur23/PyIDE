@@ -271,7 +271,7 @@ module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, g
     };
   }
 
-  const OPEN = 'SELECT * FROM {qualified} FETCH FIRST 200 ROWS ONLY;';
+  const OPEN = 'SELECT * FROM {qualified} FETCH FIRST 500 ROWS ONLY;';
   return {
     packages: { oracledb: 'oracledb@7.0.1' },
     kinds: {

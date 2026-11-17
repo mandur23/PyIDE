@@ -11,7 +11,7 @@ import { createRequire } from 'module';
 import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { clickMenuPath, launch, lensesShown, menuRow, openFile } from './lib.mjs';
+import { clickMenuPath, launch, lensesShown, menuRow, openBranchMenu, openFile } from './lib.mjs';
 import { englishLeaks, missingTranslations } from './i18n-lib.mjs';
 
 const APP = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -90,16 +90,13 @@ function helpers(t) {
   // The diff editor shown in a host (mountDiff keeps it on the host as _vcsDiff): its two texts.
   const diffTexts = (host) => js(`(() => { const d = ${host}?._vcsDiff; if (!d) return null; const m = d.getModel(); return { left: m.original.getValue(), right: m.modified.getValue() }; })()`);
   const tabDiff = `[...document.querySelectorAll('.vcs-diff-body')].map(b => b.parentElement).find(h => h._vcsDiff && h.offsetParent && !h.classList.contains('vcs-history-diff'))`;
-  async function branchPopup(name) {
-    await mouse(`document.querySelector('.vcs-branch')`, { label: 'branch widget' });
-    await until(popupOpen, 'branch popup');
-    await t.type(name);
-    await until(`document.querySelector('#popupList .popup-item.active .label')?.textContent === ${q(name)}`, `${name} selected in the popup`);
-  }
+  // Opens the branch menu and, with the pointer on the branch's row, its submenu of actions.
   async function branchMenu(name) {
-    await branchPopup(name);
-    await t.press('ArrowRight');
-    await until(`!!document.querySelector('#vcsBranchMenu') && !document.querySelector('#popup:not(.hidden)')`, `branch menu of ${name}`);
+    await openBranchMenu(t);
+    await until(`!!${menuRow(name)}`, `${name} in the branch menu`);
+    const p = await js(`(() => { const r = ${menuRow(name)}.getBoundingClientRect(); return { x: r.x + 20, y: r.y + r.height / 2 }; })()`);
+    await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y });
+    await until(`!!document.querySelector('.context-menu[data-level="1"]')`, `the actions of ${name}`);
   }
   // Right-click in the editor's text until its context menu shows `path` (a click while code lenses still move the
   // lines can land outside the text), then click it.
@@ -113,7 +110,7 @@ function helpers(t) {
       await t.press('Escape');
     }
   }
-  return { frame, until, mouse, editorMenu, popupOpen, menuItem, dialog, dialogButton, noteWith, logSubjects, logRow, diffTexts, tabDiff, branchPopup, branchMenu };
+  return { frame, until, mouse, editorMenu, popupOpen, menuItem, dialog, dialogButton, noteWith, logSubjects, logRow, diffTexts, tabDiff, branchMenu };
 }
 
 async function untilNode(fn, label, ms = 15000) {
@@ -218,8 +215,8 @@ try {
   git(project, 'branch', '-f', 'merged-topic', 'HEAD');
   const mergedHash = git(project, 'rev-parse', 'merged-topic');
   await h.branchMenu('merged-topic');
-  check(await js(`[...document.querySelectorAll('#vcsBranchMenu .menu-item')].map(r => r.querySelector('.menu-label').textContent + (r.classList.contains('disabled') ? '(off)' : '')).join('|')`) === 'Checkout|Rename…|Delete',
-    'Right on a local branch in the popup opens Checkout, Rename… and Delete');
+  check(await js(`[...document.querySelectorAll('.context-menu[data-level="1"] .menu-item')].map(r => r.querySelector('.menu-label').textContent + (r.classList.contains('disabled') ? '(off)' : '')).join('|')`) === 'Checkout|Rename…|Delete',
+    'a local branch in the branch menu opens Checkout, Rename… and Delete');
   await shot('branch-menu.png');
   for (let i = 0; i < 3; i++) await press('ArrowDown');
   await press('Enter');
@@ -230,10 +227,10 @@ try {
   await untilNode(() => branches(project).includes('merged-topic'), 'merged-topic restored');
   check(git(project, 'rev-parse', 'merged-topic') === mergedHash, 'Restore in the notification brings the branch back at its commit');
 
-  await h.branchPopup('wip');
-  await mouse(`[...document.querySelectorAll('#popupList .popup-item')].find(r => r.querySelector('.label')?.textContent === 'wip')`, { button: 'right', label: 'wip row' });
-  await until(`!!document.querySelector('#vcsBranchMenu')`, 'branch menu by right-click');
-  check(git(project, 'branch', '--show-current') === 'main', 'a right-click on a branch opens its actions instead of checking it out');
+  await h.branchMenu('wip');
+  await mouse(menuRow('wip'), { label: 'wip row' });
+  await until(`!!document.querySelector('.context-menu[data-level="1"]')`, 'the actions stay open after a click on the branch');
+  check(git(project, 'branch', '--show-current') === 'main', 'a click on a branch opens its actions instead of checking it out');
   await mouse(h.menuItem('Delete'), { label: 'Delete' });
   await until(`!!${h.dialog('Branch Is Not Fully Merged')}`, 'unmerged question');
   check(await js(`(() => { const d = ${h.dialog('Branch Is Not Fully Merged')}; return d.textContent.includes('The branch wip is not fully merged to the branch main.') && d.querySelector('.vcs-unmerged-commits').textContent.includes('WIP experiment'); })()`),
@@ -250,10 +247,10 @@ try {
   check(true, 'Delete in the question deletes the unmerged branch');
 
   await h.branchMenu('main');
-  check(await js(`[...document.querySelectorAll('#vcsBranchMenu .menu-item')].map(r => r.querySelector('.menu-label').textContent + (r.classList.contains('disabled') ? '(off)' : '')).join('|')`) === 'Checkout(off)|Rename…|Delete(off)',
+  check(await js(`[...document.querySelectorAll('.context-menu[data-level="1"] .menu-item')].map(r => r.querySelector('.menu-label').textContent + (r.classList.contains('disabled') ? '(off)' : '')).join('|')`) === 'Checkout(off)|Rename…|Delete(off)',
     'the current branch can be renamed but not deleted');
   await press('Escape');
-  await until(`!document.querySelector('#vcsBranchMenu')`, 'menu closed');
+  await until(`!document.querySelector('.context-menu[data-level="1"]')`, 'menu closed');
 
   await h.branchMenu('merged-topic');
   await press('ArrowDown');
@@ -276,13 +273,15 @@ try {
   check(git(project, 'branch', '--show-current') === 'trunk' && git(project, 'rev-parse', '--abbrev-ref', 'trunk@{u}') === 'origin/main',
     'renaming the current branch updates the branch widget and keeps its upstream');
 
-  await h.branchPopup('topic-renamed');
+  await h.branchMenu('topic-renamed');
+  await press('ArrowDown');
   await press('Enter');
   await until(`document.querySelector('.vcs-branch-name')?.textContent === 'topic-renamed'`, 'Enter checks out');
-  await h.branchPopup('trunk');
+  await h.branchMenu('trunk');
+  await press('ArrowDown');
   await press('Enter');
   await until(`document.querySelector('.vcs-branch-name')?.textContent === 'trunk'`, 'back on trunk');
-  check(true, 'Enter on a branch in the popup still checks it out');
+  check(true, 'Down and Enter in a branch\'s actions check it out');
 
   // ---------- Show History ----------
   await openFile(t, 'mathx.py');
@@ -457,9 +456,12 @@ try {
     'ko 1008x681: 커밋 수정 stays on one line inside the Commit window');
 
   await hk.branchMenu('wip');
-  k.check(await k.js(`[...document.querySelectorAll('#vcsBranchMenu .menu-label')].map(n => n.textContent).join('|')`) === '브랜치 전환|이름 변경…|삭제', 'the branch actions read in Korean');
-  leaks.push(...await englishLeaks(k, '#vcsBranchMenu'));
-  await hk.mouse(hk.menuItem('삭제'), { label: 'ko Delete' });
+  k.check(await k.js(`[...document.querySelectorAll('.context-menu[data-level="1"] .menu-label')].map(n => n.textContent).join('|')`) === '브랜치 전환|이름 변경…|삭제', 'the branch actions read in Korean');
+  leaks.push(...await englishLeaks(k, '.context-menu[data-level="1"]'));
+  await k.press('Escape');
+  await k.press('Escape');
+  await openBranchMenu(k);
+  await clickMenuPath(k, ['wip', '삭제']);
   await hk.until(`!!${hk.dialog('브랜치가 완전히 병합되지 않음')}`, 'ko unmerged question');
   leaks.push(...await englishLeaks(k, '.dialog'));
   await k.shot('branch-unmerged-ko.png');

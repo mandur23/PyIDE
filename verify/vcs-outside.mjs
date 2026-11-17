@@ -8,7 +8,7 @@ import { execFileSync } from 'child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
-import { launch } from './lib.mjs';
+import { branchItem, launch } from './lib.mjs';
 
 const gitHome = mkdtempSync(path.join(tmpdir(), 'pyide-vcsoutside-git-'));
 const gitConfig = path.join(gitHome, 'gitconfig');
@@ -130,11 +130,7 @@ try {
   writeFileSync(P('README.md'), 'my local readme\n');
   await until(`!!${changeRow('README.md')}`, 'local README change');
   const checkoutOther = async () => {
-    await t.click('.vcs-branch');
-    await until(`!document.querySelector('#popup').classList.contains('hidden')`, 'branch popup');
-    await type('other');
-    await until(`document.querySelector('.popup-item.active .label')?.textContent === 'other'`, 'other in the popup');
-    await press('Enter');
+    await branchItem(t, 'other');
     await until(`!!document.querySelector('#vcsSmartCheckout')`, 'Smart Checkout question', 10000);
   };
   await checkoutOther();

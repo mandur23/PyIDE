@@ -43,7 +43,7 @@
   const debounce = (fn, ms) => { let t; const d = (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; d.cancel = () => clearTimeout(t); return d; };
 
   function button(label, title, onclick, cls = 'vw-btn') {
-    const b = el('button', cls, label);
+    const b = ide.ui.glyph(el('button', cls), label);
     if (title) b.title = title;
     b.onclick = onclick;
     return b;
@@ -455,7 +455,7 @@
       if (audio.paused) audio.play().catch(() => {}); else audio.pause();
     }
     const sync = () => {
-      play.textContent = audio.paused ? '▶' : '⏸';
+      ide.ui.glyph(play, audio.paused ? '▶' : '⏸');
       play.title = audio.paused ? tr('Play') : tr('Pause');
     };
     audio.addEventListener('play', () => { sync(); loop(); });

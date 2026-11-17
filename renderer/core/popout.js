@@ -133,6 +133,8 @@
       else b.title = a.title;
       b.onclick = a.run;
       if (a.id) b.dataset.action = a.id;
+    // domId: the button's element id, for code that hangs a menu from it (the Database window's New Data Source).
+    if (a.domId) b.id = a.domId;
       if (typeof a.toggled === 'boolean') { b.classList.toggle('toggled', a.toggled); b.setAttribute('aria-pressed', String(a.toggled)); }
       p.actions.appendChild(b);
     }

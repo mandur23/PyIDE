@@ -42,11 +42,11 @@
   }
 
   // ---------- choosing a data source ----------
-  async function chooseSchema(source, current) {
+  async function chooseSchema(source, current, anchor) {
     const tree = await ide.database.completionHost.tree(source.id);
     const names = tree.filter((n) => Array.isArray(n.children) && n.kind !== 'info').map((n) => n.name);
     if (names.length < 2) return null;
-    const pick = await ide.ui.pick({
+    const pick = await ide.ui.pickAt(anchor, {
       placeholder: tr('Choose a schema of {name}', { name: source.name }),
       items: [
         { label: tr('Default schema'), hint: current?.source === source.id && !current.schema ? '✓' : '', value: { schema: null } },
@@ -57,7 +57,9 @@
   }
 
   // The data source picker for a project SQL file; resolves the new attachment, or null (detached, cancelled, none).
-  async function choose(path) {
+  // anchor: the widget that asked (the status bar item); the choice hangs from it. Asked from the keyboard or the
+  // editor's menu there is none, and the palette asks.
+  async function choose(path, anchor) {
     await host.loaded;
     if (!inProject(path)) {
       ide.ui.alert(tr('Open a SQL file of the project to attach a data source to it.'));
@@ -65,7 +67,7 @@
     }
     const current = attachmentOf(path);
     const sources = ide.database.list().filter(sqlSource);
-    const pick = await ide.ui.pick({
+    const pick = await ide.ui.pickAt(anchor, {
       placeholder: tr('Data source for {name}', { name: basename(path) }),
       items: [
         ...sources.map((s) => ({ label: s.name, detail: host.driverOf(s.kind)?.label || s.kind, icon: 'database', hint: current?.source === s.id ? '✓' : '', value: { source: s } })),
@@ -76,7 +78,7 @@
     if (!pick) return null;
     if (pick.add) { host.newDataSource(); return null; }
     if (pick.detach) { setAttachment(path, null); return null; }
-    const schema = await chooseSchema(pick.source, current);
+    const schema = await chooseSchema(pick.source, current, anchor);
     if (schema === undefined || !inProject(path)) return null;
     setAttachment(path, { source: pick.source.id, ...(schema ? { schema } : {}) });
     return attachmentOf(path);
@@ -89,7 +91,7 @@
   const item = el('span', 'db-sql-status hidden');
   item.id = 'statusSqlSource';
   item.title = tr('Data source of this SQL file');
-  item.onclick = () => { const p = activeSqlPath(); if (p) choose(p); };
+  item.onclick = () => { const p = activeSqlPath(); if (p) choose(p, item); };
   ide.registerStatusItem({ order: 50, el: item });
   function renderStatus() {
     const path = activeSqlPath();
@@ -100,7 +102,7 @@
     item.classList.toggle('attached', !!s);
     item.replaceChildren(Object.assign(ide.icon('database'), { className: 'ide-icon db-sql-status-icon' }),
       s ? userEl('span', 'db-sql-status-name', a.schema ? `${s.name} · ${a.schema}` : s.name) : el('span', 'db-sql-status-none', tr('<No data source>')),
-      el('span', 'db-sql-status-arrow', '▾'));
+      ide.ui.glyph(el('span', 'db-sql-status-arrow'), '▾'));
   }
 
   // ---------- Query Results tool window ----------

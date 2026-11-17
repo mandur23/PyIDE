@@ -278,6 +278,6 @@ function parseValue(text) {
 
 const IDENT = /^[A-Za-z_$][\w$]*$/;
 // The console text that shows a collection's documents (Open Data).
-const openDataCommand = (db, collection) => `use ${db}\n${IDENT.test(collection) ? `db.${collection}` : `db.getCollection(${JSON.stringify(collection)})`}.find({}).limit(200)`;
+const openDataCommand = (db, collection) => `use ${db}\n${IDENT.test(collection) ? `db.${collection}` : `db.getCollection(${JSON.stringify(collection)})`}.find({}).limit(500)`;
 
 module.exports = { parseCommand, parseValue, tokenize, openDataCommand, ShellValue, ShellSyntaxError };

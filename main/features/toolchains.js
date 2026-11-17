@@ -61,6 +61,18 @@ exports.register = ({ ipcMain, startProcess, procs }) => {
 
   ipcMain.handle('toolchains:list', (_e, kind) => toolchains.detect(kind));
 
+  // A compiled class as the JDK's javap prints it (its members with their signatures and constants): what the IDE shows
+  // for a .class file. javap reads the file and runs nothing of it; the JDK is one of the detected ones, by its id.
+  ipcMain.handle('toolchains:javap', async (_e, file, jdkId) => {
+    if (typeof file !== 'string' || !/\.class$/i.test(file) || !path.isAbsolute(file)) return { ok: false, error: 'not a class file' };
+    const jdk = (await toolchains.detect('jdk')).find((t) => t.id === jdkId);
+    if (!jdk) return { ok: false, error: 'no such JDK' };
+    return new Promise((resolve) => {
+      execFile(path.join(jdk.home, 'bin', 'javap.exe'), ['-p', '-constants', file], { windowsHide: true, timeout: 20000, maxBuffer: 16 << 20 },
+        (err, stdout, stderr) => resolve(err ? { ok: false, error: String(stderr || err.message).trim() } : { ok: true, text: stdout }));
+    });
+  });
+
   // A Maven or Gradle run configuration: {tool: 'maven' | 'gradle', goals: 'spring-boot:run', cwd, env, jdk?: {home}}.
   // The project's wrapper (mvnw.cmd, gradlew.bat) wins over mvn or gradle on PATH; it is named with .\ because cmd.exe
   // skips the current folder when NoDefaultCurrentDirectoryInExePath is set. Goals are words, so cmd.exe gets no syntax.

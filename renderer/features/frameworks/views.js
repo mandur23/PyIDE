@@ -47,7 +47,7 @@
     const row = el('div', `fw-node${kind ? ` fw-${kind}` : ''}`);
     row.style.paddingLeft = `${6 + depth * 14}px`;
     const hasChildren = typeof key === 'string';
-    const arrow = el('span', 'fw-arrow', hasChildren ? (collapsed.has(key) ? '▸' : '▾') : '');
+    const arrow = ide.ui.twisty('fw-arrow', hasChildren ? !collapsed.has(key) : null);
     row.append(arrow, Object.assign(ide.icon(icon || ''), { className: 'ide-icon fw-icon' }));
     const name = el('span', 'fwk-name');
     if (label instanceof Node) name.appendChild(label); else name.textContent = label;
@@ -59,7 +59,7 @@
       if (hasChildren && (e.target === arrow || !open)) {
         const fold = !kids.classList.toggle('hidden');
         if (fold) collapsed.delete(key); else collapsed.add(key);
-        arrow.textContent = kids.classList.contains('hidden') ? '▸' : '▾';
+        ide.ui.setTwisty(arrow, !kids.classList.contains('hidden'));
         return;
       }
       open?.();

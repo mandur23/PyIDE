@@ -117,8 +117,37 @@ try {
   // ---------- Open Data from the table's context menu ----------
   await rightClickText(a, '#dbTree .db-node.db-table', 'users');
   await clickText(a, '.context-menu .menu-item', 'Open Data');
-  await a.until(`ide.database.activeConsole()?.model.getValue().includes('SELECT * FROM "users" LIMIT 200;') && ${activeConsole}.querySelectorAll('.db-grid tbody tr').length === 2`, 'open data result');
-  check(true, 'Open Data appends SELECT * ... LIMIT 200 to the console and shows the rows');
+  await a.until(`ide.database.activeConsole()?.model.getValue().includes('SELECT * FROM "users" LIMIT 500;') && ${activeConsole}.querySelectorAll('.db-grid tbody tr').length === 2`, 'open data result');
+  check(true, 'Open Data appends SELECT * ... LIMIT 500 to the console and shows the rows');
+  check(await a.js(`[...${activeConsole}.querySelectorAll('.db-load-more, .db-load-all')].every((b) => b.classList.contains('hidden'))`), 'a table that fits its first page offers no Load More');
+
+  // ---------- more than a page: Load More and Load All ----------
+  const rowsNow = `ide.database.activeConsole().result()?.rowCount`;
+  const bar = (cls) => `${activeConsole}.querySelector('.db-result-bar .${cls}')`;
+  await a.js(`ide.database.activeConsole().execute(['CREATE TABLE big (n INTEGER PRIMARY KEY, label TEXT)', "WITH RECURSIVE c(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM c WHERE n < 6200) INSERT INTO big SELECT n, 'row ' || n FROM c"]).then(() => true)`);
+  await a.until(`[...document.querySelectorAll('#dbTree .db-node.db-table')].some(n => n.textContent.includes('big'))`, 'the big table in the tree');
+  await rightClickText(a, '#dbTree .db-node.db-table', 'big');
+  await clickText(a, '.context-menu .menu-item', 'Open Data');
+  await a.until(`${rowsNow} === 500 && !${bar('db-load-more')}.classList.contains('hidden')`, 'the first page of big');
+  check(/showing the first 500/.test(await status(a)), `Open Data shows the first 500 rows of 6200 and says so (${await status(a)})`);
+  await a.click(".custom-tab:not(.hidden) .db-load-more");
+  await a.until(`${rowsNow} === 5000`, 'Load More');
+  check(await a.js(`!${bar('db-load-all')}.classList.contains('hidden')`), 'Load More reads ten times as many rows (5000) and still offers the rest');
+  const drawn = await a.js(`${activeConsole}.querySelectorAll('.db-grid tbody tr').length`);
+  check(drawn >= 1000 && drawn < 5000, `a large result draws its rows as they scroll into view (${drawn} of 5000 at first)`);
+  await a.js(`(() => { const o = ${activeConsole}.querySelector('.db-output'); const s = [o, ...o.querySelectorAll('*')].find((n) => n.scrollHeight > n.clientHeight + 50); s.scrollTop = s.scrollHeight; return true; })()`);
+  await a.until(`${activeConsole}.querySelectorAll('.db-grid tbody tr').length > ${drawn}`, 'more rows drawn after scrolling to the end');
+  check(true, 'scrolling to the end draws more rows');
+  await a.click(".custom-tab:not(.hidden) .db-load-all");
+  await a.until(`${rowsNow} === 6200 && ${bar('db-load-more')}.classList.contains('hidden') && ${bar('db-load-all')}.classList.contains('hidden')`, 'Load All');
+  check(!/showing the first/.test(await status(a)), `Load All reads every row and the offer goes away (${await status(a)})`);
+  check(await a.js(`ide.database.activeConsole().model.getValue().includes('SELECT * FROM "big" LIMIT 500;')`), 'the console keeps the command as Open Data wrote it');
+  await a.js(`ide.database.activeConsole().execute(['SELECT * FROM big']).then(() => true)`);
+  check(await a.js(`${rowsNow} === 500 && !${bar('db-load-all')}.classList.contains('hidden')`), 'a typed SELECT cut at 500 rows offers the rest too');
+  await a.click(".custom-tab:not(.hidden) .db-load-all");
+  await a.until(`${rowsNow} === 6200`, 'Load All on a typed statement');
+  await a.js(`ide.database.activeConsole().execute(["INSERT INTO big SELECT n + 10000, 'x' FROM big RETURNING n"]).then(() => true)`);
+  check(await a.js(`${rowsNow} === 500 && ${bar('db-load-all')}.classList.contains('hidden')`), 'a writing statement cut at 500 rows is never offered again (it would write twice)');
 
   // ---------- PostgreSQL without its driver; the password stays in the main process ----------
   await a.click('#dbAdd');
@@ -163,7 +192,7 @@ try {
   await a.sleep(500);
   check(await a.js(`!document.querySelector('#dbTree .db-node.db-table') && document.querySelector('#dbTree .db-node.db-source .db-dot').classList.contains('db-state-disconnected')`), 'Disconnect closes the connection and folds the source without reconnecting');
 
-  await a.until(`ide.api.invoke('db:consoleLoad', ${consoleOf('app-db')}.id).then(t => t?.includes('LIMIT 200'))`, 'console text saved');
+  await a.until(`ide.api.invoke('db:consoleLoad', ${consoleOf('app-db')}.id).then(t => t?.includes('LIMIT 500'))`, 'console text saved');
   check(a.consoleErrors.length === 0, 'no renderer exceptions');
   await a.js(`(ide.settings.set('appearance.language', 'ko'), true)`);
   a.close();

@@ -7,7 +7,7 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { closeBalloonsOver, launch } from './lib.mjs';
+import { closeBalloonsOver, launch, branchItem as branchMenuItem, openBranchMenu } from './lib.mjs';
 import { englishLeaks, missingTranslations } from './i18n-lib.mjs';
 
 const gitHome = mkdtempSync(path.join(tmpdir(), 'pyide-vcsmerge-git-'));
@@ -98,12 +98,8 @@ function helpers(t) {
   }
   const popupOpen = `!document.querySelector('#popup').classList.contains('hidden')`;
   // Opens the branch popup and runs the item with this label.
-  async function branchItem(label) {
-    await mouse(`document.querySelector('.vcs-branch')`, { label: 'branch widget' });
-    await until(popupOpen, 'branch popup');
-    await type(label);
-    await until(`document.querySelector('.popup-item.active .label')?.textContent === ${q(label)}`, `popup item ${label}`);
-    await press('Enter');
+  async function branchItem(label, checkout = 'Checkout') {
+    await branchMenuItem(t, label, checkout);
   }
   async function pickBranch(placeholder, name) {
     await until(`${popupOpen} && document.querySelector('#popupIn').placeholder === ${q(placeholder)}`, placeholder);
@@ -228,9 +224,8 @@ try {
   check(await js(`[...document.querySelectorAll('.vcs-op-btns button')].map(b => b.textContent).join('|')`) === 'Continue Rebase|Skip Commit|Abort Rebase', 'a stopped rebase offers Continue Rebase, Skip Commit and Abort Rebase');
   await mouse(`document.querySelector('.vcs-changes .vcs-file[data-status="conflict"]')`, { label: 'conflict row' });
   check(await js(`document.querySelector('.vcs-group.vcs-conflicts .vcs-group-title').textContent === 'Merge Conflicts' && document.querySelector('.vcs-file[data-status="conflict"] input').disabled`), 'conflicts are their own group and cannot be ticked for commit');
-  await mouse(`document.querySelector('.vcs-branch')`, { label: 'branch widget' });
-  await until(`!document.querySelector('#popup').classList.contains('hidden')`, 'branch popup while rebasing');
-  check(await js(`[...document.querySelectorAll('.popup-item .label')].slice(0, 4).map(l => l.textContent).join('|')`) === 'Resolve Conflicts…|Continue Rebase|Skip Commit|Abort Rebase', 'the branch popup leads with Resolve / Continue / Skip / Abort');
+  await openBranchMenu(t);
+  check(await js(`[...document.querySelectorAll('#vcsBranches > .menu-item .menu-label')].slice(0, 4).map(l => l.textContent).join('|')`) === 'Resolve Conflicts…|Continue Rebase|Skip Commit|Abort Rebase', 'the branch menu leads with Resolve / Continue / Skip / Abort');
   await press('Escape');
   await clearNotes();
   await mouse(`document.querySelector('.vcs-op-abort')`, { label: 'Abort' });
@@ -382,10 +377,9 @@ try {
   await kh.refresh();
   await kh.until(`document.querySelector('.vcs-branch-name')?.textContent === 'main'`, 'ko repository');
   await k.js(`(ide.toolWindows.get('Commit').show(), true)`);
-  await kh.mouse(`document.querySelector('.vcs-branch')`, { label: 'branch widget' });
-  await kh.until(`!document.querySelector('#popup').classList.contains('hidden')`, 'ko branch popup');
-  k.check(await k.js(`['현재 브랜치로 병합…', '현재 브랜치 리베이스…', '변경 사항 스태시…', '변경 사항 스태시 해제…'].every(l => [...document.querySelectorAll('.popup-item .label')].some(n => n.textContent === l))`), 'the branch popup offers merge, rebase, stash and unstash in Korean');
-  await noLeaks('#popup', 'branch popup', ['main', 'feature']);
+  await openBranchMenu(k);
+  k.check(await k.js(`['현재 브랜치로 병합…', '현재 브랜치 리베이스…', '변경 사항 스태시…', '변경 사항 스태시 해제…'].every(l => [...document.querySelectorAll('#vcsBranches > .menu-item .menu-label')].some(n => n.textContent === l))`), 'the branch popup offers merge, rebase, stash and unstash in Korean');
+  await noLeaks('#vcsBranches', 'branch menu', ['main', 'feature']);
   await k.press('Escape');
 
   await kh.branchItem('현재 브랜치로 병합…');

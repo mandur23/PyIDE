@@ -87,7 +87,7 @@ const fakeCalls = () => (existsSync(fakeLog) ? readFileSync(fakeLog, 'utf8').tri
   const refused = ['require("fs")', 'db.c.find({}).forEach(function(){})', 'db.c.find({$where: this.x})', 'db.c.find({a: process.exit(1)})', 'db.c.find({a: `${1}`})', 'db.c.find({a: 1 / 2})', "db.c.find({_id: ObjectId('zz')})", 'db.c.find('];
   const errors = refused.map((s) => { try { parseCommand(s); return null; } catch (e) { return e.constructor.name; } });
   check(errors.every((e) => e === 'ShellSyntaxError'), `mongo shell: code, functions, template expressions, division and bad helpers are syntax errors, never evaluated (${q(errors)})`);
-  check(openDataCommand('shop', 'users') === 'use shop\ndb.users.find({}).limit(200)' && openDataCommand('shop', 'my-coll') === 'use shop\ndb.getCollection("my-coll").find({}).limit(200)',
+  check(openDataCommand('shop', 'users') === 'use shop\ndb.users.find({}).limit(500)' && openDataCommand('shop', 'my-coll') === 'use shop\ndb.getCollection("my-coll").find({}).limit(500)',
     'mongo shell: Open Data command for plain and unusual collection names');
 
   const { plain, flatten, shellText } = require('../main/db/kinds/mongodb.js').forTests;
@@ -279,7 +279,7 @@ try {
   await rightClickText(b, '#dbTree .db-node.db-collection', 'users');
   await clickText(b, '.context-menu .menu-item', 'Open Data');
   await b.until(`!!ide.database.activeConsole() && ${activeConsole}.querySelectorAll('.db-grid tbody tr').length === 3`, 'mongo open data');
-  check(await b.js(`ide.database.activeConsole().model.getValue().endsWith('use shop\\ndb.users.find({}).limit(200)')`), 'Open Data appends use shop and find({}).limit(200) to the console');
+  check(await b.js(`ide.database.activeConsole().model.getValue().endsWith('use shop\\ndb.users.find({}).limit(500)')`), 'Open Data appends use shop and find({}).limit(500) to the console');
   check(q(await gridHead(b)) === q(['_id', 'name', 'age', 'address', 'tags', 'joined', 'balance']), `documents flatten to top-level columns (${q(await gridHead(b))})`);
   const firstRow = (await gridRows(b))[0];
   check(q(firstRow) === q(['65a1b2c3d4e5f60718293a40', 'Ada', '36', '{ city: "London", zip: "NW1" }', '["math", "poetry"]', '1842-01-01T00:00:00.000Z', 'NULL']), `ObjectId and dates read as strings, nested values in shell syntax (${q(firstRow)})`);

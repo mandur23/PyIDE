@@ -43,7 +43,7 @@
 
   // spec: {
   //   id, language (Monaco language id), match (RegExp on a path), channel (the main feature serving the server),
-  //   source (ide.problems source), statusId, statusOrder, hideWhenOff,
+  //   source (ide.problems source), statusId, statusOrder, hideWhenOff (true, or a function asked at each state),
   //   text: {status: {off, starting, ready, error, ...} (the item's text per state), server (its name for the item's
   //     title), starting(name),
   //     failed, ready(detail), exited(code), stopped, error(message), stoppedTitle, crashed(count, minutes), notReady},
@@ -78,7 +78,8 @@
     statusEl.id = spec.statusId;
     statusEl.title = statusTitle();
     statusEl.onclick = () => (spec.onStatusClick ? spec.onStatusClick(client, status) : restart());
-    statusEl.classList.toggle('hidden', !!spec.hideWhenOff);
+    const hideOff = () => (typeof spec.hideWhenOff === 'function' ? spec.hideWhenOff() : !!spec.hideWhenOff);
+    statusEl.classList.toggle('hidden', hideOff());
     ide.registerStatusItem({ order: spec.statusOrder, el: statusEl });
 
     const RESTARTABLE = new Set(['off', 'starting', 'ready', 'error']);
@@ -89,7 +90,7 @@
       statusEl.dataset.state = state;
       // A state of the spec's own (not installed, Safe Mode) says in its message what a click does.
       statusEl.title = RESTARTABLE.has(state) ? statusTitle(message) : message;
-      statusEl.classList.toggle('hidden', !!spec.hideWhenOff && state === 'off');
+      statusEl.classList.toggle('hidden', hideOff() && state === 'off');
       if (state !== 'starting') {
         const waiters = readyWaiters;
         readyWaiters = [];
@@ -128,6 +129,7 @@
       if (!plan) {
         // Not wanted in this project (no Java in it): the server of the project before goes.
         if (serverKey !== null || status !== 'off') { stopServer(); setStatus('off'); }
+        statusEl.classList.toggle('hidden', hideOff() && status === 'off');
         return;
       }
       if (!plan.key) {
@@ -1277,7 +1279,9 @@
   // Each status text is a complete entry in the locale files.
   const python = createClient({
     id: 'python', language: 'python', match: /\.pyi?$/i, channel: 'lsp', source: 'pyright', serverName: 'Pyright',
-    statusId: 'lspStatus', statusOrder: 20,
+    statusId: 'lspStatus', statusOrder: 20, startOnOpen: true,
+    // A project without Python (ide.pythonProject) has no Pyright and no place for it in the status bar.
+    hideWhenOff: () => ide.pythonProject === false,
     text: {
       status: { off: () => tr('Pyright: off'), starting: () => tr('Pyright: starting'), ready: () => tr('Pyright: ready'), error: () => tr('Pyright: error') },
       server: () => tr('Pyright language server'),
@@ -1292,10 +1296,11 @@
       notReady: () => tr('Cannot search for usages: Pyright is not ready'),
     },
     start() {
+      if (ide.pythonProject !== true) return null;
       const python = ide.currentInterp()?.executable || null;
       return { key: String(python), args: [python, window.i18n?.locale || 'en'], detail: python };
     },
-    restartOn: ['projectOpened', 'interpreterChanged'],
+    restartOn: ['projectOpened', 'interpreterChanged', 'pythonProjectChanged'],
     reset: () => probeCache.clear(),
     completion: {
       triggerCharacters: ['.'],
@@ -1440,13 +1445,13 @@
     for (const g of sorted) {
       g.refs.sort((a, b) => a.range.start.line - b.range.start.line || a.range.start.character - b.range.start.character);
       const head = el('div', 'list-row lsp-find-file');
-      const arrow = el('span', 'arrow', '▾');
+      const arrow = ide.ui.twisty('arrow', true);
       const rel = ide.util.rel(g.path);
       const dir = /[\\/]/.test(rel) ? dirname(rel) : '';
       head.append(arrow, Object.assign(ide.fileIcon(g.path), { className: 'file-icon icon' }), userText(el('span', 'name', basename(g.path))),
         userText(el('span', 'muted', dir ? `  ${dir}` : '')), el('span', 'muted', `  ${usageCount(g.refs.length)}`));
       const rows = el('div', 'lsp-find-rows');
-      head.onclick = () => { rows.classList.toggle('hidden'); arrow.textContent = rows.classList.contains('hidden') ? '▸' : '▾'; };
+      head.onclick = () => { rows.classList.toggle('hidden'); ide.ui.setTwisty(arrow, !rows.classList.contains('hidden')); };
       for (const r of g.refs) {
         const line = r.range.start.line + 1;
         const text = await lineText(g.path, line);

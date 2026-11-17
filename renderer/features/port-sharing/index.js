@@ -240,7 +240,7 @@
     return a;
   }
   function button(text, cls, run) {
-    const b = el('button', cls, text);
+    const b = ide.ui.glyph(el('button', cls), text);
     b.onclick = (e) => { e.preventDefault(); run(); };
     return b;
   }
