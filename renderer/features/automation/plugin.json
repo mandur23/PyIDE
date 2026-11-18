@@ -1,0 +1,14 @@
+{
+  "id": "automation",
+  "name": "Automation",
+  "version": "1.0.0",
+  "vendor": "Nano Studio",
+  "description": "An Automation tool window on the right: the project's Docker Compose files with their services (Up, Down, Build, Logs, start, stop and restart a service), and its Gradle or Maven tasks, each run in the Run tool window.",
+  "modes": ["code"],
+  "depends": [
+    "run"
+  ],
+  "main": [
+    "automation.js"
+  ]
+}
