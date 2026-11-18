@@ -86,12 +86,12 @@
     [/^(.+) is not valid JSON: fix it, or move it away, before translating/, (m) => tr('{file} is not valid JSON. Fix it or move it away, then translate again: Nano Studio does not write over its lines.', { file: m[1] })],
   ];
   function errorText(err) {
-    const text = mc.errorText(err);
+    const text = mc.rawErrorText(err);
     for (const [re, say] of ERRORS) {
       const m = re.exec(text);
       if (m) return say(m);
     }
-    return text;
+    return mc.errorText(err);
   }
   const cancelled = (err) => /^Cancelled/.test(mc.errorText(err));
   // A failed job's message in its Run tab, and in a balloon unless the user cancelled it.

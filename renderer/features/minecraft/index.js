@@ -45,9 +45,16 @@
     if (!/fetch failed|bad port|no answer within|stalled|ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|getaddrinfo|socket hang up|UND_ERR|other side closed/i.test(text)) return null;
     return host ? tr('Could not connect to {host}. Check the internet connection and try again.', { host }) : tr('Could not connect. Check the internet connection and try again.');
   }
+  // The message as main wrote it.
+  const rawErrorText = (err) => ide.util.errorText(err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
   const errorText = (err) => {
-    const text = ide.util.errorText(err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
-    return /is refused: its entries overlap/.test(text) ? tr('This archive was refused: its contents overlap, as in a zip bomb.') : networkText(text) || text;
+    const text = rawErrorText(err);
+    if (/is refused: its entries overlap/.test(text)) return tr('This archive was refused: its contents overlap, as in a zip bomb.');
+    const net = networkText(text);
+    if (!net) return text;
+    // What the message says before the address stays: which Java, which file ("Java 17 is not installed, and ...: ").
+    const lead = text.slice(0, Math.max(0, text.search(/https?:\/\//))).trim();
+    return lead ? `${lead} ${net}` : net;
   };
   const quote = (a) => (/\s/.test(a) ? `"${a}"` : a);
 
@@ -1049,7 +1056,7 @@
   ide.registerAction({ id: 'Minecraft.NewServer', title: tr('New Minecraft Server…'), needsProject: true, run: newServer });
   ide.registerAction({ id: 'Minecraft.NewServerFromModpack', title: tr('New Minecraft Server from Modpack…'), needsProject: true, run: () => newFromModpack() });
   ide.minecraft = { refresh, servers: () => list, newServer, createServer, newFromModpack, createFromModpack, dropped, clientPack, autoSync, deleteServer, serverSettings, sendCommand, translateKorean, runTranslation, sharePack, resourcePack, sendPack,
-    job, jobSession, errorText, kindTitle, runningAt, stoppingAt, restartIfRunning, startServer: (srv) => launchOnce(srv, run.runConfig), render,
+    job, jobSession, errorText, rawErrorText, kindTitle, runningAt, stoppingAt, restartIfRunning, startServer: (srv) => launchOnce(srv, run.runConfig), render,
     // The server list (with drops) in the Minecraft screen's My Servers page.
     showServersIn(container) { acceptDrops(container); host = container; refresh(); } };
 
