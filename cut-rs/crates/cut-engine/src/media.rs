@@ -333,12 +333,26 @@ impl State {
             return Some(w);
         }
         let (ra, rb) = self.window?;
+        // The window is set now and then (the app: every half second of playback), so the playhead is usually past
+        // its start, and the frames it passed are gone from the cache. They are not decoded again: one behind the
+        // decoder restarts it at its sync sample, seconds of pictures back in a file with few of them.
+        let (ra, rb) = if self.dir >= 0 { (ra.max(self.focus), rb) } else { (ra, rb.min(self.focus)) };
         let ahead =
             self.cache.keys().filter(|&&i| (i64::from(rank[i]) - i64::from(self.focus)) * self.dir >= 0).count();
         if ahead + 1 >= self.capacity() {
             return None;
         }
-        (ra..=rb).map(|r| order[r as usize] as usize).find(|i| !self.cache.contains_key(i))
+        let next = (ra..=rb).map(|r| order[r as usize] as usize).find(|i| !self.cache.contains_key(i))?;
+        // A full cache takes the frame only if it is worth more than one it holds: else `insert` would drop it at
+        // once and it would be the goal again, the worker copying the same picture over and over.
+        if self.cache.len() >= self.capacity() {
+            let score = self.keep_score(rank[next]);
+            let worst = self.cache.keys().filter(|i| Some(**i) != self.want).map(|&i| self.keep_score(rank[i])).max();
+            if worst.is_none_or(|w| score >= w) {
+                return None;
+            }
+        }
+        Some(next)
     }
 }
 
@@ -458,6 +472,8 @@ impl FrameSource {
         if r != st.focus {
             st.dir = if r > st.focus { 1 } else { -1 };
             st.focus_key = cut_formats::probe::key_before(track, idx as i64).map_or(r, |k| self.rank[k].min(r));
+            // the playhead moved on: the cache has room for a frame further ahead, and the worker may be waiting
+            self.shared.changed.notify_all();
         }
         st.focus = r;
         // A frame outside the decode-ahead window means the playhead went elsewhere: drop the window.

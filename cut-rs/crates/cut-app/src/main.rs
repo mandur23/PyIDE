@@ -151,6 +151,7 @@ impl Launch {
                 "renders": m.program.stats.renders, "incomplete": m.program.stats.incomplete,
                 "lastMs": m.program.stats.last_ms, "maxMs": m.program.stats.max_ms,
                 "decoders": m.program.engine.decoders(),
+                "sources": m.program.engine.source_stats(),
                 "pipelinesCompiled": m.program.engine.pipelines_compiled(),
             })),
             "shown": s.play.shown,

@@ -613,6 +613,18 @@ impl Engine {
         self.sources.values().map(|s| (s.path().to_string(), s.decoder())).collect()
     }
 
+    /// What each open frame source did so far: its file, then frames found in its cache, asked for and missing, decoded,
+    /// dropped from the cache unseen or seen, and decoder restarts at a sync sample (for the playback report).
+    pub fn source_stats(&self) -> Vec<(String, [u64; 5])> {
+        self.sources
+            .values()
+            .map(|s| {
+                let t = s.stats();
+                (s.path().to_string(), [t.hits, t.misses, t.decoded, t.dropped, u64::from(t.restarts)])
+            })
+            .collect()
+    }
+
     fn source(&mut self, item_key: &str, o: &Arc<Opened>) -> &mut FrameSource {
         let key = format!("{item_key}|{}", o.path);
         let waker = self.waker.clone();
