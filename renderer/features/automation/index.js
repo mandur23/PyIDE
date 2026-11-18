@@ -13,6 +13,7 @@
   let found = { compose: [], dockerfiles: [], builds: [] };
   let docker = null; // automation:docker's answer; null until asked
   const services = new Map(); // compose file -> {services} | {error}
+  let others = []; // the computer's containers that are not this project's services
   const collapsed = new Set(ide.settings.get('automation.collapsed', []));
   let seq = 0;
   let timer = 0;
@@ -95,6 +96,53 @@
       }
     },
   });
+  ide.run.registerType({
+    type: 'docker-container', title: tr('Docker Container'), icon: 'services', needsInterp: false,
+    fields: [
+      { key: 'container', label: tr('Container'), placeholder: 'id' },
+      { key: 'action', label: tr('Command'), kind: 'select', options: () => ['start', 'stop', 'restart', 'logs', 'rm'].map((a) => [a, a]) },
+    ],
+    defaults: () => ({ container: '', action: 'start' }),
+    identity: (c) => `${c.container}|${c.action}`,
+    file: () => null,
+    async start(cfg, s) {
+      const con = s.console({});
+      try {
+        const r = await invoke('container', { root: ide.root, id: cfg.container, action: cfg.action });
+        con.append(`${r.command}\n`, 'sys');
+        s.attach(r.id, { onExit: () => refreshServices() });
+        setTimeout(refreshServices, 1500);
+      } catch (err) {
+        con.append(`${errorText(err)}\n`, 'err');
+        s.setIcon?.('error', 'failed');
+      }
+    },
+  });
+  function container(c, action) {
+    if (!trusted()) return;
+    const type = ide.run.types.get('docker-container');
+    ide.run.runConfig({ ...type.defaults(), id: `automation:container:${c.id}:${action}`, type: 'docker-container', name: `docker ${action} ${c.name}`, container: c.id, action });
+  }
+  const isUp = (state) => state === 'running' || state === 'restarting' || state === 'paused';
+  // Ports as links: a click opens http://localhost:<port> in the browser.
+  function portLinks(ports) {
+    const box = el('span', 'auto-ports');
+    for (const p of String(ports || '').split(',').map((x) => x.trim()).filter(Boolean)) {
+      const a = el('a', 'auto-port', `:${p}`);
+      a.title = tr('Open http://localhost:{port} in the browser', { port: p });
+      a.onclick = (e) => { e.stopPropagation(); ide.api.invoke('shell:openExternal', `http://localhost:${p}`); };
+      box.append(a);
+    }
+    return box;
+  }
+  function menuButton(cls, items) {
+    const b = iconButton('moreVertical', tr('More'), cls, () => { const r = b.getBoundingClientRect(); ide.ui.contextMenu(r.right - 180, r.bottom + 4, items()).classList.add('auto-menu'); });
+    return b;
+  }
+  async function removeAfterAsking(what, run) {
+    if (await ide.ui.confirm(what, { title: tr('Remove Containers'), ok: tr('Remove') })) run();
+  }
+
   const inContainer = (tool) => !!ide.settings.get(`automation.container:${tool}:${ide.root}`, false);
   function image(d, action) {
     if (!trusted()) return;
@@ -134,16 +182,19 @@
   async function refreshServices() {
     if (!ide.root || !docker?.found || docker.error || ide.trusted === false) return;
     const mine = seq;
-    await Promise.all(found.compose.map(async (c) => {
+    const [all] = await Promise.all([invoke('containers').catch(() => ({ containers: [] })), ...found.compose.map(async (c) => {
       const r = await invoke('services', ide.root, c.file).catch((err) => ({ error: errorText(err) }));
       if (mine === seq) services.set(c.file, r);
-    }));
-    if (mine === seq) render();
+    })]);
+    if (mine !== seq) return;
+    const own = new Set([...services.values()].flatMap((r) => (r.services || []).map((s) => s.container)).filter(Boolean));
+    others = (all.containers || []).filter((c) => !own.has(c.name));
+    render();
   }
   const visible = () => tw.isVisible();
   function poll() {
     clearInterval(timer);
-    timer = setInterval(() => { if (visible() && found.compose.length && document.visibilityState === 'visible') refreshServices(); }, POLL_MS);
+    timer = setInterval(() => { if (visible() && (found.compose.length || found.dockerfiles.length) && document.visibilityState === 'visible') refreshServices(); }, POLL_MS);
   }
 
   // ---------- drawing ----------
@@ -185,23 +236,47 @@
     row.dataset.service = s.name;
     const name = el('span', 'auto-name', s.name);
     name.dataset.userText = '';
-    const state = el('span', 'auto-state muted', `${STATE()[s.state] ?? s.state}${s.health && s.health !== 'healthy' ? ` · ${s.health}` : ''}${s.ports ? ` · :${s.ports}` : ''}`);
-    state.title = s.status;
-    const running = s.state === 'running' || s.state === 'restarting' || s.state === 'paused';
-    row.append(el('span', `auto-dot${running ? ' on' : ''}`), name, state, el('span', 'spacer'),
+    const state = el('span', 'auto-state muted', `${STATE()[s.state] ?? s.state}${s.health && s.health !== 'healthy' ? ` · ${s.health}` : ''}`);
+    state.title = [s.status, s.image].filter(Boolean).join(' · ');
+    const running = isUp(s.state);
+    const items = () => [
+      running ? { label: tr('Stop'), icon: 'runStop', run: () => compose(c.file, 'stop', s.name) } : { label: tr('Start'), icon: 'runRun', run: () => compose(c.file, 'up', s.name) },
+      { label: tr('Restart'), icon: 'rerun', run: () => compose(c.file, 'restart', s.name) },
+      { label: tr('Logs'), icon: 'text', run: () => compose(c.file, 'logs', s.name) },
+      { separator: true },
+      { label: tr('Build Images'), run: () => compose(c.file, 'build', s.name) },
+    ];
+    row.append(el('span', `auto-dot${running ? ' on' : ''}`), name, state, portLinks(s.ports), el('span', 'spacer'),
       running ? iconButton('runStop', tr('Stop {name}', { name: s.name }), 'auto-stop', () => compose(c.file, 'stop', s.name))
         : iconButton('runRun', tr('Start {name}', { name: s.name }), 'auto-start', () => compose(c.file, 'up', s.name)),
-      iconButton('rerun', tr('Restart {name}', { name: s.name }), 'auto-restart', () => compose(c.file, 'restart', s.name)),
-      iconButton('text', tr('Logs of {name}', { name: s.name }), 'auto-logs', () => compose(c.file, 'logs', s.name)));
-    row.oncontextmenu = (e) => {
-      e.preventDefault();
-      ide.ui.contextMenu(e.clientX, e.clientY, [
-        running ? { label: tr('Stop'), icon: 'runStop', run: () => compose(c.file, 'stop', s.name) } : { label: tr('Start'), icon: 'runRun', run: () => compose(c.file, 'up', s.name) },
-        { label: tr('Restart'), icon: 'rerun', run: () => compose(c.file, 'restart', s.name) },
-        { label: tr('Build Images'), run: () => compose(c.file, 'build', s.name) },
-        { label: tr('Logs'), icon: 'text', run: () => compose(c.file, 'logs', s.name) },
-      ]);
-    };
+      iconButton('text', tr('Logs of {name}', { name: s.name }), 'auto-logs', () => compose(c.file, 'logs', s.name)),
+      menuButton('auto-service-more', items));
+    row.oncontextmenu = (e) => { e.preventDefault(); ide.ui.contextMenu(e.clientX, e.clientY, items()).classList.add('auto-menu'); };
+    return row;
+  }
+  // A container that is not one of the project's services: the same row, by its own id.
+  function containerRow(c) {
+    const row = el('div', `auto-row auto-service auto-other ${c.state || 'none'}`);
+    row.dataset.container = c.name;
+    const name = el('span', 'auto-name', c.name);
+    name.dataset.userText = '';
+    const state = el('span', 'auto-state muted', STATE()[c.state] ?? c.state);
+    state.title = [c.status, c.image, c.project && tr('compose project {name}', { name: c.project })].filter(Boolean).join(' · ');
+    const running = isUp(c.state);
+    const remove = () => removeAfterAsking(tr('Remove the container {name}? What it wrote inside itself is lost; its volumes stay.', { name: c.name }), () => container(c, 'rm'));
+    const items = () => [
+      running ? { label: tr('Stop'), icon: 'runStop', run: () => container(c, 'stop') } : { label: tr('Start'), icon: 'runRun', run: () => container(c, 'start') },
+      { label: tr('Restart'), icon: 'rerun', run: () => container(c, 'restart') },
+      { label: tr('Logs'), icon: 'text', run: () => container(c, 'logs') },
+      { separator: true },
+      { label: tr('Remove…'), icon: 'clear', run: remove },
+    ];
+    row.append(el('span', `auto-dot${running ? ' on' : ''}`), name, state, portLinks(c.ports), el('span', 'spacer'),
+      running ? iconButton('runStop', tr('Stop {name}', { name: c.name }), 'auto-stop', () => container(c, 'stop'))
+        : iconButton('runRun', tr('Start {name}', { name: c.name }), 'auto-start', () => container(c, 'start')),
+      iconButton('text', tr('Logs of {name}', { name: c.name }), 'auto-logs', () => container(c, 'logs')),
+      menuButton('auto-other-more', items));
+    row.oncontextmenu = (e) => { e.preventDefault(); ide.ui.contextMenu(e.clientX, e.clientY, items()).classList.add('auto-menu'); };
     return row;
   }
 
@@ -214,16 +289,36 @@
     name.title = tr('Open {file}', { file: c.rel });
     name.onclick = () => ide.openFile(c.file);
     const usable = docker?.found && !docker.error;
+    const r = services.get(c.file);
+    const list = r?.services || [];
+    const up = list.filter((s) => isUp(s.state)).length;
+    const made = list.filter((s) => s.state).length;
+    // As Docker Desktop's row of a compose project: how many of its containers run, and one button for all of them.
+    const summary = el('span', `auto-summary muted${up ? ' on' : ''}`, !list.length ? '' : up ? tr('Running ({up}/{all})', { up, all: list.length }) : made ? tr('Stopped') : tr('Not created'));
+    const down = () => removeAfterAsking(tr('Stop and remove the containers of {file}? Its images and volumes stay.', { file: c.rel }), () => compose(c.file, 'down'));
+    const items = () => [
+      { label: tr('Start All'), icon: 'runRun', run: () => compose(c.file, 'up') },
+      { label: tr('Stop All'), icon: 'runStop', disabled: !up, run: () => compose(c.file, 'stop') },
+      { label: tr('Restart All'), icon: 'rerun', disabled: !made, run: () => compose(c.file, 'restart') },
+      { label: tr('Logs'), icon: 'text', disabled: !made, run: () => compose(c.file, 'logs') },
+      { separator: true },
+      { label: tr('Build Images'), run: () => compose(c.file, 'build') },
+      { label: tr('Open {file}', { file: c.rel }), run: () => ide.openFile(c.file) },
+      { separator: true },
+      { label: tr('Remove Containers…'), icon: 'clear', disabled: !made, run: down },
+    ];
     const buttons = [
-      textButton(tr('Up'), 'auto-up', () => compose(c.file, 'up'), tr('Builds what is missing and starts every service in the background (docker compose up -d)')),
-      textButton(tr('Down'), 'auto-down', () => compose(c.file, 'down'), tr('Stops and removes the containers (docker compose down)')),
-      textButton(tr('Build Images'), 'auto-build', () => compose(c.file, 'build'), tr('Builds the images again (docker compose build)')),
-      textButton(tr('Logs'), 'auto-logs-all', () => compose(c.file, 'logs'), tr('Follows the output of every service (docker compose logs -f)')),
+      up ? iconButton('runStop', tr('Stop every service (docker compose stop)'), 'auto-stop-all', () => compose(c.file, 'stop'))
+        : iconButton('runRun', tr('Build what is missing and start every service, waiting until each runs and is healthy (docker compose up -d --wait)'), 'auto-up', () => compose(c.file, 'up')),
+      iconButton('text', tr('Follow the output of every service (docker compose logs -f)'), 'auto-logs-all', () => compose(c.file, 'logs')),
+      iconButton('clear', tr('Stop and remove the containers (docker compose down)'), 'auto-down', down),
+      menuButton('auto-file-more', items),
     ];
     for (const b of buttons) b.disabled = !usable;
-    head.append(ide.fileIcon(c.file), name, el('span', 'spacer'), ...buttons);
+    if (!made) { buttons[1].disabled = true; buttons[2].disabled = true; }
+    head.append(ide.fileIcon(c.file), name, summary, el('span', 'spacer'), ...buttons);
+    head.oncontextmenu = (e) => { if (!usable) return; e.preventDefault(); ide.ui.contextMenu(e.clientX, e.clientY, items()).classList.add('auto-menu'); };
     box.append(head);
-    const r = services.get(c.file);
     if (r?.error) {
       const why = el('div', 'auto-error', r.error);
       why.dataset.userText = '';
@@ -276,6 +371,10 @@
         row.append(ide.fileIcon(d.file), name, el('span', 'spacer'), ...buttons);
         out.push(row);
       }
+    }
+    if (others.length && docker?.found && !docker.error) {
+      out.push(el('div', 'auto-subhead muted', tr('Other containers on this computer')));
+      for (const c of others) out.push(containerRow(c));
     }
     return out;
   }

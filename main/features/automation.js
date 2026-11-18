@@ -12,9 +12,12 @@ const COMPOSE = /^(docker-)?compose(\.[\w-]+)?\.ya?ml$/i;
 const DOCKERFILE = /^(Dockerfile(\.[\w-]+)?|[\w-]+\.Dockerfile)$/i;
 const SKIP = new Set(['node_modules', '.git', '.gradle', '.idea', '.venv', 'venv', 'build', 'target', 'dist', 'out', 'bin', '__pycache__']);
 const SERVICE = /^[A-Za-z0-9][\w.-]*$/;
+const CONTAINER = /^[a-f0-9]{12,64}$/;
 // What a compose file's button runs. `service` narrows the ones that take one.
 const ACTIONS = {
-  up: { args: ['up', '-d'], service: true },
+  // --wait: the command ends once every service runs (and is healthy, where it has a health check), and fails when one
+  // does not come up, so a start that did not work says so instead of ending at once with a container that then exits.
+  up: { args: ['up', '-d', '--wait'], service: true },
   build: { args: ['build'], service: true },
   down: { args: ['down'] },
   logs: { args: ['logs', '-f', '--tail', '200'], service: true },
@@ -161,9 +164,45 @@ exports.register = ({ ipcMain, startProcess }) => {
     const services = names.out.split(/\r?\n/).map((l) => l.trim()).filter((n) => SERVICE.test(n)).sort().map((name) => {
       const row = rows.find((r) => r.Service === name);
       const ports = row ? [...new Set((row.Publishers || []).filter((p) => p.PublishedPort).map((p) => `${p.PublishedPort}`))].join(', ') : '';
-      return { name, state: row ? String(row.State || '') : '', status: row ? String(row.Status || '') : '', health: row ? String(row.Health || '') : '', ports };
+      return { name, state: row ? String(row.State || '') : '', status: row ? String(row.Status || '') : '', health: row ? String(row.Health || '') : '', ports,
+        container: row ? String(row.Name || '') : '', image: row ? String(row.Image || '') : '' };
     });
     return { services };
+  });
+
+  // Every container of this computer's Docker, as Docker Desktop lists them: -> {containers: [{id, name, image, state,
+  // status, ports, project}]} | {error}. project: the compose project a container belongs to, or ''.
+  ipcMain.handle('automation:containers', async () => {
+    const argv = dockerArgv();
+    if (!argv) return { error: 'Docker was not found.' };
+    const r = await ask(argv, ['ps', '-a', '--no-trunc', '--format', '{{json .}}']);
+    if (r.code !== 0) return { error: reason(r.err) || `docker ps ended with code ${r.code}` };
+    const containers = [];
+    for (const line of r.out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)) {
+      let c;
+      try { c = JSON.parse(line); } catch { continue; }
+      const id = String(c.ID || '');
+      if (!CONTAINER.test(id)) continue;
+      // "0.0.0.0:8080->8080/tcp, [::]:8080->8080/tcp, 9300/tcp": the published ones, once each
+      const ports = [...new Set([...String(c.Ports || '').matchAll(/:(\d+)->/g)].map((m) => m[1]))].join(', ');
+      const project = /(?:^|,)com\.docker\.compose\.project=([^,]*)/.exec(String(c.Labels || ''))?.[1] || '';
+      containers.push({ id, name: String(c.Names || '').split(',')[0], image: String(c.Image || ''), state: String(c.State || ''), status: String(c.Status || ''), ports, project });
+    }
+    containers.sort((a, b) => a.project.localeCompare(b.project) || a.name.localeCompare(b.name));
+    return { containers };
+  });
+
+  // One container, by its id: start, stop, restart, its logs, or remove it (stopped first). spec: {root, id, action}
+  ipcMain.handle('automation:container', (_e, spec = {}) => {
+    const { root, id, action } = spec;
+    const args = { start: ['start', id], stop: ['stop', id], restart: ['restart', id], logs: ['logs', '-f', '--tail', '200', id], rm: ['rm', '-f', id] }[action];
+    if (!args) throw new Error(`Unknown container action ${action}`);
+    if (typeof id !== 'string' || !CONTAINER.test(id)) throw expected(`${id} is not a container id`);
+    if (typeof root === 'string' && path.isAbsolute(root) && !isTrusted(root)) throw expected('The project is not trusted (Safe Mode)');
+    const argv = dockerArgv();
+    if (!argv) throw expected('Docker was not found. Install Docker Desktop, or start Nano Studio again if it was installed just now.');
+    const pid = startProcess(argv[0], [...argv.slice(1), ...args], { windowsHide: true, encoding: 'utf8' });
+    return { id: pid, command: shown(args) };
   });
 
   // Starts docker compose <action> as a process of the Run tool window: -> {id, command}

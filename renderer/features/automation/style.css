@@ -24,5 +24,13 @@
 .auto-empty { padding: 12px; }
 .auto-empty + .auto-hint { margin-left: 12px; }
 .auto-custom { padding-left: 40px; }
+.auto-summary { font-size: 12px; white-space: nowrap; }
+.auto-summary.on { color: var(--green6); }
+.auto-ports { display: inline-flex; gap: 6px; flex-shrink: 0; }
+.auto-port { font-size: 12px; color: var(--blue8); cursor: pointer; }
+.auto-port:hover { text-decoration: underline; }
+.auto-subhead { padding: 8px 8px 2px 26px; font-size: 11px; text-transform: uppercase; }
+.auto-icon:disabled { opacity: 0.35; cursor: default; }
+.auto-icon:disabled:hover { background: none; }
 .auto-container { padding-left: 40px; gap: 8px; font-size: 12px; cursor: pointer; }
 .auto-custom-input { flex: 1; min-width: 0; }

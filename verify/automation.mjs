@@ -43,6 +43,18 @@ if (a[0] === 'version') {
   if (mode === 'off') { console.log('29.0.0|'); console.error('error during connect: the docker daemon is not running'); process.exit(1); }
   console.log('29.0.0|29.0.0'); process.exit(0);
 }
+const OTHER = 'ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12';
+const otherFile = path.join(__dirname, 'other-state');
+const other = fs.existsSync(otherFile) ? fs.readFileSync(otherFile, 'utf8') : 'exited';
+if (a[0] === 'ps') {
+  if (other !== 'gone') console.log(JSON.stringify({ ID: OTHER, Names: 'old-db', Image: 'mysql:8', State: other, Status: other === 'running' ? 'Up 1 second' : 'Exited (0)', Ports: other === 'running' ? '0.0.0.0:3306->3306/tcp, [::]:3306->3306/tcp, 33060/tcp' : '', Labels: 'a=b' }));
+  const st = path.join(process.cwd(), 'fake-state.json');
+  process.exit(0);
+}
+if (a[1] === OTHER && ['start', 'stop', 'restart', 'rm', 'logs'].includes(a[0]) || (a[0] === 'rm' && a[2] === OTHER) || (a[0] === 'logs' && a.at(-1) === OTHER)) {
+  if (a[0] !== 'logs') fs.writeFileSync(otherFile, { start: 'running', restart: 'running', stop: 'exited', rm: 'gone' }[a[0]]);
+  console.log('docker did: ' + a.join(' ')); process.exit(0);
+}
 if (['run', 'build', 'stop'].includes(a[0])) { console.log('docker did: ' + a.join(' ')); process.exit(0); }
 if (a[0] !== 'compose' || a[1] !== '-f') { console.error('unknown: ' + a.join(' ')); process.exit(2); }
 const file = a[2];
@@ -62,7 +74,7 @@ const picked = rest.length ? rest : all;
 const save = () => fs.writeFileSync(stateFile, JSON.stringify(state));
 if (cmd === 'config') { console.log(all.join('\\n')); process.exit(0); }
 if (cmd === 'ps') {
-  for (const s of all) if (state[s]) console.log(JSON.stringify({ Service: s, State: state[s], Status: state[s] === 'running' ? 'Up 2 seconds' : 'Exited (0)', Health: '', Publishers: s === 'web' ? [{ PublishedPort: 8080, TargetPort: 8080 }, { PublishedPort: 0, TargetPort: 9 }] : [] }));
+  for (const s of all) if (state[s]) console.log(JSON.stringify({ Service: s, Name: 'demo-' + s + '-1', Image: s === 'web' ? 'demo-web' : 'redis:7', State: state[s], Status: state[s] === 'running' ? 'Up 2 seconds' : 'Exited (0)', Health: '', Publishers: s === 'web' ? [{ PublishedPort: 8080, TargetPort: 8080 }, { PublishedPort: 0, TargetPort: 9 }] : [] }));
   process.exit(0);
 }
 if (cmd === 'up' || cmd === 'start' || cmd === 'restart') { for (const s of picked) { state[s] = 'running'; console.log(' Container demo-' + s + '-1  Started'); } save(); process.exit(0); }
@@ -81,7 +93,7 @@ const check = (ok, label) => { results.push(!!ok); console.log(`${ok ? 'PASS' : 
 const list = `document.querySelector('#autoList')`;
 const run = async (t) => {
   const { js, until, shot, sleep } = t;
-  const serviceRows = () => js(`JSON.stringify([...${list}.querySelectorAll('.auto-service')].map((r) => [r.dataset.service, r.querySelector('.auto-dot').classList.contains('on'), r.querySelector('.auto-state').textContent]))`);
+  const serviceRows = () => js(`JSON.stringify([...${list}.querySelectorAll('.auto-service[data-service]')].map((r) => [r.dataset.service, r.querySelector('.auto-dot').classList.contains('on'), r.querySelector('.auto-state').textContent]))`);
   const tabText = (name) => js(`(ide.run.sessions().find((s) => s.name === ${S(name)} || s.title === ${S(name)})?.host.textContent) || ''`);
   const finished = (name) => until(`/Process finished with exit code 0/.test((ide.run.sessions().find((s) => s.name === ${S(name)} || s.title === ${S(name)})?.host.textContent) || '')`, `${name} finished`, 20000);
   const press = (expr) => js(`(${list}.querySelector(${S(expr)}).click(), true)`);
@@ -96,27 +108,29 @@ const run = async (t) => {
 
   // ---------- docker's own refusal, and what to do ----------
   await until(`!!${list}.querySelector('.auto-error')`, 'the error', 15000);
-  const refused = await js(`({ error: ${list}.querySelector('.auto-file .auto-error').textContent, hint: ${list}.querySelector('.auto-file .auto-hint').textContent, rows: ${list}.querySelectorAll('.auto-service').length })`);
+  const refused = await js(`({ error: ${list}.querySelector('.auto-file .auto-error').textContent, hint: ${list}.querySelector('.auto-file .auto-hint').textContent, rows: ${list}.querySelectorAll('.auto-service[data-service]').length })`);
   check(/required variable DB_PASSWORD is missing a value/.test(refused.error) && !/level=warning/.test(refused.error) && /DB_PASSWORD/.test(refused.hint) && /\.env/.test(refused.hint) && refused.rows === 0,
     `an empty required variable shows docker's error without its warnings, and says which value to give in .env (${S(refused)})`);
   await shot('error.png');
   writeFileSync(path.join(project, '.env'), 'DB_PASSWORD=secret\n');
   await js(`(document.querySelector('#autoRefresh').click(), true)`);
-  await until(`${list}.querySelectorAll('.auto-service').length === 2 && !${list}.querySelector('.auto-error')`, 'services after the fix', 15000);
+  await until(`${list}.querySelectorAll('.auto-service[data-service]').length === 2 && !${list}.querySelector('.auto-error')`, 'services after the fix', 15000);
   check(await serviceRows() === S([['cache', false, 'Not created'], ['web', false, 'Not created']]), `Refresh after .env is fixed lists the services, not created yet (${await serviceRows()})`);
 
   // ---------- Up, a service's Stop and Start, Down, Logs ----------
   await press('.auto-up');
   await finished('docker compose up');
   const up = await tabText('docker compose up');
-  check(/^docker compose -f .*compose\.yaml up -d/m.test(up) && /demo-web-1\s+Started/.test(up), `Up runs docker compose up -d in a Run tab named after it (${S(up.slice(0, 160))})`);
-  await until(`${list}.querySelectorAll('.auto-service .auto-dot.on').length === 2`, 'both running', 15000);
-  check(await serviceRows() === S([['cache', true, 'Running'], ['web', true, 'Running · :8080']]), `the services turn to running, with the port published (${await serviceRows()})`);
+  check(/^docker compose -f .*compose\.yaml up -d --wait$/m.test(up) && /demo-web-1\s+Started/.test(up), `Start runs docker compose up -d --wait in a Run tab named after it (${S(up.slice(0, 160))})`);
+  await until(`${list}.querySelectorAll('.auto-service[data-service] .auto-dot.on').length === 2`, 'both running', 15000);
+  check(await serviceRows() === S([['cache', true, 'Running'], ['web', true, 'Running']]) && await js(`${list}.querySelector('.auto-service[data-service="web"] .auto-port').textContent`) === ':8080'
+    && await js(`${list}.querySelector('.auto-summary').textContent`) === 'Running (2/2)' && await js(`!!${list}.querySelector('.auto-file-head .auto-stop-all') && !${list}.querySelector('.auto-file-head .auto-up')`),
+    `the services turn to running, the published port a link, and the file's row counts them and offers Stop in place of Start (${await serviceRows()})`);
   await shot('running.png');
   await press('.auto-service[data-service="web"] .auto-stop');
   await finished('docker compose stop web');
   await until(`!${list}.querySelector('.auto-service[data-service="web"] .auto-dot.on')`, 'web stopped', 15000);
-  check(await serviceRows() === S([['cache', true, 'Running'], ['web', false, 'Stopped · :8080']]) && await js(`!!${list}.querySelector('.auto-service[data-service="web"] .auto-start')`), `Stop on a service stops that one and offers Start (${await serviceRows()})`);
+  check(await serviceRows() === S([['cache', true, 'Running'], ['web', false, 'Stopped']]) && await js(`${list}.querySelector('.auto-summary').textContent`) === 'Running (1/2)' && await js(`!!${list}.querySelector('.auto-service[data-service="web"] .auto-start')`), `Stop on a service stops that one and offers Start (${await serviceRows()})`);
   await press('.auto-service[data-service="web"] .auto-start');
   await finished('docker compose up web');
   await until(`!!${list}.querySelector('.auto-service[data-service="web"] .auto-dot.on')`, 'web running again', 15000);
@@ -124,10 +138,40 @@ const run = async (t) => {
   await press('.auto-service[data-service="cache"] .auto-logs');
   await finished('docker compose logs cache');
   check(/cache-1\s+\| ready/.test(await tabText('docker compose logs cache')), 'Logs on a service shows its output in a Run tab');
+  // one button for all of it: Stop while any runs, Start again after
+  await press('.auto-file-head .auto-stop-all');
+  await finished('docker compose stop');
+  await until(`${list}.querySelectorAll('.auto-service[data-service] .auto-dot.on').length === 0 && !!${list}.querySelector('.auto-file-head .auto-up')`, 'all stopped', 15000);
+  check(await js(`${list}.querySelector('.auto-summary').textContent`) === 'Stopped', 'the file\'s Stop stops every service, and its button turns back to Start');
+  await press('.auto-file-head .auto-up');
+  await until(`${list}.querySelectorAll('.auto-service[data-service] .auto-dot.on').length === 2`, 'all started again', 20000);
+  // the file's menu names the rest
+  await press('.auto-file-more');
+  const fileMenu = await js(`[...document.querySelectorAll('.auto-menu .menu-label')].map((n) => n.textContent)`);
+  check(S(fileMenu) === S(['Start All', 'Stop All', 'Restart All', 'Logs', 'Build Images', 'Open compose.yaml', 'Remove Containers…']), `the file's menu has the rest (${S(fileMenu)})`);
+  await t.press('Escape');
   await press('.auto-down');
+  await until(`[...document.querySelectorAll('.dialog')].some((d) => /Stop and remove the containers of compose\\.yaml/.test(d.textContent))`, 'the question before Down', 5000);
+  await js(`([...[...document.querySelectorAll('.dialog')].at(-1).querySelectorAll('button')].find((b) => b.textContent === 'Remove').click(), true)`);
   await finished('docker compose down');
-  await until(`${list}.querySelectorAll('.auto-service .auto-dot.on').length === 0`, 'all down', 15000);
+  await until(`${list}.querySelectorAll('.auto-service[data-service] .auto-dot.on').length === 0`, 'all down', 15000);
   check(await serviceRows() === S([['cache', false, 'Not created'], ['web', false, 'Not created']]), `Down removes the containers (${await serviceRows()})`);
+
+  // ---------- the computer's other containers ----------
+  const otherRow = `${list}.querySelector('.auto-other[data-container="old-db"]')`;
+  await until(`!!${otherRow}`, 'the other container', 15000);
+  check(await js(`${otherRow}.querySelector('.auto-state').textContent === 'Stopped' && !!${otherRow}.querySelector('.auto-start')`) && /Other containers/i.test(await js(`${list}.querySelector('.auto-subhead').textContent`)), 'a container that is not the project\'s is listed under Other containers, stopped, with Start');
+  await js(`(${otherRow}.querySelector('.auto-start').click(), true)`);
+  await finished('docker start old-db');
+  await until(`!!${otherRow}?.querySelector('.auto-dot.on')`, 'old-db running', 15000);
+  check(await js(`${otherRow}.querySelector('.auto-port').textContent`) === ':3306' && await js(`${otherRow}.querySelectorAll('.auto-port').length`) === 1, 'started by its id, it shows its published port once');
+  await js(`(${otherRow}.querySelector('.auto-other-more').click(), true)`);
+  await js(`([...document.querySelectorAll('.auto-menu .menu-item')].find((r) => r.textContent.includes('Remove')).dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })), true)`);
+  await until(`[...document.querySelectorAll('.dialog')].some((d) => /Remove the container old-db/.test(d.textContent))`, 'the question before removing', 5000);
+  await js(`([...[...document.querySelectorAll('.dialog')].at(-1).querySelectorAll('button')].find((b) => b.textContent === 'Remove').click(), true)`);
+  await finished('docker rm old-db');
+  await until(`!${otherRow}`, 'old-db gone', 15000);
+  check(/docker did: rm -f ab12cd34/.test(await tabText('docker rm old-db')), 'Remove asks first, then removes that container');
 
   // ---------- Gradle ----------
   await press('.auto-task[data-task="build"] .auto-run');
@@ -174,8 +218,8 @@ try {
   await until('window.__ideReady === true', 'ready', 60000);
   await js(`(ide.toolWindows.get('Automation').show(), true)`);
   await until(`!!${list}?.querySelector('.auto-docker-missing')`, 'docker missing', 15000);
-  const ko = await js(`({ title: document.querySelector('.stripe-btn[data-tool="Automation"]').dataset.tooltip, missing: ${list}.querySelector('.auto-docker-missing').textContent, buttons: [...${list}.querySelectorAll('.auto-file-head button')].map((b) => b.textContent + (b.disabled ? '' : '!')) })`);
-  check(ko.title === '자동화' && /Docker를 찾지 못했습니다/.test(ko.missing) && S(ko.buttons) === S(['올리기', '내리기', '빌드', '로그']), `without Docker it says so in Korean and the compose buttons are off (${S(ko)})`);
+  const ko = await js(`({ title: document.querySelector('.stripe-btn[data-tool="Automation"]').dataset.tooltip, missing: ${list}.querySelector('.auto-docker-missing').textContent, buttons: [...${list}.querySelectorAll('.auto-file-head button')].map((b) => (b.disabled ? '' : '!') + b.title) })`);
+  check(ko.title === '자동화' && /Docker를 찾지 못했습니다/.test(ko.missing) && ko.buttons.length === 4 && ko.buttons.every((b) => !b.startsWith('!')) && /모든 서비스를 시작하고/.test(ko.buttons[0]), `without Docker it says so in Korean and the compose buttons are off (${S(ko)})`);
   await shot('missing-ko.png');
 } catch (err) { check(false, err.message); } finally { t.close(); }
 
