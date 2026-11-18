@@ -274,7 +274,7 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
                 Action::Markers => tr("Add sequence markers"),
                 Action::Split => tr("Split the clips"),
             };
-            egui::ComboBox::from_id_salt("cut-auto-scene-action").selected_text(name(o.action)).show_ui(ui, |ui| {
+            egui::ComboBox::from_id_salt("cut-auto-scene-action").icon(crate::theme::combo_icon).selected_text(name(o.action)).show_ui(ui, |ui| {
                 for a in [Action::Markers, Action::Split] {
                     ui.selectable_value(&mut o.action, a, name(a));
                 }

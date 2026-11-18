@@ -460,7 +460,7 @@ try {
     await waitFor(() => aliveServers(dir).length === 1, 20000);
     writeFileSync(path.join(dir, 'pyide-server.running'), S({ pid: orphan.pid, started: Date.now(), dir }));
     await refresh();
-    const shown = await js(`(() => { const c = ${card('alpha')}; return { end: !!c.querySelector('.mc-end-leftover'), start: !!c.querySelector('.mc-start'), del: !!c.querySelector('.mc-delete'), dot: c.querySelector('.mc-dot').classList.contains('on'), note: c.querySelector('.mc-leftover-why')?.textContent || '' }; })()`);
+    const shown = await js(`(() => { const c = ${card('alpha')}; return { end: !!c.querySelector('.mc-end-leftover'), start: !!c.querySelector('.mc-start'), del: (c.dataset.more || '').split(' ').includes('mc-delete'), dot: c.querySelector('.mc-dot').classList.contains('on'), note: c.querySelector('.mc-leftover-why')?.textContent || '' }; })()`);
     check(shown.end && !shown.start && !shown.del && shown.dot && /Still running from before/.test(shown.note), `a server still running from before shows as running, with End Server instead of Start and Delete (${S(shown)})`);
     const refused = await ipc('minecraft:launch', root, dir, 'x');
     check(!refused.ok && /still running outside this window/.test(refused.e) && aliveServers(dir).length === 1, `starting it anyway is refused, and no second server opens its world (${refused.e})`);

@@ -278,6 +278,9 @@ pub fn show(s: &mut Shell, ctx: &egui::Context) {
     let mut close = false;
     let modal = egui::Modal::new(egui::Id::unique("cut-prefs")).show(ctx, |ui| {
         ui.set_width(640.0);
+        ui.heading(tr("Settings"));
+        ui.label(RichText::new(tr("Changes apply at once.")).size(12.0).color(s.palette.gray[8]));
+        ui.add_space(8.0);
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
                 ui.set_width(150.0);
@@ -296,11 +299,9 @@ pub fn show(s: &mut Shell, ctx: &egui::Context) {
             });
         });
         ui.separator();
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button(tr("Close")).clicked() {
-                close = true;
-            }
-        });
+        if crate::panels::dialogs::buttons(ui, &[("Close", true)]).is_some() {
+            close = true;
+        }
     });
     if s.features.prefs.page.confirm_clear {
         confirm_clear(s, ctx);

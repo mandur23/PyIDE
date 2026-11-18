@@ -180,6 +180,7 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui) {
         if seq.captions.len() >= 2 {
             let name = shown.as_ref().map_or(String::new(), |t| t.name.clone());
             egui::ComboBox::from_id_salt("cut-cap-track")
+                .icon(crate::theme::combo_icon)
                 .selected_text(name)
                 .show_ui(ui, |ui| {
                     for t in &seq.captions {

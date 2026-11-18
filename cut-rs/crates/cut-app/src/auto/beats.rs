@@ -171,11 +171,14 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
                 Every::Beat => tr("Every beat"),
                 Every::Bar => tr("Every bar (4 beats)"),
             };
-            egui::ComboBox::from_id_salt("cut-auto-beats-every").selected_text(name(every)).show_ui(ui, |ui| {
-                for e in [Every::Beat, Every::Bar] {
-                    ui.selectable_value(&mut every, e, name(e));
-                }
-            });
+            egui::ComboBox::from_id_salt("cut-auto-beats-every")
+                .icon(crate::theme::combo_icon)
+                .selected_text(name(every))
+                .show_ui(ui, |ui| {
+                    for e in [Every::Beat, Every::Bar] {
+                        ui.selectable_value(&mut every, e, name(e));
+                    }
+                });
             ui.end_row();
         });
         ui.horizontal(|ui| {

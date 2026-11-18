@@ -562,9 +562,9 @@ async function craftUi(first) {
   try {
     await js(stubShell);
     await until(`!!document.querySelector('#craftHost .mcs-nav') && document.querySelector('.mcs-page.selected')?.dataset.page === 'play' && !!document.querySelector('.mcs-play .mcc-empty')`, 'craft app', 15000);
-    const shell = await js(`({ pages: [...document.querySelectorAll('#craftHost .mcs-page')].map((p) => [p.dataset.page, p.textContent.trim()]), actions: [...document.querySelectorAll('#craftHost .mcs-action')].map((p) => p.textContent.trim()),
+    const shell = await js(`({ pages: [...document.querySelectorAll('#craftHost .mcs-page')].map((p) => [p.dataset.page, p.textContent.trim()]), actions: [...document.querySelectorAll('#craftHost .mcs-action:not(.hidden)')].map((p) => p.textContent.trim()), heads: [...document.querySelectorAll('#craftHost .mcc-tools button')].map((p) => p.textContent.trim()),
       banner: !!document.querySelector('.mcc-banner'), editor: getComputedStyle(document.getElementById('editorArea')).display })`);
-    check(S(shell.pages) === S([['play', '플레이'], ['join', '서버 참여'], ['servers', '내 서버'], ['market', '마켓']]) && !shell.actions.some((a) => /플러그인|모드…/.test(a)) && shell.actions.includes('새 인스턴스…')
+    check(S(shell.pages) === S([['play', '플레이'], ['join', '서버 참여'], ['servers', '내 서버'], ['market', '마켓']]) && !shell.actions.some((a) => /플러그인|모드…/.test(a)) && !shell.actions.includes('새 인스턴스…') && !!shell.heads.includes('새 인스턴스…')
       && !shell.banner && shell.editor === 'none', `craft mounts the Minecraft screen as the app, in Korean, on Play, without plugin or mod making and with no launcher banner (${S(shell)})`);
 
     // ---------- New Instance, Play ----------
@@ -708,7 +708,7 @@ async function craftUi(first) {
     const koBtn = '.mcc-card[data-name="instance"] .mcc-korean-btn';
     await until(`!!document.querySelector(${S(koBtn)})`, 'the Korean button on the card', 10000);
     await press(koBtn);
-    await until(`/모드 1개 중 1개에서 3줄이 아직 한국어가 없습니다/.test(document.querySelector('.mcc-korean-status')?.textContent || '') && !document.querySelector('.mcc-korean-run').disabled`, 'the Korean dialog', 15000);
+    await until(`/모드 1개 중 1개에서 3줄이 아직 한국어가 없어요/.test(document.querySelector('.mcc-korean-status')?.textContent || '') && !document.querySelector('.mcc-korean-run').disabled`, 'the Korean dialog', 15000);
     const koDialog = await js(`({ label: document.querySelector('.mcc-korean-run').textContent, tip: document.querySelector(${S(koBtn)}).title })`);
     check(koDialog.label === '한국어로 번역' && koDialog.tip === '한국어 번역…', `the card's Korean button opens a dialog with the status of the instance's mods, in Korean (${S(koDialog)})`);
     await shot('craft-korean.png');
@@ -723,12 +723,12 @@ async function craftUi(first) {
     check(koBar.percent === '0' && koBar.wide && koBar.text === '0% · 3줄 중 0줄' && koBar.task?.fraction === 0 && koBar.task.text === koBar.text,
       `while Claude answers, the balloon and the status bar show how far the whole run is (${S(koBar)})`);
     await js(`([...document.querySelectorAll('.ide-balloon')].find((b) => /한국어로 번역하는 중/.test(b.textContent)).querySelectorAll('button').forEach((x) => { if (x.textContent === '취소') x.click(); }), true)`);
-    await until(`/취소했습니다/.test(ide.run.sessions().find((s) => s.title === 'Minecraft: 한국어 번역')?.host.textContent || '')`, 'cancelled', 15000);
+    await until(`/취소했어요/.test(ide.run.sessions().find((s) => s.title === 'Minecraft: 한국어 번역')?.host.textContent || '')`, 'cancelled', 15000);
     rmSync(claudeHold, { force: true });
     check(!existsSync(koFile) && readFileSync(path.join(homeInst('instance'), 'options.txt'), 'utf8') === userOptions, 'Cancel in the progress balloon stops the translation, and nothing is written');
     await until(`!document.querySelector('.mcc-korean-run').disabled`, 'Translate again', 15000);
     await press('.mcc-korean-run');
-    await until(`[...document.querySelectorAll('.ide-balloon')].some((b) => /모드를 한국어로 번역했습니다/.test(b.textContent))`, 'translated balloon', 30000)
+    await until(`[...document.querySelectorAll('.ide-balloon')].some((b) => /모드를 한국어로 번역했어요/.test(b.textContent))`, 'translated balloon', 30000)
       .catch(async (e) => { console.log(await js(`ide.run.sessions().find((s) => s.title === 'Minecraft: 한국어 번역')?.host.textContent`)); throw e; });
     const koLines = existsSync(koFile) ? readJson(koFile) : null;
     const koOptions = readFileSync(path.join(homeInst('instance'), 'options.txt'), 'utf8');
@@ -739,9 +739,9 @@ async function craftUi(first) {
     `Translate puts Claude's Korean into the instance's own resource pack, refusing the answer that dropped a %s, and asks only for the lines without Korean (${S({ koLines, koMeta })})`);
     check(koOptions === userOptions.replace('"fabric","file/My Pack.zip"', '"fabric","file/Nano Studio Korean","file/My Pack.zip"'),
       `and turns the pack on in options.txt below the user's own pack, which stays (${S(koOptions)})`);
-    const koBalloon = await js(`[...document.querySelectorAll('.ide-balloon')].find((b) => /모드를 한국어로 번역했습니다/.test(b.textContent))?.textContent || ''`);
-    check(/Nano Studio Korean에 2줄/.test(koBalloon) && /다음에 게임을 시작할 때부터/.test(koBalloon) && /번역 1줄은 넣지 않았습니다/.test(koBalloon), `its balloon says where the lines are and that they apply from the next game start (${koBalloon})`);
-    await until(`/1줄이 아직 한국어가 없습니다/.test(document.querySelector('.mcc-korean-status')?.textContent || '')`, 'the status after', 15000);
+    const koBalloon = await js(`[...document.querySelectorAll('.ide-balloon')].find((b) => /모드를 한국어로 번역했어요/.test(b.textContent))?.textContent || ''`);
+    check(/Nano Studio Korean에 2줄/.test(koBalloon) && /다음에 게임을 시작할 때부터/.test(koBalloon) && /번역 1줄은 넣지 않았어요/.test(koBalloon), `its balloon says where the lines are and that they apply from the next game start (${koBalloon})`);
+    await until(`/1줄이 아직 한국어가 없어요/.test(document.querySelector('.mcc-korean-status')?.textContent || '')`, 'the status after', 15000);
     check(true, 'the dialog counts again afterwards: only the refused line is left');
     await js(`(${dialogButton('닫기')}).click()`);
 

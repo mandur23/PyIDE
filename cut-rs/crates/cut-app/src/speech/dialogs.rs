@@ -307,7 +307,7 @@ pub const LANGUAGES: [(&str, &str); 3] = [("auto", "Detect automatically"), ("ko
 pub fn language_box(ui: &mut egui::Ui, id: &str, value: &mut String) -> bool {
     let shown = LANGUAGES.iter().find(|(v, _)| *v == value).map_or(LANGUAGES[0].1, |l| l.1);
     let mut changed = false;
-    egui::ComboBox::from_id_salt(id).selected_text(tr(shown)).show_ui(ui, |ui| {
+    egui::ComboBox::from_id_salt(id).icon(crate::theme::combo_icon).selected_text(tr(shown)).show_ui(ui, |ui| {
         for (v, label) in LANGUAGES {
             if ui.selectable_label(value == v, tr(label)).clicked() && value != v {
                 *value = v.to_owned();

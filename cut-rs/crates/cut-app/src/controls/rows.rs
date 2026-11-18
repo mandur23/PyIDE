@@ -184,16 +184,17 @@ pub fn row(s: &mut Shell, ui: &mut egui::Ui, clip: Id, spec: &Spec) {
                 _ => String::new(),
             };
             let shown = choices.iter().find(|(id, _)| *id == now).map_or(now.clone(), |(_, l)| tr(l).into_owned());
-            let r = egui::ComboBox::from_id_salt(("ec-choice", clip, &key)).selected_text(shown).width(110.0).show_ui(
-                &mut cu,
-                |ui| {
+            let r = egui::ComboBox::from_id_salt(("ec-choice", clip, &key))
+                .icon(crate::theme::combo_icon)
+                .selected_text(shown)
+                .width(110.0)
+                .show_ui(&mut cu, |ui| {
                     for (id, l) in choices {
                         if ui.selectable_label(*id == now, tr(l)).clicked() {
                             wrote.push(Wrote::Value(Value::Text((*id).to_owned())));
                         }
                     }
-                },
-            );
+                });
             if let Some(id) = name {
                 let _ = r.response.clone().labelled_by(id);
             }

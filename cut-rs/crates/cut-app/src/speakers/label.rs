@@ -511,11 +511,14 @@ pub fn style_row(ui: &mut egui::Ui, mode: &mut &'static str) {
     ui.horizontal(|ui| {
         ui.label(tr("Speakers"));
         let label = |m: &str| CAPTION_MODES.iter().find(|(v, _)| *v == m).map_or("", |(_, l)| *l);
-        egui::ComboBox::from_id_salt("cut-cap-speakers").selected_text(tr(label(mode))).show_ui(ui, |ui| {
-            for (v, l) in CAPTION_MODES {
-                ui.selectable_value(mode, v, tr(l));
-            }
-        });
+        egui::ComboBox::from_id_salt("cut-cap-speakers")
+            .icon(crate::theme::combo_icon)
+            .selected_text(tr(label(mode)))
+            .show_ui(ui, |ui| {
+                for (v, l) in CAPTION_MODES {
+                    ui.selectable_value(mode, v, tr(l));
+                }
+            });
     });
 }
 

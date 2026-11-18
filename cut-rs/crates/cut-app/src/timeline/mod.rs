@@ -238,6 +238,8 @@ impl Timeline {
     ) {
         let started = Instant::now();
         self.refresh(app);
+        // the bar's and the track headers' buttons are icons
+        crate::theme::flat(ui);
         let full = ui.available_rect_before_wrap();
         let resp = ui.allocate_rect(full, Sense::click_and_drag());
         if resp.clicked() || resp.drag_started() {
@@ -295,6 +297,15 @@ impl Timeline {
         ruler::draw(&painter, ruler, &self.view, &seq, app, pal);
         self.heads(ui, heads, app, pal, &seq);
         self.lanes(ui, lanes, app, pal, &seq, thumbs);
+        if self.layout.end == 0 {
+            painter.text(
+                lanes.center(),
+                Align2::CENTER_CENTER,
+                tr("Drag clips from the Project panel here."),
+                FontId::proportional(13.0),
+                pal.gray[7],
+            );
+        }
         self.direct_ui(ui, lanes, app, &seq);
         self.scrollbar(ui, hbar, pal);
         self.edit_input(ui, &resp, [ruler, lanes], app, &seq);

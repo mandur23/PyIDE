@@ -462,6 +462,11 @@ export async function cutWorkspace(ctx, id) {
 }
 
 // A row of the open IDE context menu (ide.ui.contextMenu, also the editor's): `level` 0 is the menu, 1 its submenu.
+// Craft's server card: craftMore(card, 'mc-rp') presses an action kept under the card's More button (an expression for
+// js()), craftHas(card, 'mc-rp-send') says whether More has it. `card` is an expression for the card.
+export const craftMore = (card, cls) => `(() => { const c = ${card}; c.querySelector('.mc-more').click(); const row = document.querySelector('.mc-actions-menu .menu-item[data-act="${cls}"]');
+  if (!row) throw new Error('More has no ${cls}'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); return true; })()`;
+export const craftHas = (card, cls) => `((${card})?.dataset.more || '').split(' ').includes('${cls}')`;
 export const menuRow = (label, level = 0) => `[...document.querySelectorAll('.context-menu[data-level="${level}"] > .menu-item')].find((r) => r.querySelector('.menu-label')?.textContent === ${JSON.stringify(label)})`;
 
 // Moves the pointer onto each submenu of `path` in the open context menu, as a user does, and clicks its last item:

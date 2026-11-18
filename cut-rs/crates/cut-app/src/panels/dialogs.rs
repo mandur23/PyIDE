@@ -19,14 +19,18 @@ pub fn when(ms: i64) -> String {
     format!("{}-{}-{} {}:{}:{} UTC", &s[0..4], &s[4..6], &s[6..8], &s[9..11], &s[11..13], &s[13..15])
 }
 
-fn buttons(ui: &mut egui::Ui, list: &[(&str, bool)]) -> Option<usize> {
+pub fn buttons(ui: &mut egui::Ui, list: &[(&str, bool)]) -> Option<usize> {
     let mut out = None;
     ui.add_space(10.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         for (i, (label, primary)) in list.iter().enumerate().rev() {
-            let mut b = Button::new(RichText::new(tr(label)).size(13.5)).min_size(Vec2::new(84.0, 28.0));
+            let mut b = Button::new({
+                let t = RichText::new(tr(label)).size(13.5);
+                if *primary { t.color(egui::Color32::WHITE) } else { t }
+            })
+            .min_size(Vec2::new(84.0, 28.0));
             if *primary {
-                b = b.fill(egui::Color32::from_rgb(0x35, 0x74, 0xf0));
+                b = b.fill(egui::Color32::from_rgb(0x35, 0x74, 0xf0)).stroke(egui::Stroke::NONE);
             }
             if ui.add(b).clicked() {
                 out = Some(i);
@@ -186,9 +190,9 @@ pub fn show(s: &mut Shell, ctx: &egui::Context) {
                     ui.text_edit_singleline(&mut name);
                     ui.end_row();
                     ui.label(tr("Preset"));
-                    egui::ComboBox::from_id_salt("seq-preset").selected_text(SEQUENCE[preset].name).show_ui(ui, |ui| {
+                    egui::ComboBox::from_id_salt("seq-preset").icon(crate::theme::combo_icon).selected_text(tr(SEQUENCE[preset].name)).show_ui(ui, |ui| {
                         for (i, p) in SEQUENCE.iter().enumerate() {
-                            ui.selectable_value(&mut preset, i, p.name);
+                            ui.selectable_value(&mut preset, i, tr(p.name));
                         }
                     });
                     ui.end_row();

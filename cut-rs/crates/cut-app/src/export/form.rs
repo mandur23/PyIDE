@@ -388,6 +388,7 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui, inline: bool) {
         |ui| {
             row(ui, "Sequence", |ui| {
                 egui::ComboBox::from_id_salt("cut-export-seq")
+                    .icon(crate::theme::combo_icon)
                     .selected_text(sequences.iter().find(|x| x.0 == seq.id).map_or("", |x| x.1.as_str()))
                     .show_ui(ui, |ui| {
                         for (id, name) in &sequences {
@@ -398,14 +399,14 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui, inline: bool) {
                     });
             });
             row(ui, "Preset", |ui| {
-                egui::ComboBox::from_id_salt("cut-export-preset").selected_text(tr(EXPORT[f.preset].name)).show_ui(
-                    ui,
-                    |ui| {
+                egui::ComboBox::from_id_salt("cut-export-preset")
+                    .icon(crate::theme::combo_icon)
+                    .selected_text(tr(EXPORT[f.preset].name))
+                    .show_ui(ui, |ui| {
                         for (i, p) in EXPORT.iter().enumerate() {
                             ui.selectable_value(&mut f.preset, i, tr(p.name));
                         }
-                    },
-                );
+                    });
             });
         },
     );
@@ -418,6 +419,7 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui, inline: bool) {
             .show(ui, |ui| {
                 row(ui, "Codec", |ui| {
                     egui::ComboBox::from_id_salt("cut-export-codec")
+                        .icon(crate::theme::combo_icon)
                         .selected_text(if f.codec == Family::Hevc { tr("HEVC (hardware)") } else { "H.264".into() })
                         .show_ui(ui, |ui| {
                             ui.selectable_value(&mut f.codec, Family::H264, "H.264");
@@ -470,6 +472,7 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui, inline: bool) {
         |ui| {
             row(ui, "Audio bitrate", |ui| {
                 egui::ComboBox::from_id_salt("cut-export-ab")
+                    .icon(crate::theme::combo_icon)
                     .selected_text(format!("{} kbps", f.audio_bitrate / 1000))
                     .show_ui(ui, |ui| {
                         for b in AUDIO_BITRATES {
@@ -484,11 +487,14 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui, inline: bool) {
                     Some(v) => format!("{v} LUFS").into(),
                     None => tr("Do not change"),
                 };
-                egui::ComboBox::from_id_salt("cut-export-loud").selected_text(label(f.loudness)).show_ui(ui, |ui| {
-                    for v in [Some(-14.0), Some(-24.0), None] {
-                        ui.selectable_value(&mut f.loudness, v, label(v));
-                    }
-                });
+                egui::ComboBox::from_id_salt("cut-export-loud")
+                    .icon(crate::theme::combo_icon)
+                    .selected_text(label(f.loudness))
+                    .show_ui(ui, |ui| {
+                        for v in [Some(-14.0), Some(-24.0), None] {
+                            ui.selectable_value(&mut f.loudness, v, label(v));
+                        }
+                    });
             });
         },
     );
@@ -511,11 +517,14 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui, inline: bool) {
                         Some(CaptionMode::Srt) => tr("SRT file beside the video"),
                         Some(CaptionMode::Both) => tr("Both"),
                     };
-                    egui::ComboBox::from_id_salt("cut-export-cap").selected_text(label(f.captions)).show_ui(ui, |ui| {
-                        for c in [None, Some(CaptionMode::Burn), Some(CaptionMode::Srt), Some(CaptionMode::Both)] {
-                            ui.selectable_value(&mut f.captions, c, label(c));
-                        }
-                    });
+                    egui::ComboBox::from_id_salt("cut-export-cap")
+                        .icon(crate::theme::combo_icon)
+                        .selected_text(label(f.captions))
+                        .show_ui(ui, |ui| {
+                            for c in [None, Some(CaptionMode::Burn), Some(CaptionMode::Srt), Some(CaptionMode::Both)] {
+                                ui.selectable_value(&mut f.captions, c, label(c));
+                            }
+                        });
                 });
             });
             if let Some(note) = &burned

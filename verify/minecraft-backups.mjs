@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSy
 import http from 'http';
 import { tmpdir } from 'os';
 import path from 'path';
-import { launch } from './lib.mjs';
+import { launch, craftMore, craftHas } from './lib.mjs';
 import { englishLeaks } from './i18n-lib.mjs';
 
 const S = JSON.stringify;
@@ -267,7 +267,7 @@ try {
 
   // ---------- a Market update backs the server up first; Skip lets it go on ----------
   await toCards();
-  await pressAt(`${card('modded')}.querySelector('.mc-server-market')`);
+  await js(craftMore(card('modded'), 'mc-server-market'));
   await until(`!!document.querySelector('.mcm-card[data-id="${SODIUM}"] .mcm-update')`, 'Sodium with Update', 15000);
   await pressAt(`document.querySelector('.mcm-card[data-id="${SODIUM}"] .mcm-update')`);
   await until('window.__installs.length === 1', 'the install after the backup', 30000);

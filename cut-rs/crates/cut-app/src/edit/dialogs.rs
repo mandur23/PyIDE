@@ -293,7 +293,7 @@ pub fn show(s: &mut Shell, ctx: &egui::Context) {
                         ui.add(egui::TextEdit::singleline(duration).font(egui::TextStyle::Monospace));
                     });
                     row(ui, "Type", |ui| {
-                        egui::ComboBox::from_id_salt("marker-kind").selected_text(tr(super::markers::kind_name(*kind))).show_ui(ui, |ui| {
+                        egui::ComboBox::from_id_salt("marker-kind").icon(crate::theme::combo_icon).selected_text(tr(super::markers::kind_name(*kind))).show_ui(ui, |ui| {
                             for (k, label) in KINDS {
                                 ui.selectable_value(kind, k, tr(label));
                             }
@@ -301,7 +301,7 @@ pub fn show(s: &mut Shell, ctx: &egui::Context) {
                     });
                     row(ui, "Color", |ui| {
                         let shown = COLORS.iter().find(|c| c.0 == *color).map_or("Green", |c| c.1);
-                        egui::ComboBox::from_id_salt("marker-color").selected_text(tr(shown)).show_ui(ui, |ui| {
+                        egui::ComboBox::from_id_salt("marker-color").icon(crate::theme::combo_icon).selected_text(tr(shown)).show_ui(ui, |ui| {
                             for (k, label, _) in COLORS {
                                 ui.selectable_value(color, k, tr(label));
                             }
@@ -332,7 +332,7 @@ pub fn show(s: &mut Shell, ctx: &egui::Context) {
                     row(ui, "Preset", |ui| {
                         let list = cut_export::presets::SEQUENCE;
                         let shown = preset.map_or_else(|| tr("Custom").into_owned(), |i| tr(list[i].name).into_owned());
-                        egui::ComboBox::from_id_salt("seq-settings-preset").selected_text(shown).show_ui(ui, |ui| {
+                        egui::ComboBox::from_id_salt("seq-settings-preset").icon(crate::theme::combo_icon).selected_text(shown).show_ui(ui, |ui| {
                             for (i, p) in list.iter().enumerate() {
                                 if ui.selectable_label(*preset == Some(i), tr(p.name)).clicked() {
                                     *preset = Some(i);
@@ -352,7 +352,7 @@ pub fn show(s: &mut Shell, ctx: &egui::Context) {
                         ui.add(egui::DragValue::new(h).range(16..=4320).speed(2).suffix(" px"));
                     });
                     row(ui, "Frame rate", |ui| {
-                        egui::ComboBox::from_id_salt("seq-settings-fps").selected_text(fps_label(*rate)).show_ui(ui, |ui| {
+                        egui::ComboBox::from_id_salt("seq-settings-fps").icon(crate::theme::combo_icon).selected_text(fps_label(*rate)).show_ui(ui, |ui| {
                             for i in 0..FRAME_RATES.len() {
                                 ui.selectable_value(rate, i, fps_label(i));
                             }

@@ -128,7 +128,7 @@ pub struct Shell {
 impl Shell {
     /// The editor on the workspace `home`.
     pub fn new(home: Home) -> Shell {
-        let (doc, app) = Doc::start(home, now_ms());
+        let (mut doc, mut app) = Doc::start(home, now_ms());
         let lang = std::env::var("CUT_LANG")
             .ok()
             .and_then(|l| Lang::from_code(&l))
@@ -136,6 +136,7 @@ impl Shell {
             .or_else(crate::studio::language)
             .unwrap_or(Lang::Ko);
         i18n::set_lang(lang);
+        doc.fresh_in_language(&mut app);
         let theme = match doc.setting("theme") {
             Some("light") => ThemeKind::Light,
             _ => ThemeKind::Dark,

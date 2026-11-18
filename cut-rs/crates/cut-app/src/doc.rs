@@ -202,6 +202,14 @@ impl Doc {
         (doc, app)
     }
 
+    /// `start` named the first sequence before the screen's language was known (the settings it read say it): the
+    /// untouched project is made again in that language, in the same session.
+    pub fn fresh_in_language(&mut self, app: &mut App) {
+        *app = App::new(fresh_for(&self.settings), None);
+        self.revision = app.history.revision();
+        self.copied_revision = Some(self.revision);
+    }
+
     /// Takes on a project just put in `app` (`adopt`): a new session, the autosave clock reset.
     fn adopt(&mut self, app: &App, session_key: Option<String>, mtime: Option<f64>, now: i64) {
         self.disk_mtime = if app.path.is_some() { mtime } else { None };

@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import http from 'http';
 import { tmpdir } from 'os';
 import path from 'path';
-import { launch } from './lib.mjs';
+import { launch, craftMore, craftHas } from './lib.mjs';
 
 const S = JSON.stringify;
 const work = mkdtempSync(path.join(tmpdir(), 'pyide-minecraft-'));
@@ -364,13 +364,13 @@ try {
   await stopServer('survival');
 
   // ---------- resource pack ----------
-  await js(`(${card('survival')}.querySelector('.mc-rp').click(), true)`);
+  await js(craftMore(card('survival'), 'mc-rp'));
   const mcmeta = path.join(serverDir('survival'), 'resourcepack', 'pack.mcmeta');
   await until(`ide.api.exists(${S(mcmeta)})`, 'resource pack folder', 15000);
   check(JSON.parse(readFileSync(mcmeta, 'utf8')).pack.pack_format === 15, 'the resource pack gets the format of the server\'s Minecraft (version.json in its jar)');
   write(path.join(serverDir('survival'), 'resourcepack', 'assets', 'minecraft', 'textures', 'block', 'stone.png'), 'png');
-  await until(`!!${card('survival')}.querySelector('.mc-rp-send')`, 'send button', 10000);
-  await js(`(${card('survival')}.querySelector('.mc-rp-send').click(), true)`);
+  await until(craftHas(card('survival'), 'mc-rp-send'), 'send button', 10000);
+  await js(craftMore(card('survival'), 'mc-rp-send'));
   await until(`(${runTab('Minecraft: Resource Pack')})?.host.textContent.includes('server.properties now sends players')`, 'pack sent', 60000)
     .catch(async (e) => { console.log(await tabText('Minecraft: Resource Pack')); throw e; });
   const props = readFileSync(path.join(serverDir('survival'), 'server.properties'), 'utf8');
@@ -443,7 +443,7 @@ try {
   await stopServer('modded');
 
   write(path.join(serverDir('modded'), 'mods', 'mymod-1.0.jar'), 'a mod the user put here');
-  await js(`(${card('modded')}.querySelector('.mc-pack').click(), true)`);
+  await js(craftMore(card('modded'), 'mc-pack'));
   const pack = path.join(serverDir('modded'), 'client-pack', 'modded-1.20.1.mrpack');
   await until(`ide.api.exists(${S(pack)})`, 'client pack', 20000);
   const read = JSON.parse(execFileSync('py', ['-3', '-I', '-c', 'import zipfile,sys,json; z=zipfile.ZipFile(sys.argv[1]); assert z.testzip() is None; print(json.dumps({"names": z.namelist(), "index": json.loads(z.read("modrinth.index.json"))}))', pack], { encoding: 'utf8' }));
@@ -495,7 +495,7 @@ try {
   check(readFileSync(path.join(packDir2, 'mods', 'server-mod.jar'), 'utf8') === 'server mod' && !existsSync(path.join(packDir2, 'mods', 'client-mod.jar'))
     && existsSync(path.join(packDir2, 'config', 'pack.toml')) && existsSync(path.join(packDir2, 'server-only.txt')) && !existsSync(path.join(packDir2, 'options.txt')),
   'the server gets the modpack\'s server files (checksums checked), overrides and server-overrides, not its client-only files');
-  await js(`(${card('Test-Pack')}.querySelector('.mc-pack').click(), true)`);
+  await js(craftMore(card('Test-Pack'), 'mc-pack'));
   await until(`[...document.querySelectorAll('.ide-balloon')].some((n) => n.textContent.includes('The modpack Test Pack'))`, 'modpack client pack', 10000)
     .then(() => check(true, 'its client pack is the modpack itself (with the client mods)'), () => check(false, 'its client pack is the modpack itself'));
   check(existsSync(path.join(packDir2, 'client-pack', 'Test Pack.mrpack')), 'the .mrpack is kept as the server\'s client pack');
@@ -503,7 +503,7 @@ try {
   // ---------- Market ----------
   const marketCard = (id) => `document.querySelector('.mcm-card[data-id="${id}"]')`;
   const moddedMods = () => readdirSync(path.join(serverDir('modded'), 'mods')).sort();
-  await js(`(${card('modded')}.querySelector('.mc-server-market').click(), true)`);
+  await js(craftMore(card('modded'), 'mc-server-market'));
   await until(`!!${marketCard('MODA')}`, 'market results', 20000);
   check(await js(`ide.minecraft.screen.page() === 'market' && !!document.querySelector('.mcs-market').offsetParent && document.querySelectorAll('.mcm-tab').length === 4 && document.querySelector('.mcm-tab.active').dataset.type === 'mod'`)
     && await js(`document.querySelector('#mcmServer').selectedOptions[0].textContent`) === 'modded (Forge 1.20.1)',
@@ -530,14 +530,14 @@ try {
   check(S(moddedMods()) === S(['mymod-1.0.jar']) && !JSON.parse(readFileSync(path.join(serverDir('modded'), 'pyide-server.json'), 'utf8')).market?.LIBB,
     'Remove takes out the mod and the library nothing else needs, not the user\'s own mod');
 
-  await js(`(${card('modded')}.querySelector('.mc-autosync').click(), true)`);
+  await js(craftMore(card('modded'), 'mc-autosync'));
   await until(`!!${dialogButton('Install AutoModpack')}`, 'auto sync confirm');
   await js(`(${dialogButton('Install AutoModpack')}).click()`);
-  await until(`!!${card('modded')} && !${card('modded')}.querySelector('.mc-autosync')`, 'auto sync on', 20000)
+  await until(`!!${card('modded')} && !${craftHas(card('modded'), 'mc-autosync')}`, 'auto sync on', 20000)
     .catch(async (e) => { console.log(await tabText('Minecraft: Auto Sync')); throw e; });
   check(S(moddedMods()) === S(['automodpack-mc1.20.1-forge-4.0.7.jar', 'mymod-1.0.jar']) && /AutoModpack is on/.test(await js(`${card('modded')}.querySelector('.mc-server-note').textContent`)),
     `Auto Sync puts AutoModpack from Modrinth in the server's mods and says so on the card (${S(moddedMods())})`);
-  await js(`(${card('modded')}.querySelector('.mc-pack').click(), true)`);
+  await js(craftMore(card('modded'), 'mc-pack'));
   await until(`[...document.querySelectorAll('.ide-balloon')].some((b) => b.textContent.includes('AutoModpack alone'))`, 'auto sync client pack', 20000);
   const syncPack = JSON.parse(execFileSync('py', ['-3', '-I', '-c', 'import zipfile,sys,json; z=zipfile.ZipFile(sys.argv[1]); assert z.testzip() is None; print(json.dumps(z.namelist()))', pack], { encoding: 'utf8' }));
   check(S(syncPack) === S(['modrinth.index.json', 'overrides/mods/automodpack-mc1.20.1-forge-4.0.7.jar']),
@@ -696,7 +696,7 @@ try {
   await js(`(ide.api.trash = (p) => ide.api.rename(p, ${S(trashed)}), true)`);
   await js(`(${card('purp')}.querySelector('.mc-settings').click(), true)`);
   await until(`!!document.querySelector('.mcset [data-prop="motd"]') && ide.activeTab()?.path.endsWith('purp')`, 'purp settings tab');
-  await js(`(${card('purp')}.querySelector('.mc-delete').click(), true)`);
+  await js(craftMore(card('purp'), 'mc-delete'));
   await until(`!!${dialogButton('Delete')}`, 'delete confirm');
   check(/Recycle Bin/.test(await js(`document.querySelector('.dialog')?.textContent || ''`)), 'Delete asks before moving the server to the Recycle Bin');
   await js(`(${dialogButton('Delete')}).click()`);
@@ -718,7 +718,7 @@ try {
   check(await js(`document.querySelectorAll('#minecraftScreen .mc-server').length === ide.minecraft.servers().length && !!document.querySelector('#minecraftScreen .mc-server[data-name="modded"] .mc-start')`),
     'the Minecraft screen\'s My Servers page lists every server, with its actions');
   await shot('screen.png');
-  await js(`(document.querySelector('.mcs-action.mcs-new-server').click(), true)`);
+  await js(`(document.querySelector('.mcc-new-server').click(), true)`);
   await until(`document.querySelectorAll('#mcKind option').length === 7`, 'new server from the screen');
   check(true, 'New Server… on the screen opens the New Server dialog');
   await js(`(${dialogButton('Cancel')}).click()`);

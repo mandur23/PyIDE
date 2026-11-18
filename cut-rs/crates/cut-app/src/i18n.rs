@@ -11,7 +11,9 @@ const CORE_KO: &str = include_str!("../../../../renderer/locales/ko.json");
 const CUT_KO: &str = include_str!("../../../../renderer/features/cut/locales/ko.json");
 
 /// Texts only the native app shows (the JavaScript editor has no such sentence to reuse).
-const NATIVE_KO: [(&str, &str); 17] = [
+const NATIVE_KO: [(&str, &str); 19] = [
+    ("Changes apply at once.", "바꾸면 바로 적용됩니다."),
+    ("Drag clips from the Project panel here.", "프로젝트 패널의 클립을 여기로 끌어다 놓으세요."),
     ("Find Action", "동작 찾기"),
     ("No action matches.", "일치하는 동작이 없습니다."),
     ("{n} clips", "클립 {n}개"),
@@ -42,7 +44,11 @@ const NATIVE_KO: [(&str, &str); 17] = [
 
 /// The panels' windows: words agreed with the JavaScript apps' same feature, so they win over the core dictionary's
 /// "Open in New Window" (an editor tab's "새 창에서 열기").
-const WINDOWS_KO: [(&str, &str); 4] = [
+const WINDOWS_KO: [(&str, &str); 6] = [
+    // Find Action's field in the word its title uses (the core dictionary says "액션")
+    ("Search actions", "동작 검색"),
+    // the meters' slot is too narrow for "오디오 미터"
+    ("Meters", "미터"),
     ("Open in New Window", "새 창으로 열기"),
     ("Return to Main Window", "기본 창으로 되돌리기"),
     ("Return All Panels to Main Window", "모든 패널을 기본 창으로 되돌리기"),

@@ -152,11 +152,15 @@ pub fn section(s: &mut Shell, ui: &mut egui::Ui, pal: &Palette, p: &Map<String, 
     ui.horizontal(|ui| {
         ui.add_sized([118.0, 18.0], egui::Label::new(tr("Look")));
         let shown = options.iter().find(|o| o.0 == chosen).map_or_else(String::new, |o| o.1.clone());
-        egui::ComboBox::from_id_salt("lumetri-look").selected_text(shown).width(140.0).show_ui(ui, |ui| {
-            for (id, name) in &options {
-                ui.selectable_value(&mut chosen, id.clone(), name);
-            }
-        });
+        egui::ComboBox::from_id_salt("lumetri-look")
+            .icon(crate::theme::combo_icon)
+            .selected_text(shown)
+            .width(140.0)
+            .show_ui(ui, |ui| {
+                for (id, name) in &options {
+                    ui.selectable_value(&mut chosen, id.clone(), name);
+                }
+            });
         if ui.button(tr("Browse…")).on_hover_text(tr("Load a .cube LUT")).clicked() {
             s.features.fx.color.look.browse(ui.ctx());
         }

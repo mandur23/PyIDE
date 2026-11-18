@@ -138,7 +138,7 @@ try {
   await until(`!!${card('survival')}?.offsetParent`, 'the survival card', 10000);
 
   // ---------- New Server: a free name, the proxy's suggestions and the version lists ----------
-  await pressAt(`document.querySelector('.mcs-new-server')`);
+  await pressAt(`document.querySelector('.mcc-new-server')`);
   await until(`!!document.getElementById('mcName')`, 'the New Server dialog', 10000);
   check(await valueOf('mcName') === 'survival-2', `with a survival server already there, New Server suggests survival-2 (${await valueOf('mcName')})`);
   // Paper's list (1.2 s) is still on its way when Velocity is chosen: only Velocity's may fill the box.
@@ -302,7 +302,7 @@ try {
   await until(`ide.theme.current() === 'light'`, 'light theme', 10000);
   await shot('damaged-light.png');
   await js(`(ide.settings.set('appearance.theme', 'dark'), true)`);
-  await pressAt(`document.querySelector('.mcs-new-server')`);
+  await pressAt(`document.querySelector('.mcc-new-server')`);
   await until(`!!document.getElementById('mcName')`, 'the New Server dialog', 10000);
   // A Velocity proxy asks for no EULA, so the name is the first thing Create checks.
   await choose('mcKind', 'velocity');

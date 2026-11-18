@@ -356,6 +356,7 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui) {
     let pal = s.palette.clone();
     // the bar: import, new bin, search, list or icons
     ui.horizontal(|ui| {
+        crate::theme::flat(ui);
         ui.add_space(6.0);
         if ui.add(Button::new(icons::IMPORT).frame(false)).on_hover_text(tr("Import Media")).clicked() {
             s.ask(crate::shell::Ask::Import);
@@ -684,13 +685,16 @@ fn rows(s: &mut Shell, ui: &mut egui::Ui, list: &[Entry]) -> Option<Entry> {
     use crate::timeline::fit_text;
     let pal = s.palette.clone();
     let mut open = None;
-    let w = ui.available_width().max(360.0);
+    // a timecode, a frame size and a rate have a width of their own; the name takes the rest (a narrow panel scrolls)
+    let (duration_w, video_w, fps_w, uses_w) = (92.0, 80.0, 60.0, 36.0);
+    let fixed = duration_w + video_w + fps_w + uses_w;
+    let w = ui.available_width().max(fixed + 80.0);
     let cols = [
-        (Column::Name, "Name", w * 0.40),
-        (Column::Duration, "Duration", w * 0.20),
-        (Column::Video, "Video", w * 0.15),
-        (Column::Fps, "Frame Rate", w * 0.15),
-        (Column::Uses, "Uses", w * 0.10),
+        (Column::Name, "Name", w - fixed),
+        (Column::Duration, "Duration", duration_w),
+        (Column::Video, "Video", video_w),
+        (Column::Fps, "Frame Rate", fps_w),
+        (Column::Uses, "Uses", uses_w),
     ];
     let starts: Vec<f32> = cols
         .iter()

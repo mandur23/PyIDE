@@ -198,13 +198,16 @@ pub fn settings_section(s: &mut Shell, ui: &mut egui::Ui) {
     let now = super::model(s);
     ui.label(tr("Model:"));
     let shown = models.iter().find(|m| m.0 == now).map_or(now.clone(), |m| tr(m.1).into_owned());
-    egui::ComboBox::from_id_salt("cut-ai-model").selected_text(shown).show_ui(ui, |ui| {
-        for (id, label) in models {
-            if ui.selectable_label(now == id, tr(label)).clicked() {
-                crate::prefs::set(s, "ai.model", Json::from(id));
+    egui::ComboBox::from_id_salt("cut-ai-model").icon(crate::theme::combo_icon).selected_text(shown).show_ui(
+        ui,
+        |ui| {
+            for (id, label) in models {
+                if ui.selectable_label(now == id, tr(label)).clicked() {
+                    crate::prefs::set(s, "ai.model", Json::from(id));
+                }
             }
-        }
-    });
+        },
+    );
     ui.end_row();
     ui.label("");
     let mut ack = acknowledged(s);

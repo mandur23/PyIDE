@@ -75,22 +75,28 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui) {
         let v = &mut s.app.edit.markers;
         ui.add(egui::TextEdit::singleline(&mut v.search).hint_text(tr("Search")).desired_width(120.0));
         let kind = v.kind.map_or_else(|| tr("All Types").into_owned(), |k| tr(kind_name(k)).into_owned());
-        egui::ComboBox::from_id_salt("markers-kind").selected_text(kind).show_ui(ui, |ui| {
-            ui.selectable_value(&mut v.kind, None, tr("All Types"));
-            for (k, label) in KINDS {
-                ui.selectable_value(&mut v.kind, Some(k), tr(label));
-            }
-        });
+        egui::ComboBox::from_id_salt("markers-kind").icon(crate::theme::combo_icon).selected_text(kind).show_ui(
+            ui,
+            |ui| {
+                ui.selectable_value(&mut v.kind, None, tr("All Types"));
+                for (k, label) in KINDS {
+                    ui.selectable_value(&mut v.kind, Some(k), tr(label));
+                }
+            },
+        );
         let shown = v
             .color
             .and_then(|c| COLORS.iter().find(|x| x.0 == c))
             .map_or_else(|| tr("All Colors").into_owned(), |c| tr(c.1).into_owned());
-        egui::ComboBox::from_id_salt("markers-color").selected_text(shown).show_ui(ui, |ui| {
-            ui.selectable_value(&mut v.color, None, tr("All Colors"));
-            for (k, label, _) in COLORS {
-                ui.selectable_value(&mut v.color, Some(k), tr(label));
-            }
-        });
+        egui::ComboBox::from_id_salt("markers-color").icon(crate::theme::combo_icon).selected_text(shown).show_ui(
+            ui,
+            |ui| {
+                ui.selectable_value(&mut v.color, None, tr("All Colors"));
+                for (k, label, _) in COLORS {
+                    ui.selectable_value(&mut v.color, Some(k), tr(label));
+                }
+            },
+        );
         if ui.button(crate::icons::MARKER).on_hover_text(tr("Add Marker")).clicked() {
             s.focus(Panel::Markers);
             action(s, "addMarker");

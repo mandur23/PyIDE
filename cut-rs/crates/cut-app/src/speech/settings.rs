@@ -20,6 +20,7 @@ pub fn rows(s: &mut Shell, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         let mut pick = None;
         egui::ComboBox::from_id_salt("cut-speech-model")
+            .icon(crate::theme::combo_icon)
             .selected_text(format!("{} ({})", m.name, format_bytes(m.bytes)))
             .show_ui(ui, |ui| {
                 for x in MODELS {

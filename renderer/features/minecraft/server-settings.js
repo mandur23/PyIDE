@@ -223,7 +223,7 @@
     title.append(el('span', 'mcset-name', srv.name), el('span', `mcset-state${running ? ' on' : ''}`, running ? tr('Running') : tr('Stopped')));
     const sub = el('div', 'mcset-sub muted', `${mc.kindTitle(srv.kind)} ${srv.mc || ''} · ${tr('port {port}', { port: base.props['server-port'] || srv.port })}`);
     const tools = el('div', 'mcset-tools');
-    const reload = el('button', 'secondary mcset-reload', tr('Reload'));
+    const reload = el('button', 'secondary mcset-reload', tr('Refresh'));
     reload.title = tr('Read the settings from the server\'s files again');
     reload.onclick = async () => {
       if (changedKeys(changes(v)).length && !(await ide.ui.confirm(tr('Throw away the changes not saved yet?'), { ok: tr('Reload') }))) return;
@@ -234,7 +234,7 @@
     tools.append(file, reload);
     const left = el('div', 'mcset-head-text');
     left.append(title, sub);
-    v.head.replaceChildren(left, tools);
+    v.head.replaceChildren(mc.screen.serverNav(srv, 'settings'), left, tools);
 
     v.pages.replaceChildren();
     v.scroll.replaceChildren();

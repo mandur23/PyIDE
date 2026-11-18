@@ -91,7 +91,12 @@ pub fn enabled(s: &Shell, id: &str) -> Option<bool> {
 pub fn run(s: &mut Shell, id: &str, _ctx: &egui::Context) -> bool {
     match id {
         "export" => {
-            s.features.export.open = true;
+            // the Export workspace shows this form in its own panel: that panel comes forward, not a second copy
+            if s.features.workspace.current == crate::workspaces::Ws::Export && !s.features.export.open {
+                s.features.workspace.open_panel("export");
+            } else {
+                s.features.export.open = true;
+            }
             true
         }
         "exportFrame" => {

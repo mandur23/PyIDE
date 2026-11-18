@@ -91,7 +91,7 @@
       const m = re.exec(text);
       if (m) return say(m);
     }
-    return networkText(text) || text;
+    return text;
   }
   const cancelled = (err) => /^Cancelled/.test(mc.errorText(err));
   // A failed job's message in its Run tab, and in a balloon unless the user cancelled it.
@@ -99,15 +99,6 @@
     const text = errorText(err);
     job.con.append(`${text}\n`, cancelled(err) ? undefined : 'err');
     if (!cancelled(err)) ide.notifications?.notify({ title, text, kind: 'error', group: 'Minecraft', raw: true });
-  }
-  // A download or a version list that could not be fetched: main says "<url>: <cause>" (sources.js) or the download's
-  // own message (installer/servers.js).
-  function networkText(text) {
-    const host = /https?:\/\/([^/\s]+)/.exec(text)?.[1] || null;
-    const status = /\bHTTP (\d{3})\b/.exec(text)?.[1];
-    if (status) return host ? tr('{host} answered with an error (HTTP {status}). Try again later.', { host, status }) : tr('The server answered with an error (HTTP {status}). Try again later.', { status });
-    if (!/fetch failed|bad port|no answer within|stalled|ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|getaddrinfo|socket hang up|UND_ERR|other side closed/i.test(text)) return null;
-    return host ? tr('Could not connect to {host}. Check the internet connection and try again.', { host }) : tr('Could not connect. Check the internet connection and try again.');
   }
   const trusted = () => (ide.trusted === false ? (ide.ui.alert(tr('The project is open in Safe Mode, where Nano Studio runs nothing from it.')), false) : true);
 
@@ -715,6 +706,14 @@
     b.onclick = (e) => { e.preventDefault(); onClick(); };
     return b;
   }
+  // A right-click on a card lists what its buttons do, by name.
+  function cardMenu(card, items) {
+    card.addEventListener('contextmenu', (e) => {
+      if (e.target.closest('input, textarea, select')) return;
+      e.preventDefault();
+      ide.ui.contextMenu(e.clientX, e.clientY, items().filter(Boolean)).classList.add('mc-actions-menu');
+    });
+  }
   function deleteButton(inst) {
     const del = iconButton('clear', tr('Delete…'), 'mcc-delete', () => deleteInstance(inst));
     del.disabled = !deletable(inst);
@@ -735,6 +734,8 @@
     const actions = el('div', 'mcc-actions');
     actions.append(button(tr('Open Folder'), 'secondary mcc-folder', () => ide.api.invoke('shell:openPath', inst.dir)), deleteButton(inst));
     c.append(art, body, actions);
+    cardMenu(c, () => [{ label: tr('Open Folder'), icon: 'folder', run: () => ide.api.invoke('shell:openPath', inst.dir) },
+      { separator: true }, { label: tr('Delete…'), icon: 'clear', disabled: !deletable(inst), run: () => deleteInstance(inst) }]);
     return c;
   }
   function instanceCard(inst) {
@@ -780,6 +781,12 @@
       iconButton('web', tr('Korean Translation…'), 'mcc-korean-btn', () => koreanDialog(inst)),
       iconButton('folder', tr('Open Folder'), 'mcc-folder', () => ide.api.invoke('shell:openPath', inst.dir)), deleteButton(inst));
     c.append(art, body, actions);
+    cardMenu(c, () => [{ label: tr('Launch'), icon: 'runRun', disabled: busy.has(inst.name), run: () => play(inst.name) },
+      { separator: true },
+      { label: tr('Mods'), icon: 'package', run: () => modsDialog(inst) },
+      { label: tr('Korean Translation…'), icon: 'web', run: () => koreanDialog(inst) },
+      { label: tr('Open Folder'), icon: 'folder', run: () => ide.api.invoke('shell:openPath', inst.dir) },
+      { separator: true }, { label: tr('Delete…'), icon: 'clear', disabled: !deletable(inst), run: () => deleteInstance(inst) }]);
     return c;
   }
 
@@ -845,8 +852,11 @@
     actions.append(joinBtn);
     // A private server's code is a key its owner gave this friend, not one to pass on.
     if (!srv.private) actions.append(button(tr('Copy Join Code'), 'secondary mcc-copy-code', () => copyCode(srv), 'copy'));
-    actions.append(button(tr('Remove…'), 'secondary mcc-remove', () => removeServer(srv)));
+    actions.append(iconButton('clear', tr('Remove…'), 'mcc-remove', () => removeServer(srv)));
     c.append(art, body, actions);
+    cardMenu(c, () => [{ label: tr('Join'), icon: 'runRun', disabled: joinBtn.disabled, run: () => joinServer(srv) },
+      !srv.private && { label: tr('Copy Join Code'), icon: 'copy', run: () => copyCode(srv) },
+      { separator: true }, { label: tr('Remove…'), icon: 'clear', run: () => removeServer(srv) }]);
     return c;
   }
 

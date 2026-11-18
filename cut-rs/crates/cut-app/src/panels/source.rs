@@ -68,6 +68,7 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui) {
             .filter_map(|id| s.app.project().media(*id).map(|m| (m.id, m.name.clone())))
             .collect();
         ui.add_enabled_ui(!recent.is_empty(), |ui| {
+            crate::theme::flat(ui);
             ui.menu_button("\u{E70D}", |ui| {
                 for (id, n) in recent {
                     let on = clip.is_some_and(|c| c.item == SourceItem::Media(id));

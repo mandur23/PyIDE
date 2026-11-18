@@ -693,7 +693,7 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
             ui.horizontal(|ui| {
                 let name = MODELS.iter().find(|m| m.0 == model).map_or(model.as_str(), |m| m.1);
                 ui.add_enabled_ui(!working, |ui| {
-                    egui::ComboBox::from_id_salt("cut-as-model")
+                    egui::ComboBox::from_id_salt("cut-as-model").icon(crate::theme::combo_icon)
                         .selected_text(name)
                         .show_ui(ui, |ui| {
                             for (id, label, note) in MODELS {

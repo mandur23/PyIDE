@@ -268,7 +268,7 @@ pub fn poll(s: &mut Shell, ctx: &egui::Context) {
 fn target_combo(ui: &mut egui::Ui, id: &str, target: &mut f64) {
     let name =
         TARGETS.iter().find(|t| t.0 == *target).map_or_else(|| format!("{target} LUFS"), |t| tr(t.1).into_owned());
-    egui::ComboBox::from_id_salt(id).selected_text(name).show_ui(ui, |ui| {
+    egui::ComboBox::from_id_salt(id).icon(crate::theme::combo_icon).selected_text(name).show_ui(ui, |ui| {
         for (v, label) in TARGETS {
             ui.selectable_value(target, v, tr(label));
         }

@@ -165,14 +165,35 @@ impl Palette {
         }
         v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, g[3]);
         v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, g[11]);
-        v.widgets.inactive.bg_stroke = Stroke::NONE;
+        // a button, a field and a list show their edge at rest, so they read as controls and not as text; the bars'
+        // icon buttons are drawn without a frame and keep none
+        v.widgets.inactive.bg_stroke = Stroke::new(1.0, g[5]);
         // a slider's rail and a scroll bar use bg_fill; buttons keep the panel colour (weak_bg_fill)
         v.widgets.inactive.bg_fill = g[4];
         v.widgets.hovered.bg_stroke = Stroke::new(1.0, g[4]);
         v
     }
 
+    /// The fill of a button that carries out its dialog (Export, OK, Save): the same in the top bar and the dialogs.
+    pub fn primary(&self) -> Color32 {
+        self.blue6
+    }
+
     pub fn apply(&self, ctx: &egui::Context) {
         ctx.set_visuals(self.visuals());
     }
+}
+
+/// The bars' icon buttons carry no edge at rest: the buttons `ui` draws from here on are their icons alone.
+pub fn flat(ui: &mut egui::Ui) {
+    ui.visuals_mut().widgets.inactive.bg_stroke = Stroke::NONE;
+}
+
+/// A list's arrow: the chevron the other Nano Studio apps draw on a select, in place of egui's filled triangle.
+pub fn combo_icon(ui: &egui::Ui, rect: egui::Rect, visuals: &egui::style::WidgetVisuals, _open: bool) {
+    let c = rect.center();
+    let (w, h) = (3.5, 2.0);
+    let stroke = Stroke::new(1.4, visuals.fg_stroke.color);
+    ui.painter().line_segment([egui::pos2(c.x - w, c.y - h), egui::pos2(c.x, c.y + h)], stroke);
+    ui.painter().line_segment([egui::pos2(c.x, c.y + h), egui::pos2(c.x + w, c.y - h)], stroke);
 }

@@ -51,7 +51,6 @@ const KNOWN: &[(&str, &str, &str)] = &[
     ("text", "Export of {name}", IDE),
     ("text", "Exporting {name}", IDE),
     ("text", "Exporting {name} (queue)", IDE),
-    ("text", "Settings", IDE),
     ("text", "{key} is also {actions} outside the editor; here the editor takes it.", IDE),
     ("text", "Clip Speed/Duration", FALLBACK),
     ("text", "Reverse speed", FALLBACK),

@@ -122,7 +122,7 @@ pub fn window(s: &mut Shell, ctx: &egui::Context) {
             egui::Grid::new("cut-cap-style").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
                 ui.label(tr("Font"));
                 let shown = fonts.iter().find(|(v, _)| *v == f.font).map_or(f.font.clone(), |(_, l)| l.clone());
-                egui::ComboBox::from_id_salt("cut-cap-font").selected_text(shown).height(320.0).show_ui(ui, |ui| {
+                egui::ComboBox::from_id_salt("cut-cap-font").icon(crate::theme::combo_icon).selected_text(shown).height(320.0).show_ui(ui, |ui| {
                     for (v, l) in &fonts {
                         ui.selectable_value(&mut f.font, v.clone(), l);
                     }
@@ -141,7 +141,7 @@ pub fn window(s: &mut Shell, ctx: &egui::Context) {
                 ui.add(DragValue::new(&mut f.alpha).range(0.0..=100.0).speed(1.0).max_decimals(0).suffix(" %"));
                 ui.end_row();
                 ui.label(tr("Position"));
-                egui::ComboBox::from_id_salt("cut-cap-pos").selected_text(tr(if f.bottom { "Bottom" } else { "Top" })).show_ui(ui, |ui| {
+                egui::ComboBox::from_id_salt("cut-cap-pos").icon(crate::theme::combo_icon).selected_text(tr(if f.bottom { "Bottom" } else { "Top" })).show_ui(ui, |ui| {
                     ui.selectable_value(&mut f.bottom, true, tr("Bottom"));
                     ui.selectable_value(&mut f.bottom, false, tr("Top"));
                 });
@@ -154,7 +154,7 @@ pub fn window(s: &mut Shell, ctx: &egui::Context) {
                 ui.end_row();
                 ui.label(tr("Highlight style"));
                 let mode = |b: bool| tr(if b { "Word color and box" } else { "Word color" });
-                egui::ComboBox::from_id_salt("cut-cap-hl-mode").selected_text(mode(f.boxed)).show_ui(ui, |ui| {
+                egui::ComboBox::from_id_salt("cut-cap-hl-mode").icon(crate::theme::combo_icon).selected_text(mode(f.boxed)).show_ui(ui, |ui| {
                     ui.selectable_value(&mut f.boxed, false, mode(false));
                     ui.selectable_value(&mut f.boxed, true, mode(true));
                 });

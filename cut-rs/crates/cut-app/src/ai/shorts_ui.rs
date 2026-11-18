@@ -241,11 +241,14 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
                 Fit::Fill => tr("Fill the frame (crops the sides)"),
                 Fit::Fit => tr("Fit inside the frame (bars above and below)"),
             };
-            egui::ComboBox::from_id_salt("cut-ai-fit").selected_text(label(r.mode)).show_ui(ui, |ui| {
-                for m in [Fit::Fill, Fit::Fit] {
-                    ui.selectable_value(&mut r.mode, m, label(m));
-                }
-            });
+            egui::ComboBox::from_id_salt("cut-ai-fit")
+                .icon(crate::theme::combo_icon)
+                .selected_text(label(r.mode))
+                .show_ui(ui, |ui| {
+                    for m in [Fit::Fill, Fit::Fit] {
+                        ui.selectable_value(&mut r.mode, m, label(m));
+                    }
+                });
         });
         let total: f64 = r.ranges.iter().zip(&r.keep).filter(|(_, k)| **k).map(|(h, _)| h.end - h.start).sum();
         let n = r.keep.iter().filter(|k| **k).count();

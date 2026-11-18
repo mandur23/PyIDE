@@ -36,9 +36,18 @@
     jobs.set(id, con);
     return { id, done: () => jobs.delete(id) };
   }
+  // A download or a version list that could not be fetched: main says "<url>: <cause>" (sources.js) or the download's
+  // own message (installer/servers.js). The user reads who did not answer, not the address asked.
+  function networkText(text) {
+    const host = /https?:\/\/([^/\s]+)/.exec(text)?.[1] || null;
+    const status = /\bHTTP (\d{3})\b/.exec(text)?.[1];
+    if (status) return host ? tr('{host} answered with an error (HTTP {status}). Try again later.', { host, status }) : tr('The server answered with an error (HTTP {status}). Try again later.', { status });
+    if (!/fetch failed|bad port|no answer within|stalled|ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|getaddrinfo|socket hang up|UND_ERR|other side closed/i.test(text)) return null;
+    return host ? tr('Could not connect to {host}. Check the internet connection and try again.', { host }) : tr('Could not connect. Check the internet connection and try again.');
+  }
   const errorText = (err) => {
     const text = ide.util.errorText(err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
-    return /is refused: its entries overlap/.test(text) ? tr('This archive was refused: its contents overlap, as in a zip bomb.') : text;
+    return /is refused: its entries overlap/.test(text) ? tr('This archive was refused: its contents overlap, as in a zip bomb.') : networkText(text) || text;
   };
   const quote = (a) => (/\s/.test(a) ? `"${a}"` : a);
 
@@ -755,6 +764,67 @@
     launching.add(key);
     return Promise.resolve(how(serverConfig(srv))).catch(() => {}).finally(() => { launching.delete(key); render(); });
   }
+  // The state a card, and each of the server's tabs, names.
+  const stateChip = (state) => el('span', `mcc-chip mc-state ${state}`, { running: tr('Running'), starting: tr('Starting'), stopping: tr('Stopping'), stopped: tr('Stopped') }[state]);
+  // What can be done with a server now, in the order of its menu. `card` ones are buttons on the card; the others are
+  // under its More button. A right-click on the card lists them all.
+  function actionsOf(srv, running, tunnel) {
+    const acts = [];
+    const add = (cls, label, run, more = {}) => acts.push({ cls, label, run, ...more });
+    if (stoppingAt(srv.dir)) add('mc-stopping', tr('Stopping…'), null, { card: true, wait: true });
+    else if (running) add('mc-stop', tr('Stop'), () => sessionOf(srv.dir)?.stop(), { card: true, icon: 'runStop' });
+    else if (busyAt(srv.dir)) add('mc-starting', tr('Starting…'), null, { card: true, wait: true });
+    else add('mc-start', tr('Start'), () => launchOnce(srv, run.runConfig), { card: true, icon: 'runRun', primary: true });
+    if (running && ide.ports && tunnel?.state !== 'shared' && tunnel?.state !== 'starting') {
+      add('mc-share', tr('Share'), () => shareServer(srv), { card: true, title: tr('A private join code friends use in Nano Studio Craft') });
+      add('mc-share-public', tr('Share Publicly'), () => shareServer(srv, { publicly: true }), { card: true, title: tr('A public address anyone can join (bore.pub)') });
+    }
+    add('mc-players', tr('Players'), () => serverPlayers(srv), { card: true, group: 1, title: tr('Who is on, their inventories, a log of what they did, and actions on them') });
+    add('mc-settings', tr('Settings…'), () => serverSettings(srv), { card: true, group: 1, icon: 'settings', title: srv.mods ? tr('Server settings, and Korean for its mods') : tr('Server settings') });
+    if (!srv.proxy) add('mc-backups', tr('Backups'), () => ide.minecraft.backups.open(srv), { card: true, group: 1, icon: 'history', title: tr('Back up the world, or put an earlier one back') });
+    if (srv.mods || srv.plugins) add('mc-server-market', tr('Market'), () => ide.minecraft.market.open({ type: srv.mods ? 'mod' : 'plugin', server: srv }), { group: 2, icon: 'cart', title: tr('Install mods or plugins from Modrinth') });
+    if (srv.mods) add('mc-pack', tr('Client Pack'), () => clientPack(srv), { group: 2, icon: 'package', title: tr('The mods players need, as a .mrpack to import once') });
+    // A modpack's own client pack has its client-only mods, which AutoModpack would not send.
+    if (srv.mods && !srv.autoSync && !srv.modpack) add('mc-autosync', tr('Auto Sync'), () => autoSync(srv), { group: 2, title: tr('Players get the server\'s mods when they join (AutoModpack)') });
+    if (!srv.proxy) {
+      add('mc-rp', tr('Resource Pack'), () => resourcePack(srv), { group: 2, title: tr('A folder for the textures, sounds and models players get') });
+      if (srv.resourcePack && ide.ports) add('mc-rp-send', tr('Send to Players'), () => sendPack(srv), { group: 2, title: tr('Players download the resource pack when they join') });
+    }
+    add('mc-folder', tr('Open Folder'), () => ide.api.invoke('shell:openPath', srv.dir), { group: 3, icon: 'folder' });
+    if (!busyAt(srv.dir)) add('mc-delete', tr('Delete…'), () => deleteServer(srv), { group: 3, icon: 'clear', title: tr('Moves the server folder to the Recycle Bin') });
+    return acts;
+  }
+  // The menu of a card's actions at a spot: its rows carry the action's class (data-act), as its button would.
+  function actionMenu(x, y, acts) {
+    const items = [];
+    let group = null;
+    for (const a of acts) {
+      if (group !== null && (a.group ?? 0) !== group) items.push({ separator: true });
+      group = a.group ?? 0;
+      items.push({ label: a.label, icon: a.icon, disabled: !a.run, run: a.run || undefined, cls: a.cls });
+    }
+    const menu = ide.ui.contextMenu(x, y, items);
+    menu.classList.add('mc-actions-menu');
+    for (const row of menu.querySelectorAll('.menu-item')) { row.dataset.act = row._item.cls; }
+    return menu;
+  }
+  function cardMenus(card, actions, acts) {
+    const more = acts.filter((a) => !a.card);
+    card.dataset.more = more.map((a) => a.cls).join(' ');
+    if (more.length) {
+      const b = el('button', 'secondary mc-more');
+      b.append(ide.icon('moreVertical'));
+      b.title = tr('More');
+      b.setAttribute('aria-label', tr('More'));
+      b.onclick = (e) => { e.preventDefault(); const r = b.getBoundingClientRect(); actionMenu(r.left, r.bottom + 4, more); };
+      actions.append(b);
+    }
+    card.addEventListener('contextmenu', (e) => {
+      if (e.target.closest('input, textarea, select, .mc-public, .mc-lan')) return;
+      e.preventDefault();
+      actionMenu(e.clientX, e.clientY, acts);
+    });
+  }
   function renderServers() {
     host.replaceChildren();
     if (!list.length && !damaged.length) {
@@ -772,7 +842,8 @@
       const head = el('div', 'mc-server-head');
       const title = el('span', 'mc-server-name', srv.name);
       title.dataset.userText = '';
-      head.append(el('span', `mc-dot${running || srv.leftOver ? ' on' : ''}`), title,
+      const state = stoppingAt(srv.dir) ? 'stopping' : running || srv.leftOver ? 'running' : busyAt(srv.dir) ? 'starting' : 'stopped';
+      head.append(el('span', `mc-dot${running || srv.leftOver ? ' on' : ''}`), title, stateChip(state),
         el('span', 'mc-server-kind muted', `${kindTitle(srv.kind)} ${srv.mc} · Java ${srv.java}${srv.loader ? ` · ${srv.loader}` : ''} · :${port}`));
       const load = ide.minecraft.health?.chip(srv);
       if (load) head.append(load);
@@ -787,28 +858,14 @@
         host.append(card);
         continue;
       }
-      if (stoppingAt(srv.dir)) actions.append(wait(tr('Stopping…'), 'mc-stopping'));
-      else if (running) actions.append(button(tr('Stop'), 'mc-stop', () => sessionOf(srv.dir)?.stop()));
-      else if (busyAt(srv.dir)) actions.append(wait(tr('Starting…'), 'mc-starting'));
-      else actions.append(button(tr('Start'), 'mc-start', () => launchOnce(srv, run.runConfig)));
       const tunnel = running && ide.ports ? tunnels.find((t) => t.port === port) : null;
-      if (running && ide.ports && tunnel?.state !== 'shared' && tunnel?.state !== 'starting') {
-        actions.append(button(tr('Share'), 'mc-share', () => shareServer(srv), tr('A private join code friends use in Nano Studio Craft')),
-          button(tr('Share Publicly'), 'mc-share-public', () => shareServer(srv, { publicly: true }), tr('A public address anyone can join (bore.pub)')));
+      const acts = actionsOf(srv, running, tunnel);
+      for (const a of acts.filter((x) => x.card)) {
+        const b = a.wait ? wait(a.label, a.cls) : button(a.label, a.cls, a.run, a.title);
+        if (a.primary) b.classList.replace('secondary', 'primary');
+        actions.append(b);
       }
-      if (srv.mods || srv.plugins) actions.append(button(tr('Market'), 'mc-server-market', () => ide.minecraft.market.open({ type: srv.mods ? 'mod' : 'plugin', server: srv }), tr('Install mods or plugins from Modrinth')));
-      if (srv.mods) actions.append(button(tr('Client Pack'), 'mc-pack', () => clientPack(srv), tr('The mods players need, as a .mrpack to import once')));
-      // A modpack's own client pack has its client-only mods, which AutoModpack would not send.
-      if (srv.mods && !srv.autoSync && !srv.modpack) actions.append(button(tr('Auto Sync'), 'mc-autosync', () => autoSync(srv), tr('Players get the server\'s mods when they join (AutoModpack)')));
-      if (!srv.proxy) {
-        actions.append(button(tr('Resource Pack'), 'mc-rp', () => resourcePack(srv), tr('A folder for the textures, sounds and models players get')));
-        if (srv.resourcePack && ide.ports) actions.append(button(tr('Send to Players'), 'mc-rp-send', () => sendPack(srv), tr('Players download the resource pack when they join')));
-      }
-      actions.append(button(tr('Players'), 'mc-players', () => serverPlayers(srv), tr('Who is on, their inventories, a log of what they did, and actions on them')));
-      actions.append(button(tr('Settings…'), 'mc-settings', () => serverSettings(srv), srv.mods ? tr('Server settings, and Korean for its mods') : tr('Server settings')));
-      if (!srv.proxy) actions.append(button(tr('Backups'), 'mc-backups', () => ide.minecraft.backups.open(srv), tr('Back up the world, or put an earlier one back')));
-      actions.append(button(tr('Open Folder'), 'mc-folder', () => ide.api.invoke('shell:openPath', srv.dir)));
-      if (!busyAt(srv.dir)) actions.append(button(tr('Delete…'), 'mc-delete', () => deleteServer(srv), tr('Moves the server folder to the Recycle Bin')));
+      cardMenus(card, actions, acts);
       const info = srv.proxy ? tr('Players join this proxy and are sent on to the project\'s Paper and Purpur servers.')
         : srv.plugins ? tr('Plugins run on the server: players need nothing.')
           : srv.autoSync ? tr('AutoModpack is on: players import the Client Pack once, then get the server\'s mods, and every change to them, when they join.')

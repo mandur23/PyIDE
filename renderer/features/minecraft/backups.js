@@ -168,7 +168,7 @@
     const now = el('button', 'primary mcbk-now', tr('Back Up Now'));
     now.onclick = () => backUpNow(v);
     tools.append(folder, now);
-    head.append(text, tools);
+    head.append(mc.screen.serverNav(srv, 'backups'), text, tools);
 
     // The list, and what is running now.
     const listSec = el('section', 'mcset-section mcbk-section');

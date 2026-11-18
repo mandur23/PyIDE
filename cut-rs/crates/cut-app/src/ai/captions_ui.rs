@@ -295,7 +295,7 @@ fn track_row(s: &Shell, ui: &mut egui::Ui, track: &mut Id) {
     let Some(seq) = s.app.sequence().filter(|q| q.captions.len() > 1) else { return };
     ui.label(tr("Caption track"));
     let name = seq.captions.iter().find(|t| t.id == *track).map_or(String::new(), |t| t.name.clone());
-    egui::ComboBox::from_id_salt("cut-ai-track").selected_text(name).show_ui(ui, |ui| {
+    egui::ComboBox::from_id_salt("cut-ai-track").icon(crate::theme::combo_icon).selected_text(name).show_ui(ui, |ui| {
         for t in &seq.captions {
             ui.selectable_value(track, t.id, &t.name);
         }
@@ -321,7 +321,7 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
                 if options.len() > 1 {
                     ui.label(tr("Captions"));
                     let shown = options.iter().find(|x| x.0 == o.scope).map_or("", |x| x.1);
-                    egui::ComboBox::from_id_salt("cut-ai-scope").selected_text(tr(shown)).show_ui(ui, |ui| {
+                    egui::ComboBox::from_id_salt("cut-ai-scope").icon(crate::theme::combo_icon).selected_text(tr(shown)).show_ui(ui, |ui| {
                         for (v, label) in &options {
                             ui.selectable_value(&mut o.scope, *v, tr(label));
                         }
@@ -347,7 +347,7 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
                 track_row(s, ui, &mut o.track);
                 ui.label(tr("Translate into"));
                 let shown = LANG_LABELS.iter().find(|l| l.0 == o.to).map_or("", |l| l.1);
-                egui::ComboBox::from_id_salt("cut-ai-lang").selected_text(tr(shown)).show_ui(ui, |ui| {
+                egui::ComboBox::from_id_salt("cut-ai-lang").icon(crate::theme::combo_icon).selected_text(tr(shown)).show_ui(ui, |ui| {
                     for (code, label) in LANG_LABELS {
                         ui.selectable_value(&mut o.to, code, tr(label));
                     }

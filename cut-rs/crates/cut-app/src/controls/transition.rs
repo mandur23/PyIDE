@@ -46,6 +46,7 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui, id: Id) {
     let r = line(s, ui, "Transition", |ui, name| {
         let shown = def.map_or_else(|| t.kind.clone(), |d| tr(d.name).into_owned());
         egui::ComboBox::from_id_salt(("ec-tr-type", id))
+            .icon(crate::theme::combo_icon)
             .selected_text(shown)
             .width(150.0)
             .show_ui(ui, |ui| {
@@ -71,6 +72,7 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui, id: Id) {
     let r = line(s, ui, "Alignment", |ui, name| {
         let shown = ALIGNS.iter().find(|a| a.0 == t.align).map_or("", |a| a.2);
         egui::ComboBox::from_id_salt(("ec-tr-align", id))
+            .icon(crate::theme::combo_icon)
             .selected_text(tr(shown))
             .width(150.0)
             .show_ui(ui, |ui| {
@@ -91,6 +93,7 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui, id: Id) {
         line(s, ui, p.name, |ui, name| {
             let shown = p.choices.iter().find(|c| Some(c.0) == now.as_str()).map_or("", |c| c.1);
             egui::ComboBox::from_id_salt(("ec-tr-p", id, p.id))
+                .icon(crate::theme::combo_icon)
                 .selected_text(tr(shown))
                 .width(150.0)
                 .show_ui(ui, |ui| {

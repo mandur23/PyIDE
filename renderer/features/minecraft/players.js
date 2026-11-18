@@ -176,7 +176,7 @@
     const reload = el('button', 'secondary mcpl-reload', tr('Refresh'));
     reload.onclick = () => { refresh(v); loadDetail(v); if (v.timeline?.loaded) loadTimeline(v); if (v.page === 'search') runSearch(v); if (v.page === 'log') loadLog(v); };
     tools.append(mc.players.bridge.button(v), reload);
-    head.append(text, tools);
+    head.append(mc.screen.serverNav(srv, 'players'), text, tools);
     v.body = el('div', 'mcpl-body');
     host.append(head, v.body);
     host.addEventListener('scroll', hideTip, true);

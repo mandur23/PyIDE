@@ -395,9 +395,14 @@ pub fn slot_tabs(
     let pal = s.palette.clone();
     if ui.available_width() < 90.0 {
         let r = ui.add(
-            egui::Label::new(RichText::new(tr(panel_title(active))).size(11.0).color(pal.gray[8]))
-                .truncate()
-                .sense(Sense::click()),
+            // a slot this narrow is the meters': their short name fits, the full one is the tooltip
+            egui::Label::new(
+                RichText::new(if active == "meters" { tr("Meters") } else { tr(panel_title(active)) })
+                    .size(11.0)
+                    .color(pal.gray[8]),
+            )
+            .truncate()
+            .sense(Sense::click()),
         );
         menu_of(s, &r, active, false);
         return None;

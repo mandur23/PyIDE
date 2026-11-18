@@ -227,16 +227,20 @@ fn font_section(s: &mut Shell, ui: &mut egui::Ui, c: &Clip, layer: &Json, lid: &
         label(ui, "Family");
         let shown = fam.map_or_else(|| trf("{name} (not installed)", &[("name", &font)]), Family::label);
         let mut pick = None;
-        egui::ComboBox::from_id_salt("cut-text-family").selected_text(shown).width(200.0).show_ui(ui, |ui| {
-            if fam.is_none() {
-                let _ = ui.selectable_label(true, trf("{name} (not installed)", &[("name", &font)]));
-            }
-            for f in &list {
-                if ui.selectable_label(f.family == font, f.label()).clicked() {
-                    pick = Some(f.clone());
+        egui::ComboBox::from_id_salt("cut-text-family")
+            .icon(crate::theme::combo_icon)
+            .selected_text(shown)
+            .width(200.0)
+            .show_ui(ui, |ui| {
+                if fam.is_none() {
+                    let _ = ui.selectable_label(true, trf("{name} (not installed)", &[("name", &font)]));
                 }
-            }
-        });
+                for f in &list {
+                    if ui.selectable_label(f.family == font, f.label()).clicked() {
+                        pick = Some(f.clone());
+                    }
+                }
+            });
         if let Some(f) = pick {
             let mut patch = json!({ "font": f.family });
             if let Some((w, it)) = fonts::nearest(&f.styles, weight, italic) {
@@ -255,13 +259,16 @@ fn font_section(s: &mut Shell, ui: &mut egui::Ui, c: &Clip, layer: &Json, lid: &
             styles.insert(0, cur);
         }
         let mut pick = None;
-        egui::ComboBox::from_id_salt("cut-text-style").selected_text(name(cur.0, cur.1)).show_ui(ui, |ui| {
-            for (w, it) in styles {
-                if ui.selectable_label((w, it) == cur, name(w, it)).clicked() {
-                    pick = Some((w, it));
+        egui::ComboBox::from_id_salt("cut-text-style")
+            .icon(crate::theme::combo_icon)
+            .selected_text(name(cur.0, cur.1))
+            .show_ui(ui, |ui| {
+                for (w, it) in styles {
+                    if ui.selectable_label((w, it) == cur, name(w, it)).clicked() {
+                        pick = Some((w, it));
+                    }
                 }
-            }
-        });
+            });
         if let Some((w, it)) = pick {
             set_layer(s, c.id, lid, json!({ "weight": w, "italic": it }));
         }
@@ -377,13 +384,17 @@ fn styles(s: &mut Shell, ui: &mut egui::Ui, c: &Clip, layer: &Json, lid: &str) {
         let shown =
             list.iter().find(|x| Some(id_of(x)) == chosen).and_then(|x| x["name"].as_str()).unwrap_or("").to_owned();
         let mut pick = None;
-        egui::ComboBox::from_id_salt("cut-text-styles").selected_text(shown).width(120.0).show_ui(ui, |ui| {
-            for x in &list {
-                if ui.selectable_label(Some(id_of(x)) == chosen, x["name"].as_str().unwrap_or("")).clicked() {
-                    pick = Some(id_of(x));
+        egui::ComboBox::from_id_salt("cut-text-styles")
+            .icon(crate::theme::combo_icon)
+            .selected_text(shown)
+            .width(120.0)
+            .show_ui(ui, |ui| {
+                for x in &list {
+                    if ui.selectable_label(Some(id_of(x)) == chosen, x["name"].as_str().unwrap_or("")).clicked() {
+                        pick = Some(id_of(x));
+                    }
                 }
-            }
-        });
+            });
         if pick.is_some() {
             s.features.text.panel.style = pick;
         }

@@ -132,7 +132,7 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui) {
             let export = Button::new(
                 RichText::new(format!("{}  {}", icons::EXPORT, tr("Export"))).color(Color32::WHITE).strong(),
             )
-            .fill(pal.accent)
+            .fill(pal.primary())
             .corner_radius(CornerRadius::same(5))
             .min_size(Vec2::new(0.0, 28.0));
             if ui.add(export).clicked() {

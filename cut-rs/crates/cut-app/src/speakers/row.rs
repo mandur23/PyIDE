@@ -140,6 +140,7 @@ pub fn bar(s: &mut Shell, ui: &mut egui::Ui) {
                 k => trf("{n} speakers", &[("n", &k.to_string())]),
             };
             egui::ComboBox::from_id_salt("cut-spk-count")
+                .icon(crate::theme::combo_icon)
                 .selected_text(label(count))
                 .width(96.0)
                 .show_ui(ui, |ui| {

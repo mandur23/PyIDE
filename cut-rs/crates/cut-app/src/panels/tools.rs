@@ -51,6 +51,7 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui) {
     ui.vertical_centered(|ui| {
         ui.add_space(6.0);
         ui.spacing_mut().item_spacing.y = 6.0;
+        crate::theme::flat(ui);
         for (gi, group) in GROUPS.iter().enumerate() {
             let shown = group.iter().copied().find(|t| *t == s.app.tool).unwrap_or_else(|| s.tools_last(gi));
             let active = group.contains(&s.app.tool);

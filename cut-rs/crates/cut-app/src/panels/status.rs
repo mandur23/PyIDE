@@ -21,7 +21,9 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui) {
         ui.separator();
         ui.label(small(if s.app.snapping { tr("Snapping on") } else { tr("Snapping off") }.into_owned()));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.label(small(format!("{:.2} ms", s.timeline.frame_ms))).on_hover_text(tr("Timeline"));
+            if std::env::var_os("CUT_REPORT").is_some() {
+                ui.label(small(format!("{:.2} ms", s.timeline.frame_ms))).on_hover_text(tr("Timeline"));
+            }
             if s.importer.pending() > 0 {
                 ui.spinner();
                 ui.label(small(tr("Importing media").into_owned()));
