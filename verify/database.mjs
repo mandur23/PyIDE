@@ -133,11 +133,21 @@ try {
   await a.click(".custom-tab:not(.hidden) .db-load-more");
   await a.until(`${rowsNow} === 5000`, 'Load More');
   check(await a.js(`!${bar('db-load-all')}.classList.contains('hidden')`), 'Load More reads ten times as many rows (5000) and still offers the rest');
-  const drawn = await a.js(`${activeConsole}.querySelectorAll('.db-grid tbody tr').length`);
-  check(drawn >= 1000 && drawn < 5000, `a large result draws its rows as they scroll into view (${drawn} of 5000 at first)`);
-  await a.js(`(() => { const o = ${activeConsole}.querySelector('.db-output'); const s = [o, ...o.querySelectorAll('*')].find((n) => n.scrollHeight > n.clientHeight + 50); s.scrollTop = s.scrollHeight; return true; })()`);
-  await a.until(`${activeConsole}.querySelectorAll('.db-grid tbody tr').length > ${drawn}`, 'more rows drawn after scrolling to the end');
-  check(true, 'scrolling to the end draws more rows');
+  // A long result keeps only the rows in view in the page, whatever is scrolled to.
+  const drawnRows = `[...${activeConsole}.querySelectorAll('.db-grid tbody tr')].map((r) => Number(r.firstChild.textContent))`;
+  const pane = `${activeConsole}.querySelector('.db-output')`;
+  await a.until(`${activeConsole}.querySelector('.db-grid-wrap')?.dataset.rows === '5000'`, 'the long grid measured');
+  const atTop = await a.js(`(() => { const n = ${drawnRows}; const o = ${pane}; return { count: n.length, first: n[0], height: o.scrollHeight, view: o.clientHeight }; })()`);
+  check(atTop.count < 300 && atTop.first === 1 && atTop.height > 5000 * 15, `a result of 5000 rows draws the rows in view only, and scrolls as far as all of them (${JSON.stringify(atTop)})`);
+  await a.js(`(${pane}.scrollTop = ${pane}.scrollHeight / 2, true)`);
+  await a.until(`(() => { const n = ${drawnRows}; return n[0] > 2000 && n.at(-1) < 3000; })()`, 'the middle rows drawn');
+  const mid = await a.js(`(() => { const n = ${drawnRows}; const o = ${pane}.getBoundingClientRect(); const rows = [...${activeConsole}.querySelectorAll('.db-grid tbody tr')];
+    const seen = rows.filter((r) => { const b = r.getBoundingClientRect(); return b.bottom > o.top + 30 && b.top < o.bottom; }).map((r) => Number(r.firstChild.textContent));
+    return { count: n.length, seen: seen.length, firstSeen: seen[0], label: rows.find((r) => Number(r.firstChild.textContent) === seen[0]).children[2].textContent, head: !!document.elementFromPoint(o.left + 60, o.top + 8)?.closest('th') }; })()`);
+  check(mid.count < 300 && mid.seen > 5 && mid.label === `row ${mid.firstSeen}` && mid.head, `half way down it shows the rows of that place under the column heads, still a few of them in the page (${JSON.stringify(mid)})`);
+  await a.js(`(${pane}.scrollTop = ${pane}.scrollHeight, true)`);
+  await a.until(`${drawnRows}.at(-1) === 5000`, 'the last row drawn at the end');
+  check(await a.js(`${drawnRows}.length`) < 300, 'scrolled to the end, the last row is drawn and the earlier ones are gone from the page');
   await a.click(".custom-tab:not(.hidden) .db-load-all");
   await a.until(`${rowsNow} === 6200 && ${bar('db-load-more')}.classList.contains('hidden') && ${bar('db-load-all')}.classList.contains('hidden')`, 'Load All');
   check(!/showing the first/.test(await status(a)), `Load All reads every row and the offer goes away (${await status(a)})`);

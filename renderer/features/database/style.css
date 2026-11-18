@@ -64,6 +64,8 @@
 .db-error { padding: 10px 12px; color: var(--red); font-family: var(--mono); white-space: pre-wrap; display: flex; gap: 10px; }
 .db-error-label { font-family: inherit; font-weight: 600; flex-shrink: 0; }
 .db-grid-wrap { min-width: 100%; }
+/* A long result keeps only the rows in view in the page: the spacers stand for the rest. */
+.db-grid-pad { height: 0; }
 .db-grid { border-collapse: collapse; font: 12.5px/1.35 var(--mono); }
 .db-grid th, .db-grid td { border: 1px solid var(--gray3); padding: 3px 8px; text-align: left; max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .db-grid th { position: sticky; top: 0; background: var(--gray2); color: var(--gray12); font-weight: 600; z-index: 1; }

@@ -7,7 +7,12 @@
   const userEl = (tag, cls, text) => user(el(tag, cls, text));
   const SQLITE_FILE = /\.(sqlite3?|db)$/i;
   const MAX_ROWS = 500;
-  const GRID_CHUNK = 1000;
+  // A result of more rows than this draws only the rows in view (and GRID_OVERSCAN more each way): every row of a
+  // hundred thousand in the page made scrolling, selecting and every repaint slow.
+  const VIRTUAL_FROM = 500;
+  const GRID_OVERSCAN = 30;
+  // A browser's tallest element (Chromium: 2^25 px); past it the rows below cannot be scrolled to.
+  const MAX_SCROLL_PX = 33000000;
   // A cell value: null, a number, {$number: 'exact text'} (a number JS would print differently: SQLite REAL 2.0,
   // integers past 2^53), or text. The grid, Copy as CSV/TSV and Export Data all show a number by its database text.
   const isNumber = (v) => typeof v === 'number' || typeof v?.$number === 'string';
@@ -741,7 +746,15 @@
   // The document view: one expandable JSON tree per document; children are built when a node first opens.
   function jsonTree(docs) {
     const wrap = el('div', 'db-json');
-    docs.forEach((d, i) => wrap.append(jsonNode(`(${i + 1})`, d, 0, docs.length === 1)));
+    // 200 documents at a time, the next ones as the end of the drawn ones scrolls near.
+    let shown = 0;
+    const add = () => {
+      const end = Math.min(docs.length, shown + 200);
+      for (let i = shown; i < end; i++) wrap.append(jsonNode(`(${i + 1})`, docs[i], 0, docs.length === 1));
+      shown = end;
+    };
+    add();
+    if (shown < docs.length) wrap._scroll = (output) => { while (shown < docs.length && output.scrollTop + output.clientHeight > output.scrollHeight - 800) add(); };
     return wrap;
   }
   function jsonNode(label, v, depth, open = false) {
@@ -788,13 +801,10 @@
     const thead = el('thead');
     thead.append(head);
     const tbody = el('tbody');
-    // Rows are added GRID_CHUNK at a time as the end of the drawn ones scrolls near: a loaded table of a hundred
-    // thousand rows would otherwise build millions of cells before anything shows.
-    let shown = 0;
-    const addRows = () => {
-      const end = Math.min(r.rows.length, shown + GRID_CHUNK);
+    const total = r.rows.length;
+    const rowsOf = (from, to) => {
       const part = document.createDocumentFragment();
-      for (let i = shown; i < end; i++) {
+      for (let i = from; i < to; i++) {
         const line = el('tr');
         line.append(el('td', 'db-rownum', String(i + 1)));
         for (const v of r.rows[i]) {
@@ -805,15 +815,61 @@
         }
         part.append(line);
       }
-      tbody.append(part);
-      shown = end;
+      return part;
     };
-    addRows();
     table.append(thead, tbody);
-    wrap.append(table);
-    // The scrolling pane asks for more as its end comes near (showResult's onscroll); null once every row is drawn.
-    wrap._more = () => { addRows(); if (shown >= r.rows.length) wrap._more = null; };
-    if (shown >= r.rows.length) wrap._more = null;
+    if (total <= VIRTUAL_FROM) {
+      tbody.append(rowsOf(0, total));
+      wrap.append(table);
+      return wrap;
+    }
+    // A long result: the rows in view between two spacers. The first rows are drawn to measure a row and the columns;
+    // the columns then keep those widths (wider if a later row needs it), so the grid does not jump while scrolling.
+    wrap.classList.add('db-virtual');
+    const before = el('div', 'db-grid-pad');
+    const after = el('div', 'db-grid-pad');
+    wrap.append(before, table, after);
+    let from = 0;
+    let to = Math.min(total, 80);
+    tbody.append(rowsOf(from, to));
+    let rowH = 0;
+    let widths = null;
+    let frame = 0;
+    const place = (output) => {
+      frame = 0;
+      if (!wrap.isConnected) return;
+      if (!rowH) {
+        const first = tbody.firstElementChild;
+        rowH = first ? first.getBoundingClientRect().height : 0;
+        if (!rowH) return;
+        widths = [...head.children].map((th) => Math.ceil(th.getBoundingClientRect().width));
+        wrap.dataset.rows = String(total);
+      }
+      // Rows past the tallest page there can be are cut off the end, and the grid says how many it shows.
+      const reach = Math.min(total, Math.floor(MAX_SCROLL_PX / rowH));
+      const top = output.scrollTop - wrap.offsetTop - thead.offsetHeight;
+      const first = Math.max(0, Math.min(reach - 1, Math.floor(top / rowH) - GRID_OVERSCAN));
+      const last = Math.min(reach, Math.ceil((top + output.clientHeight) / rowH) + GRID_OVERSCAN);
+      // A window still inside the drawn rows, with room to spare, stays as it is.
+      const slack = Math.floor(GRID_OVERSCAN / 2);
+      const need = first !== from || last !== to;
+      const covered = from <= Math.max(0, first + GRID_OVERSCAN - slack) && to >= Math.min(reach, last - GRID_OVERSCAN + slack);
+      if (need && !(covered && widths.applied)) {
+        from = first;
+        to = Math.max(last, first + 1);
+        tbody.replaceChildren(rowsOf(from, to));
+      }
+      before.style.height = `${from * rowH}px`;
+      after.style.height = `${(reach - to) * rowH}px`;
+      // Columns never get narrower than they were: a wider value seen later widens its column for good.
+      const now = [...head.children].map((th) => Math.ceil(th.getBoundingClientRect().width));
+      widths = widths.map((w, i) => Math.max(w, now[i] || 0));
+      widths.applied = true;
+      [...head.children].forEach((th, i) => { th.style.minWidth = `${widths[i]}px`; });
+    };
+    // showResult calls this once the grid is in the page and at every scroll of its pane.
+    wrap._scroll = (output) => { if (!frame) frame = requestAnimationFrame(() => place(output)); };
+    wrap._window = () => ({ from, to, total });
     return wrap;
   }
 
@@ -1025,8 +1081,8 @@
       if (r.columns.length) {
         const shown = c.view() === 'json' ? jsonTree(r.documents) : grid(r);
         output.append(shown);
-        // A long grid draws its next rows before the end of the drawn ones scrolls into view.
-        output.onscroll = () => { while (shown._more && output.scrollTop + output.clientHeight > output.scrollHeight - 800) shown._more(); };
+        // A long grid draws the rows in view; a long document list its next documents as its end comes near.
+        if (shown._scroll) { output.onscroll = () => shown._scroll(output); shown._scroll(output); }
       }
       else if (r.message) output.append(userEl('div', 'db-message db-reply', r.message));
       else output.append(el('div', 'db-message', summary));
