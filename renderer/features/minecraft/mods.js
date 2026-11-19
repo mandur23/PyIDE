@@ -105,11 +105,13 @@
         return row;
       }));
     }
-    async function load() {
+    // keep: the list is read again after a switch that was refused, to put the switch back; what was said about the
+    // refusal stays (cleared with the rest, it was gone before it could be read).
+    async function load(keep) {
       const mine = ++turn;
       try {
         const r = await ide.api.invoke('minecraft:mods', ide.root, srv.dir);
-        if (mine === turn) { paint(r); status.textContent = ''; }
+        if (mine === turn) { paint(r); if (!keep) status.textContent = ''; }
       } catch (err) { if (mine === turn) status.textContent = mc.errorText(err); }
     }
     async function toggle(file, on) {
@@ -124,7 +126,7 @@
         if (mine !== turn) return;
         status.textContent = err.code === 'running' || /Stop .* first/.test(err.message || '')
           ? tr('Stop {name} first: while it runs, Java holds its files, and a mod cannot be turned on or off.', { name: srv.name }) : mc.errorText(err);
-        load();
+        load(true);
       }
     }
     recheck.onclick = () => ide.ui.working(recheck, load());

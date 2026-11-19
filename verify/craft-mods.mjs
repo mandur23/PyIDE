@@ -164,9 +164,15 @@ try {
   const note = await js(`ide.notifications.list().find((e) => e.title === 'modded: 모드 문제 3개').text`);
   check(/Needs/.test(note) && /cloth/.test(note), `a server started with problems is told which, without being stopped (${S(note)})`);
   await js(`(ide.minecraft.serverSettings(${srv('modded')}), true)`);
-  await until(`!!${SEC}`, 'the section again', 5000);
-  await flip('mods/needs.jar');
-  await settled('modded 서버를 먼저 멈추세요');
+  // The tab is drawn again when the list of servers is read after the start: a switch pressed on the section that is
+  // about to be replaced answers into a section no longer on screen (CI), so it is pressed again on the one that is.
+  const REFUSED = 'modded 서버를 먼저 멈추세요';
+  for (let i = 0; i < 4; i++) {
+    await until(`${SEC}?.querySelector('.mcset-mods-row[data-file="mods/needs.jar"] input')?.checked === true`, 'the Needs row, on', 8000);
+    await flip('mods/needs.jar');
+    if (await until(`(${SEC}?.querySelector('.mcset-mods-status').textContent || '').includes(${S(REFUSED)})`, 'the refusal', 3000).then(() => true, () => false)) break;
+  }
+  await settled(REFUSED);
   check(mods().includes('needs.jar') && (await view()).rows.find((r) => r[2] === 'Needs')?.[1] === true, 'a running server\'s mod is not switched: the switch goes back and says to stop the server first');
   await js(`(ide.run.sessions().find((x) => x.running)?.stop(), true)`);
   await until(`!ide.minecraft.runningAt(${srv('modded')}.dir) && !ide.minecraft.stoppingAt(${srv('modded')}.dir)`, 'the server stopped', 20000);
