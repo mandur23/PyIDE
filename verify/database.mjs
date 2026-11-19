@@ -154,6 +154,11 @@ try {
   check(await a.js(`ide.database.activeConsole().model.getValue().includes('SELECT * FROM "big" LIMIT 500;')`), 'the console keeps the command as Open Data wrote it');
   await a.js(`ide.database.activeConsole().execute(['SELECT * FROM big']).then(() => true)`);
   check(await a.js(`${rowsNow} === 500 && !${bar('db-load-all')}.classList.contains('hidden')`), 'a typed SELECT cut at 500 rows offers the rest too');
+  // Load All reads in steps and stops between them: pressed again at once, it stops after the first step.
+  await a.js(`(() => { const b = ${bar('db-load-all')}; b.click(); b.click(); return true; })()`);
+  await a.until(`${rowsNow} === 5000 && !ide.database.activeConsole().running && ${bar('db-load-all')}.textContent === 'Load All' && !${bar('db-load-all')}.disabled`, 'stopped after the first step');
+  check(await a.js(`!${bar('db-load-all')}.classList.contains('hidden') && !${bar('db-load-more')}.classList.contains('hidden')`) && /showing the first 5000/.test(await status(a)),
+    `Load All pressed again stops after the step it is in: 5000 rows are kept and the rest is still offered (${await status(a)})`);
   await a.click(".custom-tab:not(.hidden) .db-load-all");
   await a.until(`${rowsNow} === 6200`, 'Load All on a typed statement');
   await a.js(`ide.database.activeConsole().execute(["INSERT INTO big SELECT n + 10000, 'x' FROM big RETURNING n"]).then(() => true)`);

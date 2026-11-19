@@ -490,7 +490,10 @@ process.exit(r.status ?? 1);
     for (const [tool, goals, sign] of [['maven', 'spring-boot:run', '-Dspring-boot.run.jvmArguments=-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:'], ['gradle', 'bootRun', '--init-script']]) {
       await a.js(`(ide.run.debugConfig({ ...ide.run.types.get('build').defaults(), id: 'dbg-${tool}', type: 'build', name: 'DemoApplication', tool: '${tool}', goals: '${goals}' }), true)`);
       const hit = await a.until(stoppedAt6, `${tool} stops at the breakpoint`, 120000).then(() => true, () => false);
-      const out = await a.js(`document.querySelector('#dbgOut')?.textContent || ''`);
+      // The Variables pane is filled a moment after the state says suspended (it asks the JVM for the frame's values):
+      // read at once on a slow runner it still said "Not debugging".
+      if (hit) await a.until(`(document.querySelector('#dbgVars')?.textContent || '').includes('answer')`, 'the variables of the frame', 20000).catch(() => {});
+      const out =await a.js(`document.querySelector('#dbgOut')?.textContent || ''`);
       const vars = await a.js(`document.querySelector('#dbgVars')?.textContent || ''`);
       const ok = hit && out.includes(sign) && vars.includes('answer = {int} 42');
       // A failure shows the whole Debug console, so a run on CI says where it stopped.

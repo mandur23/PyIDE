@@ -199,6 +199,8 @@
       return r;
     };
     autoSec.append(el('h2', 'mcset-section-title', tr('Automatic Backups')),
+      // The server's settings tab waits for Save (its values go to the server together); these three do not.
+      el('div', 'mcset-note mcbk-at-once', tr('Changes here are saved at once: there is no Save button on this tab.')),
       row(tr('While it runs'), tr('A backup every so many hours while the server runs, and one when it stops if the last is more than a day old.'), every),
       row(tr('Automatic backups kept'), tr('The oldest automatic backups go once there are more than this.'), keep),
       row(tr('Space for backups (GB)'), tr('Automatic backups also go, oldest first, while the backups take more than this.'), limit),

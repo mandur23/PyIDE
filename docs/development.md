@@ -164,7 +164,7 @@ Cut의 기능은 AI도 쓸 수 있어야 합니다. 키보드 동작, 자동화 
    PYIDE_DIST_DIR="$LOCALAPPDATA\\Temp\\pyidedist-0.3.23-beta.1" npm run release -- 0.3.23-beta.1 --dry-run --skip-tests
    ```
 
-3. 만든 `win-unpacked`의 exe를 띄워 Code, Craft, Cut이 열리는지 직접 확인합니다. Cut은 `node verify/cut-rust-launch.mjs --exe "<임시 폴더>\win-unpacked\Nano Studio.exe"`가 대역과 실제 Rust Cut으로 확인합니다.
+3. 만든 `win-unpacked`의 exe를 띄워 Code, Craft, Cut이 열리는지 직접 확인합니다. Cut은 `node verify/cut-rust-launch.mjs --exe "<임시 폴더>\win-unpacked\Nano Studio.exe"`가 대역과 실제 Rust Cut으로 확인합니다. 한 번에 보려면 `SMOKE_EXE="<임시 폴더>\win-unpacked\Nano Studio.exe" node verify/smoke-build.mjs`를 실행합니다(Code, Craft, Cut 순서로 열어 보고, 하나라도 실패하면 종료 코드 1). 출력을 `grep`이나 `tail`로 넘길 때는 `set -o pipefail`을 켜거나 따로 실행해야 합니다. 0.3.35 때 파이프 뒤의 명령이 성공으로 끝나서, 실행 확인이 실패했는데도 배포가 진행됐습니다.
 4. 베타를 냅니다(같은 명령에서 `--dry-run`만 뺍니다). 업데이트 채널이 베타인 설치본만 받고, `latest.yml`은 그대로입니다. 베타의 `Release <버전>` 커밋이 푸시되면서 CI가 돕니다.
 5. CI 결과를 확인합니다. 실패가 있으면 원인을 보고, 고친 뒤 `-beta.2`를 냅니다. 한 번만 실패한 시간 초과는 그 job을 다시 돌려(`gh run rerun <id> --failed`) 확인합니다.
 6. CI가 통과하고 베타에 문제가 없으면 정식을 냅니다. 드라이런과 exe 확인을 한 번 더 하고 `npm run release -- 0.3.23 --skip-tests`를 실행합니다. 스크립트가 버전 올리기, 빌드, 커밋과 태그, 푸시, 업로드, `latest.yml` 확인까지 합니다.

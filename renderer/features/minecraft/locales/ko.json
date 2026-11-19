@@ -1084,5 +1084,6 @@
   "Refresh": "새로 고침",
   "Back to the Open Tabs": "열린 탭으로 돌아가기",
   "Back to the server list. This tab stays open.": "서버 목록으로 돌아가요. 이 탭은 열린 채로 있어요.",
-  "Modpacks, mods, plugins and resource packs from Modrinth, installed into your servers and instances.": "Modrinth의 모드팩, 모드, 플러그인, 리소스팩을 내 서버와 인스턴스에 설치해요."
+  "Modpacks, mods, plugins and resource packs from Modrinth, installed into your servers and instances.": "Modrinth의 모드팩, 모드, 플러그인, 리소스팩을 내 서버와 인스턴스에 설치해요.",
+  "Changes here are saved at once: there is no Save button on this tab.": "여기서 바꾼 값은 바로 저장돼요. 이 탭에는 저장 버튼이 없어요."
 }

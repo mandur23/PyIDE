@@ -285,5 +285,7 @@
   "Database: Attach Data Source…": "데이터베이스: 데이터 소스 연결…",
   "Generate ERD": "ERD 생성",
   "Foreign keys could not be read": "외래 키를 읽지 못했습니다",
-  "The ERD could not be generated": "ERD를 만들지 못했습니다"
+  "The ERD could not be generated": "ERD를 만들지 못했습니다",
+  "Stop Loading": "불러오기 중지",
+  "Stops after the rows being read now; what is loaded stays.": "지금 읽는 행까지만 받고 멈춥니다. 받은 행은 그대로 남습니다."
 }

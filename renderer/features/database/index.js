@@ -1037,6 +1037,29 @@
       return { next: again(lastStmt, maxRows * 10), all: again(lastStmt, ALL_ROWS) };
     }
 
+    // Load All reads the rest in steps, ten times the rows each (as Load More does): the rows read so far show after
+    // every step, and the button stops it there. One unbounded read gave nothing to see, or to stop, until a table of
+    // millions of rows had come over whole.
+    let allLoading = false;
+    let allStop = false;
+    async function loadEverything() {
+      if (allLoading) { allStop = true; loadAll.disabled = true; return; }
+      allLoading = true;
+      allStop = false;
+      try {
+        for (let more = moreOf(last); more && !allStop; more = moreOf(last)) {
+          loadAll.classList.remove('hidden');
+          loadAll.textContent = tr('Stop Loading');
+          loadMore.classList.add('hidden');
+          await more.next();
+        }
+      } finally {
+        allLoading = false;
+        loadAll.disabled = false;
+        if (last) showResult(last, lastDone, lastTotal);
+      }
+    }
+
     // Status line and output for a result: {columns, rows, rowCount, truncated, ms} plus, from some kinds, documents
     // (Grid/JSON views), affected (documents written), message (a reply such as Redis's OK, shown as data) and notice
     // ({text, args}: an English UI message from the kind, translated here).
@@ -1072,10 +1095,12 @@
       if (r.message && r.columns.length) status.append(userEl('span', 'db-result-message', r.message), ' · ');
       status.append(`${r.ms} ms`);
       const more = moreOf(r);
-      loadMore.classList.toggle('hidden', !more);
-      loadAll.classList.toggle('hidden', !more);
+      loadMore.classList.toggle('hidden', !more || allLoading);
+      loadAll.classList.toggle('hidden', !more && !allLoading);
       loadMore.onclick = more?.next || null;
-      loadAll.onclick = more?.all || null;
+      loadAll.onclick = loadEverything;
+      loadAll.textContent = allLoading ? tr('Stop Loading') : tr('Load All');
+      loadAll.title = allLoading ? tr('Stops after the rows being read now; what is loaded stays.') : '';
       for (const b of viewButtons) b.classList.toggle('selected', b.dataset.view === c.view());
       output.onscroll = null;
       if (r.columns.length) {
