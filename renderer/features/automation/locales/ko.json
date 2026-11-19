@@ -76,5 +76,21 @@
   "Build what is missing and start every service, waiting until each runs and is healthy (docker compose up -d --wait)": "없는 이미지를 빌드하고 모든 서비스를 시작하고, 각 서비스가 실행되어 정상이 될 때까지 기다립니다(docker compose up -d --wait)",
   "Follow the output of every service (docker compose logs -f)": "모든 서비스의 출력을 따라갑니다(docker compose logs -f)",
   "Stop and remove the containers (docker compose down)": "컨테이너를 멈추고 제거합니다(docker compose down)",
-  "Other containers on this computer": "이 컴퓨터의 다른 컨테이너"
+  "Other containers on this computer": "이 컴퓨터의 다른 컨테이너",
+  "Docker Image or Volume": "Docker 이미지 또는 볼륨",
+  "Kind": "종류",
+  "Name": "이름",
+  "Remove the image {name}? Docker refuses one a container still uses.": "{name} 이미지를 제거할까요? 컨테이너가 쓰고 있는 이미지는 Docker가 지우지 않습니다.",
+  "Remove the volume {name}? What is stored in it is lost. Docker refuses one a container still uses.": "{name} 볼륨을 제거할까요? 안에 저장된 내용이 사라집니다. 컨테이너가 쓰고 있는 볼륨은 Docker가 지우지 않습니다.",
+  "Remove Image": "이미지 제거",
+  "Remove Volume": "볼륨 제거",
+  "The Terminal plugin is disabled.": "터미널 플러그인이 꺼져 있습니다.",
+  "Ended with exit code {code}": "종료 코드 {code}로 끝났습니다",
+  "Open a Terminal in It": "컨테이너 안에서 터미널 열기",
+  "Open .env": ".env 열기",
+  "Images": "이미지",
+  "Volumes": "볼륨",
+  "Reading…": "읽는 중…",
+  "in use": "사용 중",
+  "None": "없음"
 }

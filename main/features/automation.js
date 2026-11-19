@@ -13,6 +13,12 @@ const DOCKERFILE = /^(Dockerfile(\.[\w-]+)?|[\w-]+\.Dockerfile)$/i;
 const SKIP = new Set(['node_modules', '.git', '.gradle', '.idea', '.venv', 'venv', 'build', 'target', 'dist', 'out', 'bin', '__pycache__']);
 const SERVICE = /^[A-Za-z0-9][\w.-]*$/;
 const CONTAINER = /^[a-f0-9]{12,64}$/;
+const CONTAINER_NAME = /^[A-Za-z0-9][\w.-]*$/;
+const IMAGE = /^(sha256:)?[a-f0-9]{12,64}$/;
+const VOLUME = /^[A-Za-z0-9][\w.-]*$/;
+// The last lines of a container's output, each cut to what a tool window shows.
+const lastLines = (text, n) => text.split(/\r?\n/).map((l) => l.replace(/\x1b\[[0-9;]*m/g, '').trimEnd()).filter((l) => l.trim()).slice(-n).map((l) => (l.length > 300 ? `${l.slice(0, 300)}…` : l)).join('\n');
+const jsonLines = (text) => text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } });
 // What a compose file's button runs. `service` narrows the ones that take one.
 const ACTIONS = {
   // --wait: the command ends once every service runs (and is healthy, where it has a health check), and fails when one
@@ -164,9 +170,17 @@ exports.register = ({ ipcMain, startProcess }) => {
     const services = names.out.split(/\r?\n/).map((l) => l.trim()).filter((n) => SERVICE.test(n)).sort().map((name) => {
       const row = rows.find((r) => r.Service === name);
       const ports = row ? [...new Set((row.Publishers || []).filter((p) => p.PublishedPort).map((p) => `${p.PublishedPort}`))].join(', ') : '';
-      return { name, state: row ? String(row.State || '') : '', status: row ? String(row.Status || '') : '', health: row ? String(row.Health || '') : '', ports,
-        container: row ? String(row.Name || '') : '', image: row ? String(row.Image || '') : '' };
+      // Where each port is published: 127.0.0.1 for this computer alone, 0.0.0.0 for the network too (the Ports window).
+      const published = row ? (row.Publishers || []).filter((p) => p.PublishedPort && String(p.Protocol || 'tcp') === 'tcp' && !String(p.URL || '').includes(':'))
+        .map((p) => ({ port: Number(p.PublishedPort), address: String(p.URL || '127.0.0.1') })).filter((p, i, all) => all.findIndex((o) => o.port === p.port) === i) : [];
+      return { name, state: row ? String(row.State || '') : '', status: row ? String(row.Status || '') : '', health: row ? String(row.Health || '') : '', ports, published,
+        container: row ? String(row.Name || '') : '', image: row ? String(row.Image || '') : '', exit: row && String(row.State) === 'exited' ? Number(row.ExitCode ?? 0) : null };
     });
+    // A service that ended by itself with an error says why: the last lines it wrote (three services at most a reading).
+    await Promise.all(services.filter((s) => s.exit && CONTAINER_NAME.test(s.container)).slice(0, 3).map(async (s) => {
+      const logs = await ask(argv, ['logs', '--tail', '6', s.container], cwd, 8000);
+      s.why = lastLines(`${logs.out}\n${logs.err}`, 6);
+    }));
     return { services };
   });
 
@@ -186,10 +200,43 @@ exports.register = ({ ipcMain, startProcess }) => {
       // "0.0.0.0:8080->8080/tcp, [::]:8080->8080/tcp, 9300/tcp": the published ones, once each
       const ports = [...new Set([...String(c.Ports || '').matchAll(/:(\d+)->/g)].map((m) => m[1]))].join(', ');
       const project = /(?:^|,)com\.docker\.compose\.project=([^,]*)/.exec(String(c.Labels || ''))?.[1] || '';
-      containers.push({ id, name: String(c.Names || '').split(',')[0], image: String(c.Image || ''), state: String(c.State || ''), status: String(c.Status || ''), ports, project });
+      const exit = String(c.State) === 'exited' ? Number(/Exited \((\d+)\)/.exec(String(c.Status || ''))?.[1] ?? 0) : null;
+      containers.push({ id, name: String(c.Names || '').split(',')[0], image: String(c.Image || ''), state: String(c.State || ''), status: String(c.Status || ''), ports, project, exit });
     }
     containers.sort((a, b) => a.project.localeCompare(b.project) || a.name.localeCompare(b.name));
     return { containers };
+  });
+
+  // What the running containers use now: -> {name: {cpu: '0.45%', memory: '393.1MiB'}}
+  ipcMain.handle('automation:stats', async () => {
+    const argv = dockerArgv();
+    if (!argv) return {};
+    const r = await ask(argv, ['stats', '--no-stream', '--format', '{{json .}}'], undefined, 12000);
+    if (r.code !== 0) return {};
+    return Object.fromEntries(jsonLines(r.out).filter((s) => s.Name).map((s) => [String(s.Name), { cpu: String(s.CPUPerc || ''), memory: String(s.MemUsage || '').split('/')[0].trim() }]));
+  });
+
+  // The images and the volumes of this computer's Docker: -> {images: [{id, name, size, created, used}], volumes: [{name}]}
+  ipcMain.handle('automation:storage', async () => {
+    const argv = dockerArgv();
+    if (!argv) return { images: [], volumes: [] };
+    const [im, vo] = await Promise.all([ask(argv, ['images', '--format', '{{json .}}']), ask(argv, ['volume', 'ls', '--format', '{{json .}}'])]);
+    const images = jsonLines(im.out).filter((i) => IMAGE.test(String(i.ID || ''))).map((i) => ({ id: String(i.ID), name: i.Repository === '<none>' ? String(i.ID) : `${i.Repository}:${i.Tag}`, size: String(i.Size || ''), created: String(i.CreatedSince || ''), used: Number(i.Containers) > 0 }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const volumes = jsonLines(vo.out).filter((v) => VOLUME.test(String(v.Name || ''))).map((v) => ({ name: String(v.Name) })).sort((a, b) => a.name.localeCompare(b.name));
+    return { images, volumes };
+  });
+
+  // Removes an image or a volume nothing uses (docker refuses one in use, and says so). spec: {root, kind, id}
+  ipcMain.handle('automation:remove', (_e, spec = {}) => {
+    const { root, kind, id } = spec;
+    const args = kind === 'image' && typeof id === 'string' && IMAGE.test(id) ? ['rmi', id] : kind === 'volume' && typeof id === 'string' && VOLUME.test(id) ? ['volume', 'rm', id] : null;
+    if (!args) throw expected(`${id} is not an image or a volume`);
+    if (typeof root === 'string' && path.isAbsolute(root) && !isTrusted(root)) throw expected('The project is not trusted (Safe Mode)');
+    const argv = dockerArgv();
+    if (!argv) throw expected('Docker was not found. Install Docker Desktop, or start Nano Studio again if it was installed just now.');
+    const pid = startProcess(argv[0], [...argv.slice(1), ...args], { windowsHide: true, encoding: 'utf8' });
+    return { id: pid, command: shown(args) };
   });
 
   // One container, by its id: start, stop, restart, its logs, or remove it (stopped first). spec: {root, id, action}

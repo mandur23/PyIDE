@@ -133,6 +133,11 @@ exports.register = ({ ipcMain, app, send, unpackedDir, programs }) => {
   // programs and the ports the user added listen on. proto is null until a probe answers.
   let ports = [];
   let added = new Set(); // ports the user added, listed whatever started them
+  // Ports the project's containers publish (the Automation plugin names them with their service and the address they
+  // are published on): port -> {name, address}. They are listed on Docker's word: Docker Desktop forwards them from
+  // its WSL network, so they answer on this computer and yet are in no netstat list, and where another Docker does
+  // list them the process is Docker's, not one the IDE started.
+  let containers = new Map();
   // Game servers' ports, which the Minecraft plugin names before each server starts. Here rather than in the window that
   // started the server, so another window, or the same one reloaded, still shares one privately.
   const games = new Set();
@@ -167,7 +172,7 @@ exports.register = ({ ipcMain, app, send, unpackedDir, programs }) => {
   let timer = null;
   let polling = null;
   const shownIn = new Set(); // webContents ids of windows showing the Ports tool window
-  const needed = () => shownIn.size > 0 || tunnels.size > 0 || programs.count() > 0;
+  const needed = () => shownIn.size > 0 || tunnels.size > 0 || programs.count() > 0 || containers.size > 0;
 
   const state = () => ({
     ports,
@@ -213,10 +218,17 @@ exports.register = ({ ipcMain, app, send, unpackedDir, programs }) => {
       for (const l of list) {
         const p = tree.get(l.pid);
         const mine = added.has(l.port);
-        if (!mine && (!ideProcess(l.pid) || isTool(p) || debuggerPorts(p).includes(l.port))) continue;
+        const service = containers.get(l.port)?.name;
+        if (!mine && !service && (!ideProcess(l.pid) || isTool(p) || debuggerPorts(p).includes(l.port))) continue;
         const known = ports.find((o) => o.port === l.port && o.pid === l.pid)?.proto ?? null;
-        next.push({ ...l, host: hostOf(l.address), dial: dialOf(l.address), lan: lanAddresses(l.address), proto: known, added: mine,
-          name: p?.name || '', cmd: (p?.cmd || '').slice(0, 400) });
+        next.push({ ...l, host: hostOf(l.address), dial: dialOf(l.address), lan: lanAddresses(l.address), proto: known, added: mine, container: !!service,
+          name: service || p?.name || '', cmd: service ? `Docker: ${service}` : (p?.cmd || '').slice(0, 400) });
+      }
+      for (const [port, c] of containers) {
+        if (next.some((o) => o.port === port)) continue;
+        const known = ports.find((o) => o.port === port && o.pid === 0)?.proto ?? null;
+        next.push({ port, pid: 0, address: c.address, host: hostOf(c.address), dial: dialOf(c.address), lan: lanAddresses(c.address), proto: known, added: false, container: true,
+          name: c.name, cmd: `Docker: ${c.name}` });
       }
       // A server that went away is probed again when it comes back.
       for (const key of [...protos.keys()]) if (!next.some((r) => `${r.port}:${r.pid}` === key)) protos.delete(key);
@@ -284,6 +296,19 @@ exports.register = ({ ipcMain, app, send, unpackedDir, programs }) => {
   // The ports the user added (the renderer keeps them); the list is read again at once.
   ipcMain.handle('ports:setAdded', async (_e, list) => {
     added = new Set((Array.isArray(list) ? list : []).map(Number).filter((n) => Number.isInteger(n) && n > 0 && n < 65536));
+    snapshot = '';
+    started = true;
+    await poll().catch(() => {});
+    if (needed()) schedule();
+    return state();
+  });
+  // The ports the project's running containers publish, with the service or container each belongs to:
+  // [{port, name}]. The whole list each time; the listening ports are read again when it changed.
+  ipcMain.handle('ports:setContainers', async (_e, list) => {
+    const next = new Map((Array.isArray(list) ? list : []).filter((x) => x && Number.isInteger(x.port) && x.port > 0 && x.port < 65536)
+      .map((x) => [x.port, { name: String(x.name || 'Docker').replace(/[\r\n]/g, ' ').slice(0, 80), address: /^(\d{1,3}\.){3}\d{1,3}$/.test(x.address) ? x.address : '127.0.0.1' }]));
+    if (JSON.stringify([...next]) === JSON.stringify([...containers])) return state();
+    containers = next;
     snapshot = '';
     started = true;
     await poll().catch(() => {});

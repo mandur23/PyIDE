@@ -137,6 +137,7 @@
  { "name": "interpreter-ux", "file": "verify/interpreter-ux.mjs", "timeout": 10, "seconds": 60 },
  { "name": "run-ux", "file": "verify/run-ux.mjs", "timeout": 10, "seconds": 50 },
  { "name": "commit-checks", "file": "verify/commit-checks.mjs", "timeout": 10, "seconds": 82 },
+ { "name": "java-check", "file": "verify/java-check.mjs", "timeout": 10, "seconds": 60 },
  { "name": "automation", "file": "verify/automation.mjs", "timeout": 10, "seconds": 45 },
  { "name": "run-automation", "file": "verify/run-automation.mjs", "timeout": 10, "seconds": 37 },
  { "name": "ui-comfort", "file": "verify/ui-comfort.mjs", "timeout": 10, "seconds": 39 },

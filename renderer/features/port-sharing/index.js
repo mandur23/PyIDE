@@ -260,7 +260,7 @@
       row.dataset.proto = protoOf(p) || '';
       const portCell = el('span', 'ports-port', String(p.port));
       if (protoOf(p)) portCell.append(el('span', 'ports-proto', PROTO[protoOf(p)]));
-      const proc = el('span', 'ports-proc', p.name ? `${p.name} (${p.pid})` : String(p.pid));
+      const proc = el('span', 'ports-proc', p.container ? `${p.name} (Docker)` : p.name ? `${p.name} (${p.pid})` : String(p.pid));
       proc.title = p.cmd;
       proc.dataset.userText = '';
       const pub = el('span', 'ports-public');
@@ -374,5 +374,14 @@
     hint(port, 'tcp');
     ide.api.invoke('ports:gamePort', port).catch(() => {});
   };
-  ide.ports = { state: () => st, share, unshare, setAutoShare: setAuto, addPort, removePort, hint, gamePort };
+  // The ports the project's containers publish ([{port, name}], from the Automation plugin): listed as the IDE's own
+  // programs' are, and announced when new.
+  const setContainers = async (list) => {
+    const before = st;
+    st = await ide.api.invoke('ports:setContainers', list).catch(() => st);
+    announce(before);
+    render();
+    probeIfShown();
+  };
+  ide.ports = { state: () => st, share, unshare, setAutoShare: setAuto, addPort, removePort, hint, gamePort, setContainers };
 })();

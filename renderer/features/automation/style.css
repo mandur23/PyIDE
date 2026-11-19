@@ -24,6 +24,15 @@
 .auto-empty { padding: 12px; }
 .auto-empty + .auto-hint { margin-left: 12px; }
 .auto-custom { padding-left: 40px; }
+.auto-usage { font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.auto-dot.bad { background: var(--red); }
+.auto-why { margin: 0 10px 4px 58px; padding: 5px 8px; border-radius: 6px; font-size: 12px; background: color-mix(in srgb, var(--red) 10%, transparent); }
+.auto-why-code { color: color-mix(in srgb, var(--red) 55%, var(--gray11)); }
+.auto-why-log { margin: 4px 0 0; font: 11.5px/1.4 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 110px; overflow: auto; color: var(--gray10); }
+.auto-link { color: var(--blue8); cursor: pointer; }
+.auto-link:hover { text-decoration: underline; }
+.auto-fold { display: flex; align-items: center; gap: 4px; cursor: pointer; padding-left: 20px; }
+.auto-fold:hover { color: var(--gray11); }
 .auto-summary { font-size: 12px; white-space: nowrap; }
 .auto-summary.on { color: var(--green6); }
 .auto-ports { display: inline-flex; gap: 6px; flex-shrink: 0; }

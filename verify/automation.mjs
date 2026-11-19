@@ -9,9 +9,15 @@
 // engine not running each say so; a project without any of it says there is nothing; Korean. A task with "Run in a
 // container" ticked runs docker run with the JDK image of the Java the build names, the project mounted and the wrapper
 // read with its line endings fixed, and the tick is kept; a project with a Dockerfile alone builds, runs (its EXPOSEd
-// port published) and stops it. Port 9942.
+// port published) and stops it. A service that ended with an error shows its exit code and last lines; the running
+// ones their CPU and memory; a refused file offers Open .env at the variable; Images and Volumes open folded, list
+// what docker has and remove one after a question; a container's menu opens a terminal in it. The port a running
+// service publishes (a server of this test's own listens on it, as Docker's process would: no program of the IDE's)
+// is listed in the Ports tool window under the service's name, and goes when the service stops; so is a published
+// port no netstat list has (Docker Desktop's, forwarded from its WSL network). Port 9942.
 // Usage: node verify/automation.mjs
 import { mkdirSync, mkdtempSync, writeFileSync } from 'fs';
+import http from 'http';
 import { tmpdir } from 'os';
 import path from 'path';
 import { launch } from './lib.mjs';
@@ -51,6 +57,17 @@ if (a[0] === 'ps') {
   const st = path.join(process.cwd(), 'fake-state.json');
   process.exit(0);
 }
+if (a[0] === 'stats') { console.log(JSON.stringify({ Name: 'demo-web-1', CPUPerc: '1.25%', MemUsage: '120MiB / 15GiB' })); console.log(JSON.stringify({ Name: 'demo-cache-1', CPUPerc: '0.10%', MemUsage: '9MiB / 15GiB' })); process.exit(0); }
+const goneFile = path.join(__dirname, 'removed');
+const gone = fs.existsSync(goneFile) ? fs.readFileSync(goneFile, 'utf8') : '';
+if (a[0] === 'images') {
+  if (!gone.includes('image')) console.log(JSON.stringify({ ID: '8c3757ad555d', Repository: 'old-image', Tag: 'latest', Size: '532MB', CreatedSince: '2 days ago', Containers: '0' }));
+  console.log(JSON.stringify({ ID: 'aa11bb22cc33', Repository: 'redis', Tag: '7', Size: '58MB', CreatedSince: '3 weeks ago', Containers: '1' }));
+  process.exit(0);
+}
+if (a[0] === 'volume' && a[1] === 'ls') { if (!gone.includes('volume')) console.log(JSON.stringify({ Name: 'demo_data' })); process.exit(0); }
+if (a[0] === 'rmi' || (a[0] === 'volume' && a[1] === 'rm')) { fs.writeFileSync(goneFile, gone + (a[0] === 'rmi' ? 'image' : 'volume')); console.log('docker did: ' + a.join(' ')); process.exit(0); }
+if (a[0] === 'logs' && a[1] === '--tail') { console.log('Starting app'); console.error('\x1b[31mjava.sql.SQLException: Access denied for user\x1b[0m'); console.error('Application run failed'); process.exit(0); }
 if (a[1] === OTHER && ['start', 'stop', 'restart', 'rm', 'logs'].includes(a[0]) || (a[0] === 'rm' && a[2] === OTHER) || (a[0] === 'logs' && a.at(-1) === OTHER)) {
   if (a[0] !== 'logs') fs.writeFileSync(otherFile, { start: 'running', restart: 'running', stop: 'exited', rm: 'gone' }[a[0]]);
   console.log('docker did: ' + a.join(' ')); process.exit(0);
@@ -74,7 +91,7 @@ const picked = rest.length ? rest : all;
 const save = () => fs.writeFileSync(stateFile, JSON.stringify(state));
 if (cmd === 'config') { console.log(all.join('\\n')); process.exit(0); }
 if (cmd === 'ps') {
-  for (const s of all) if (state[s]) console.log(JSON.stringify({ Service: s, Name: 'demo-' + s + '-1', Image: s === 'web' ? 'demo-web' : 'redis:7', State: state[s], Status: state[s] === 'running' ? 'Up 2 seconds' : 'Exited (0)', Health: '', Publishers: s === 'web' ? [{ PublishedPort: 8080, TargetPort: 8080 }, { PublishedPort: 0, TargetPort: 9 }] : [] }));
+  for (const s of all) if (state[s]) console.log(JSON.stringify({ Service: s, Name: 'demo-' + s + '-1', Image: s === 'web' ? 'demo-web' : 'redis:7', State: state[s] === 'failed' ? 'exited' : state[s], ExitCode: state[s] === 'failed' ? 1 : 0, Status: state[s] === 'running' ? 'Up 2 seconds' : state[s] === 'failed' ? 'Exited (1)' : 'Exited (0)', Health: '', Publishers: s === 'web' ? [{ PublishedPort: Number(fs.readFileSync(path.join(__dirname, 'web-port'), 'utf8')), TargetPort: 8080 }, { PublishedPort: 0, TargetPort: 9 }] : [{ URL: '0.0.0.0', PublishedPort: Number(fs.readFileSync(path.join(__dirname, 'cache-port'), 'utf8')), TargetPort: 6379, Protocol: 'tcp' }, { URL: '::', PublishedPort: Number(fs.readFileSync(path.join(__dirname, 'cache-port'), 'utf8')), TargetPort: 6379, Protocol: 'tcp' }] }));
   process.exit(0);
 }
 if (cmd === 'up' || cmd === 'start' || cmd === 'restart') { for (const s of picked) { state[s] = 'running'; console.log(' Container demo-' + s + '-1  Started'); } save(); process.exit(0); }
@@ -84,6 +101,16 @@ if (cmd === 'build') { console.log('built ' + picked.join(' ')); process.exit(0)
 if (cmd === 'logs') { for (const s of picked) console.log(s + '-1  | ready'); process.exit(0); }
 console.error('unknown compose command ' + cmd); process.exit(2);
 `);
+const published = http.createServer((req, res) => res.end('ok'));
+await new Promise((r) => published.listen(0, '127.0.0.1', r));
+const PORT = published.address().port;
+writeFileSync(path.join(work, 'web-port'), String(PORT));
+// A port nothing on this computer listens on: what netstat shows of a port Docker Desktop publishes.
+const unlisted = http.createServer();
+await new Promise((r) => unlisted.listen(0, '127.0.0.1', r));
+const HIDDEN = unlisted.address().port;
+await new Promise((r) => unlisted.close(r));
+writeFileSync(path.join(work, 'cache-port'), String(HIDDEN));
 const setMode = (m) => writeFileSync(path.join(work, 'mode'), m);
 setMode('ok');
 const DOCKER = S([process.execPath, fake]);
@@ -112,6 +139,9 @@ const run = async (t) => {
   check(/required variable DB_PASSWORD is missing a value/.test(refused.error) && !/level=warning/.test(refused.error) && /DB_PASSWORD/.test(refused.hint) && /\.env/.test(refused.hint) && refused.rows === 0,
     `an empty required variable shows docker's error without its warnings, and says which value to give in .env (${S(refused)})`);
   await shot('error.png');
+  await press('.auto-open-env');
+  await until(`ide.activeTab()?.path?.endsWith('.env') && ide.editor.getPosition().lineNumber === 1 && ide.editor.getPosition().column === 'DB_PASSWORD='.length + 1`, '.env open at the variable', 10000);
+  check(true, 'Open .env opens the file with the caret after the empty variable');
   writeFileSync(path.join(project, '.env'), 'DB_PASSWORD=secret\n');
   await js(`(document.querySelector('#autoRefresh').click(), true)`);
   await until(`${list}.querySelectorAll('.auto-service[data-service]').length === 2 && !${list}.querySelector('.auto-error')`, 'services after the fix', 15000);
@@ -123,13 +153,35 @@ const run = async (t) => {
   const up = await tabText('docker compose up');
   check(/^docker compose -f .*compose\.yaml up -d --wait$/m.test(up) && /demo-web-1\s+Started/.test(up), `Start runs docker compose up -d --wait in a Run tab named after it (${S(up.slice(0, 160))})`);
   await until(`${list}.querySelectorAll('.auto-service[data-service] .auto-dot.on').length === 2`, 'both running', 15000);
-  check(await serviceRows() === S([['cache', true, 'Running'], ['web', true, 'Running']]) && await js(`${list}.querySelector('.auto-service[data-service="web"] .auto-port').textContent`) === ':8080'
+  check(await serviceRows() === S([['cache', true, 'Running'], ['web', true, 'Running']]) && await js(`${list}.querySelector('.auto-service[data-service="web"] .auto-port').textContent`) === `:${PORT}`
     && await js(`${list}.querySelector('.auto-summary').textContent`) === 'Running (2/2)' && await js(`!!${list}.querySelector('.auto-file-head .auto-stop-all') && !${list}.querySelector('.auto-file-head .auto-up')`),
     `the services turn to running, the published port a link, and the file's row counts them and offers Stop in place of Start (${await serviceRows()})`);
+  // ---------- the Ports tool window knows the published port ----------
+  await until(`ide.ports.state().ports.some((p) => p.port === ${PORT})`, 'the published port in Ports', 20000);
+  const row = await js(`(() => { const p = ide.ports.state().ports.find((x) => x.port === ${PORT}); return { name: p.name, container: p.container, added: p.added }; })()`);
+  await js(`(ide.toolWindows.get('Ports').show(), true)`);
+  await until(`[...document.querySelectorAll('#portsList .ports-proc')].some((n) => n.textContent === 'web (Docker)')`, 'the row in the Ports window', 10000);
+  const shareable = await js(`(() => { const r = [...document.querySelectorAll('#portsList .ports-proc')].find((n) => n.textContent === 'web (Docker)').closest('.ports-row, .ports-item, [data-port]') || document.querySelector('#portsList'); return [...r.querySelectorAll('button')].map((b) => b.textContent.trim()).filter(Boolean); })()`);
+  check(row.name === 'web' && row.container === true && !row.added && shareable.some((b) => /Share/.test(b)), `the port a running service publishes is listed in Ports under the service's name, with Share (${S(row)}; ${S(shareable)})`);
+  const hidden = await js(`JSON.stringify(ide.ports.state().ports.filter((p) => p.port === ${HIDDEN}).map((p) => ({ name: p.name, container: p.container, pid: p.pid, host: p.host })))`);
+  check(hidden === S([{ name: 'cache', container: true, pid: 0, host: 'localhost' }]) && await js(`[...document.querySelectorAll('#portsList .ports-proc')].some((n) => n.textContent === 'cache (Docker)')`),
+    `a published port that no netstat list has is listed too, on Docker's word, once (${hidden})`);
+  await js(`(ide.toolWindows.get('Automation').show(), true)`);
+  await until(`${list}.querySelector('.auto-service[data-service="web"] .auto-usage').textContent !== ''`, 'the usage', 15000);
+  check(await js(`[...${list}.querySelectorAll('.auto-service[data-service] .auto-usage')].map((n) => n.textContent)`).then((u) => S(u) === S(['0.10% · 9MiB', '1.25% · 120MiB'])), 'the running services show their CPU and memory');
+  await press('.auto-service[data-service="web"] .auto-service-more');
+  const svcMenu = await js(`[...document.querySelectorAll('.auto-menu .menu-item')].map((r) => r.querySelector('.menu-label').textContent + (r.classList.contains('disabled') ? ' (off)' : ''))`);
+  check(S(svcMenu) === S(['Stop', 'Restart', 'Logs', 'Open a Terminal in It', 'Build Images']), `a running service's menu offers a terminal in it (${S(svcMenu)})`);
+  await js(`([...document.querySelectorAll('.auto-menu .menu-item')].find((r) => r.textContent.includes('Terminal')).dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })), true)`);
+  await until(`ide.terminal.sessions().some((x) => x.name === 'demo-web-1 (docker)')`, 'the terminal tab', 15000);
+  check(true, 'it opens a Terminal tab named after the container');
+  await js(`(ide.terminal.sessions().filter((x) => x.name === 'demo-web-1 (docker)').forEach((x) => ide.terminal.close(x.id)), ide.toolWindows.get('Automation').show(), true)`);
   await shot('running.png');
   await press('.auto-service[data-service="web"] .auto-stop');
   await finished('docker compose stop web');
   await until(`!${list}.querySelector('.auto-service[data-service="web"] .auto-dot.on')`, 'web stopped', 15000);
+  await until(`!ide.ports.state().ports.some((p) => p.port === ${PORT})`, 'the port gone from Ports', 20000);
+  check(true, 'when the service stops its port leaves the Ports window, though something still listens there');
   check(await serviceRows() === S([['cache', true, 'Running'], ['web', false, 'Stopped']]) && await js(`${list}.querySelector('.auto-summary').textContent`) === 'Running (1/2)' && await js(`!!${list}.querySelector('.auto-service[data-service="web"] .auto-start')`), `Stop on a service stops that one and offers Start (${await serviceRows()})`);
   await press('.auto-service[data-service="web"] .auto-start');
   await finished('docker compose up web');
@@ -156,6 +208,34 @@ const run = async (t) => {
   await finished('docker compose down');
   await until(`${list}.querySelectorAll('.auto-service[data-service] .auto-dot.on').length === 0`, 'all down', 15000);
   check(await serviceRows() === S([['cache', false, 'Not created'], ['web', false, 'Not created']]), `Down removes the containers (${await serviceRows()})`);
+
+  // ---------- a service that ended with an error says why ----------
+  writeFileSync(path.join(project, 'fake-state.json'), S({ web: 'failed', cache: 'running' }));
+  await js(`(document.querySelector('#autoRefresh').click(), true)`);
+  await until(`!!${list}.querySelector('.auto-why')`, 'the reason', 15000);
+  const why = await js(`({ code: ${list}.querySelector('.auto-why-code').textContent, log: ${list}.querySelector('.auto-why-log').textContent, bad: ${list}.querySelector('.auto-service[data-service="web"] .auto-dot').classList.contains('bad'), count: ${list}.querySelectorAll('.auto-why').length })`);
+  check(why.code === 'Ended with exit code 1' && /Access denied for user/.test(why.log) && /Application run failed/.test(why.log) && !/\x1b/.test(why.log) && why.bad && why.count === 1,
+    `a service that ended with an error shows its exit code and its last lines, without colour codes (${S(why)})`);
+  await shot('failed.png');
+  writeFileSync(path.join(project, 'fake-state.json'), S({}));
+
+  // ---------- images and volumes ----------
+  check(await js(`!${list}.querySelector('.auto-images-row') && !!${list}.querySelector('.auto-images-head')`), 'Images and Volumes are folded at first');
+  await press('.auto-images-head');
+  await until(`${list}.querySelectorAll('.auto-images-row').length === 2`, 'the images', 15000);
+  const images = await js(`[...${list}.querySelectorAll('.auto-images-row')].map((r) => r.dataset.name + ' | ' + r.querySelector('.auto-state').textContent)`);
+  check(S(images) === S(['old-image:latest | 532MB · 2 days ago', 'redis:7 | 58MB · 3 weeks ago · in use']), `opened, Images lists them with their size and whether a container uses them (${S(images)})`);
+  await press('.auto-images-row[data-name="old-image:latest"] .auto-object-remove');
+  await until(`[...document.querySelectorAll('.dialog')].some((d) => /Remove the image old-image:latest/.test(d.textContent))`, 'the question before removing an image', 5000);
+  await js(`([...[...document.querySelectorAll('.dialog')].at(-1).querySelectorAll('button')].find((b) => b.textContent === 'Remove').click(), true)`);
+  await finished('docker rmi old-image:latest');
+  await until(`${list}.querySelectorAll('.auto-images-row').length === 1`, 'the image gone', 15000);
+  check(/docker did: rmi 8c3757ad555d/.test(await tabText('docker rmi old-image:latest')), 'Remove on an image asks, then removes it by its id');
+  await press('.auto-volumes-head');
+  await until(`${list}.querySelectorAll('.auto-volumes-row').length === 1`, 'the volumes', 15000);
+  check(await js(`${list}.querySelector('.auto-volumes-row').dataset.name`) === 'demo_data', 'Volumes lists the volumes');
+  await press('.auto-images-head');
+  await press('.auto-volumes-head');
 
   // ---------- the computer's other containers ----------
   const otherRow = `${list}.querySelector('.auto-other[data-container="old-db"]')`;
@@ -228,7 +308,7 @@ try {
   const { js, until } = t;
   await until('window.__ideReady === true', 'ready', 60000);
   await js(`(ide.toolWindows.get('Automation').show(), true)`);
-  await until(`!!${list}?.querySelector('.auto-empty')`, 'nothing', 15000);
+  await until(`/Nothing to automate here/.test(${list}?.textContent || '')`, 'nothing', 20000);
   check(/Nothing to automate here/.test(await js(`${list}.textContent`)), 'a project without a compose file, a Dockerfile or a build says there is nothing to automate');
 } catch (err) { check(false, err.message); } finally { t.close(); }
 // A Dockerfile alone: built, run and stopped by itself.
@@ -252,6 +332,7 @@ try {
   await done('docker stop nano-only-app');
   check(/docker did: stop nano-only-app/.test(await tab('docker stop nano-only-app')), 'Stop stops that container');
 } catch (err) { check(false, err.message); } finally { t.close(); }
+published.close();
 const failed = results.filter((r) => !r).length;
 console.log(`${results.length - failed}/${results.length} passed`);
 process.exit(failed ? 1 : 0);

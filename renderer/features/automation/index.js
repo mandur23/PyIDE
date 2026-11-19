@@ -14,8 +14,12 @@
   let docker = null; // automation:docker's answer; null until asked
   const services = new Map(); // compose file -> {services} | {error}
   let others = []; // the computer's containers that are not this project's services
+  let stats = {}; // container name -> {cpu, memory}, of the running ones
+  let storage = null; // {images, volumes}, read while its part of the window is open
+  const opened = new Set(ide.settings.get('automation.opened', [])); // the parts that start folded (images, volumes)
   const collapsed = new Set(ide.settings.get('automation.collapsed', []));
   let seq = 0;
+  let serviceTurn = 0;
   let timer = 0;
 
   const trusted = () => (ide.trusted === false ? (ide.ui.alert(tr('The project is open in Safe Mode, where Nano Studio runs nothing from it. Trust the project to use Docker and build tasks here.')), false) : true);
@@ -23,7 +27,7 @@
   // ---------- running ----------
   const composeTitle = (action, service) => `docker compose ${action}${service ? ` ${service}` : ''}`;
   ide.run.registerType({
-    type: 'docker-compose', title: tr('Docker Compose'), icon: 'services', needsInterp: false,
+    type: 'docker-compose', title: tr('Docker Compose'), icon: 'automation', needsInterp: false,
     fields: [
       { key: 'file', label: tr('Compose file'), placeholder: 'compose.yaml' },
       { key: 'action', label: tr('Command'), kind: 'select', options: () => ['up', 'build', 'down', 'logs', 'start', 'stop', 'restart'].map((a) => [a, a]) },
@@ -51,7 +55,7 @@
 
   // A build task in a container, and a Dockerfile's image: runs named after what they start.
   ide.run.registerType({
-    type: 'container-build', title: tr('Build Task in a Container'), icon: 'services', needsInterp: false,
+    type: 'container-build', title: tr('Build Task in a Container'), icon: 'automation', needsInterp: false,
     fields: [
       { key: 'tool', label: tr('Build tool'), kind: 'select', options: () => [['gradle', 'Gradle'], ['maven', 'Maven']] },
       { key: 'goals', label: tr('Goals or tasks'), placeholder: 'build' },
@@ -75,7 +79,7 @@
     },
   });
   ide.run.registerType({
-    type: 'docker-image', title: tr('Dockerfile'), icon: 'services', needsInterp: false,
+    type: 'docker-image', title: tr('Dockerfile'), icon: 'automation', needsInterp: false,
     fields: [
       { key: 'file', label: tr('Dockerfile'), placeholder: 'Dockerfile' },
       { key: 'action', label: tr('Command'), kind: 'select', options: () => ['build', 'run', 'stop'].map((a) => [a, a]) },
@@ -97,7 +101,7 @@
     },
   });
   ide.run.registerType({
-    type: 'docker-container', title: tr('Docker Container'), icon: 'services', needsInterp: false,
+    type: 'docker-container', title: tr('Docker Container'), icon: 'automation', needsInterp: false,
     fields: [
       { key: 'container', label: tr('Container'), placeholder: 'id' },
       { key: 'action', label: tr('Command'), kind: 'select', options: () => ['start', 'stop', 'restart', 'logs', 'rm'].map((a) => [a, a]) },
@@ -123,6 +127,48 @@
     const type = ide.run.types.get('docker-container');
     ide.run.runConfig({ ...type.defaults(), id: `automation:container:${c.id}:${action}`, type: 'docker-container', name: `docker ${action} ${c.name}`, container: c.id, action });
   }
+  ide.run.registerType({
+    type: 'docker-remove', title: tr('Docker Image or Volume'), icon: 'automation', needsInterp: false,
+    fields: [{ key: 'kind', label: tr('Kind'), kind: 'select', options: () => [['image', 'image'], ['volume', 'volume']] }, { key: 'target', label: tr('Name'), placeholder: '' }],
+    defaults: () => ({ kind: 'image', target: '' }),
+    identity: (c) => `${c.kind}|${c.target}`,
+    file: () => null,
+    async start(cfg, s) {
+      const con = s.console({});
+      try {
+        const r = await invoke('remove', { root: ide.root, kind: cfg.kind, id: cfg.target });
+        con.append(`${r.command}\n`, 'sys');
+        s.attach(r.id, { onExit: () => refreshServices() });
+      } catch (err) {
+        con.append(`${errorText(err)}\n`, 'err');
+        s.setIcon?.('error', 'failed');
+      }
+    },
+  });
+  function removeObject(kind, id, name) {
+    if (!trusted()) return;
+    const ask = kind === 'image' ? tr('Remove the image {name}? Docker refuses one a container still uses.', { name }) : tr('Remove the volume {name}? What is stored in it is lost. Docker refuses one a container still uses.', { name });
+    removeAfterAsking(ask, () => {
+      const type = ide.run.types.get('docker-remove');
+      ide.run.runConfig({ ...type.defaults(), id: `automation:remove:${kind}:${id}`, type: 'docker-remove', name: `docker ${kind === 'image' ? 'rmi' : 'volume rm'} ${name}`, kind, target: id });
+    }, kind === 'image' ? tr('Remove Image') : tr('Remove Volume'));
+  }
+  // A shell inside a running container, in the Terminal tool window.
+  function terminal(name) {
+    if (!trusted()) return;
+    if (!ide.terminal) return ide.ui.alert(tr('The Terminal plugin is disabled.'));
+    const q = (s) => `'${String(s).replace(/'/g, "''")}'`;
+    // sh is in every image; bash is used when the image has it.
+    ide.terminal.open({ name: `${name} (docker)`, shell: 'powershell', command: `& ${q(docker.exe)} exec -it ${q(name)} sh -c 'command -v bash >/dev/null && exec bash || exec sh'` });
+  }
+  const usageOf = (name) => { const u = stats[name]; return u ? `${u.cpu} · ${u.memory}` : ''; };
+  // Under an ended service or container that ended with an error: its exit code and the last lines it wrote.
+  function whyBox(exit, why) {
+    const box = el('div', 'auto-why');
+    box.append(el('div', 'auto-why-code', tr('Ended with exit code {code}', { code: exit })));
+    if (why) { const pre = el('pre', 'auto-why-log', why); pre.dataset.userText = ''; box.append(pre); }
+    return box;
+  }
   const isUp = (state) => state === 'running' || state === 'restarting' || state === 'paused';
   // Ports as links: a click opens http://localhost:<port> in the browser.
   function portLinks(ports) {
@@ -139,8 +185,8 @@
     const b = iconButton('moreVertical', tr('More'), cls, () => { const r = b.getBoundingClientRect(); ide.ui.contextMenu(r.right - 180, r.bottom + 4, items()).classList.add('auto-menu'); });
     return b;
   }
-  async function removeAfterAsking(what, run) {
-    if (await ide.ui.confirm(what, { title: tr('Remove Containers'), ok: tr('Remove') })) run();
+  async function removeAfterAsking(what, run, title = tr('Remove Containers')) {
+    if (await ide.ui.confirm(what, { title, ok: tr('Remove') })) run();
   }
 
   const inContainer = (tool) => !!ide.settings.get(`automation.container:${tool}:${ide.root}`, false);
@@ -181,14 +227,27 @@
   }
   async function refreshServices() {
     if (!ide.root || !docker?.found || docker.error || ide.trusted === false) return;
+    // A reading asked for earlier may answer later (docker was busy starting things): only the newest one is shown.
     const mine = seq;
+    const turn = ++serviceTurn;
+    const read = new Map();
     const [all] = await Promise.all([invoke('containers').catch(() => ({ containers: [] })), ...found.compose.map(async (c) => {
-      const r = await invoke('services', ide.root, c.file).catch((err) => ({ error: errorText(err) }));
-      if (mine === seq) services.set(c.file, r);
+      read.set(c.file, await invoke('services', ide.root, c.file).catch((err) => ({ error: errorText(err) })));
     })]);
-    if (mine !== seq) return;
+    if (mine !== seq || turn !== serviceTurn) return;
+    for (const [file, r] of read) services.set(file, r);
     const own = new Set([...services.values()].flatMap((r) => (r.services || []).map((s) => s.container)).filter(Boolean));
+    // The Ports tool window lists what the project's running services publish, so each can be opened and shared there.
+    const published = [...services.values()].flatMap((r) => (r.services || []).filter((s) => isUp(s.state)).flatMap((s) => (s.published || []).map((p) => ({ port: p.port, address: p.address, name: s.name }))));
+    ide.ports?.setContainers?.(published);
     others = (all.containers || []).filter((c) => !own.has(c.name));
+    render();
+    // What the running ones use takes docker a second or two to measure: it follows, and the list does not wait for it.
+    const running = (all.containers || []).some((c) => isUp(c.state)) || [...services.values()].some((r) => (r.services || []).some((x) => isUp(x.state)));
+    const [st, sto] = await Promise.all([running ? invoke('stats').catch(() => ({})) : {}, opened.has('images') || opened.has('volumes') ? invoke('storage').catch(() => null) : storage]);
+    if (mine !== seq || turn !== serviceTurn) return;
+    stats = st;
+    storage = sto;
     render();
   }
   const visible = () => tw.isVisible();
@@ -243,10 +302,12 @@
       running ? { label: tr('Stop'), icon: 'runStop', run: () => compose(c.file, 'stop', s.name) } : { label: tr('Start'), icon: 'runRun', run: () => compose(c.file, 'up', s.name) },
       { label: tr('Restart'), icon: 'rerun', run: () => compose(c.file, 'restart', s.name) },
       { label: tr('Logs'), icon: 'text', run: () => compose(c.file, 'logs', s.name) },
+      { label: tr('Open a Terminal in It'), icon: 'terminal', disabled: !running || !s.container, run: () => terminal(s.container) },
       { separator: true },
       { label: tr('Build Images'), run: () => compose(c.file, 'build', s.name) },
     ];
-    row.append(el('span', `auto-dot${running ? ' on' : ''}`), name, state, portLinks(s.ports), el('span', 'spacer'),
+    if (s.exit) row.classList.add('failed');
+    row.append(el('span', `auto-dot${running ? ' on' : ''}${s.exit ? ' bad' : ''}`), name, state, portLinks(s.ports), el('span', 'auto-usage muted', running ? usageOf(s.container) : ''), el('span', 'spacer'),
       running ? iconButton('runStop', tr('Stop {name}', { name: s.name }), 'auto-stop', () => compose(c.file, 'stop', s.name))
         : iconButton('runRun', tr('Start {name}', { name: s.name }), 'auto-start', () => compose(c.file, 'up', s.name)),
       iconButton('text', tr('Logs of {name}', { name: s.name }), 'auto-logs', () => compose(c.file, 'logs', s.name)),
@@ -268,10 +329,12 @@
       running ? { label: tr('Stop'), icon: 'runStop', run: () => container(c, 'stop') } : { label: tr('Start'), icon: 'runRun', run: () => container(c, 'start') },
       { label: tr('Restart'), icon: 'rerun', run: () => container(c, 'restart') },
       { label: tr('Logs'), icon: 'text', run: () => container(c, 'logs') },
+      { label: tr('Open a Terminal in It'), icon: 'terminal', disabled: !running, run: () => terminal(c.name) },
       { separator: true },
       { label: tr('Remove…'), icon: 'clear', run: remove },
     ];
-    row.append(el('span', `auto-dot${running ? ' on' : ''}`), name, state, portLinks(c.ports), el('span', 'spacer'),
+    if (c.exit) { row.classList.add('failed'); state.textContent = `${state.textContent} (${c.exit})`; }
+    row.append(el('span', `auto-dot${running ? ' on' : ''}${c.exit ? ' bad' : ''}`), name, state, portLinks(c.ports), el('span', 'auto-usage muted', running ? usageOf(c.name) : ''), el('span', 'spacer'),
       running ? iconButton('runStop', tr('Stop {name}', { name: c.name }), 'auto-stop', () => container(c, 'stop'))
         : iconButton('runRun', tr('Start {name}', { name: c.name }), 'auto-start', () => container(c, 'start')),
       iconButton('text', tr('Logs of {name}', { name: c.name }), 'auto-logs', () => container(c, 'logs')),
@@ -325,11 +388,42 @@
       box.append(why);
       const hint = hintOf(r.error);
       if (hint) box.append(el('div', 'auto-hint muted', hint));
+      const missing = /required variable (\w+) is missing a value/.exec(r.error)?.[1];
+      if (missing || /env file .* not found/i.test(r.error)) {
+        const open = el('a', 'auto-link auto-open-env', tr('Open .env'));
+        open.onclick = () => openEnv(c.file, missing);
+        const line = el('div', 'auto-hint');
+        line.append(open);
+        box.append(line);
+      }
     } else if (r?.services) {
       if (!r.services.length) box.append(el('div', 'auto-hint muted', tr('This file has no services.')));
-      for (const s of r.services) box.append(serviceRow(c, s));
+      for (const s of r.services) {
+        box.append(serviceRow(c, s));
+        if (s.exit) box.append(whyBox(s.exit, s.why));
+      }
     } else if (usable && ide.trusted !== false) box.append(el('div', 'auto-hint muted', tr('Reading the services…')));
     return box;
+  }
+  // The .env beside a compose file, at the line of a variable (made from .env.example when there is none yet).
+  async function openEnv(composePath, variable) {
+    const dir = composePath.replace(/[\\/][^\\/]+$/, '');
+    const file = `${dir}\\.env`;
+    if (!(await ide.api.exists(file))) {
+      const sample = `${dir}\\.env.example`;
+      const text = (await ide.api.exists(sample)) ? await ide.api.invoke('fs:readText', sample).catch(() => '') : '';
+      await ide.api.invoke('fs:writeText', file, typeof text === 'string' ? text : text?.text || '').catch(() => {});
+      ide.refreshTree?.();
+    }
+    await ide.openFile(file, { asText: true });
+    const model = ide.editor?.getModel?.();
+    if (!variable || !model) return;
+    const at = model.getLinesContent().findIndex((l) => new RegExp(`^\\s*${variable}\\s*=`).test(l));
+    if (at < 0) return;
+    const col = model.getLineMaxColumn(at + 1);
+    ide.editor.setPosition({ lineNumber: at + 1, column: col });
+    ide.editor.revealLineInCenter(at + 1);
+    ide.editor.focus();
   }
   // What to do about the errors docker compose gives most.
   function hintOf(error) {
@@ -376,7 +470,34 @@
       out.push(el('div', 'auto-subhead muted', tr('Other containers on this computer')));
       for (const c of others) out.push(containerRow(c));
     }
+    if (docker?.found && !docker.error) out.push(...storagePart('images', tr('Images')), ...storagePart('volumes', tr('Volumes')));
     return out;
+  }
+
+  // Images and volumes: folded at first, read when opened.
+  function storagePart(kind, title) {
+    const open = opened.has(kind);
+    const head = el('div', `auto-subhead auto-fold auto-${kind}-head muted`);
+    const list = storage?.[kind] || [];
+    head.append(ide.ui.twisty('auto-twisty', open), el('span', null, open && storage ? `${title} (${list.length})` : title));
+    head.onclick = () => {
+      open ? opened.delete(kind) : opened.add(kind);
+      ide.settings.set('automation.opened', [...opened]);
+      render();
+      if (!open) refreshServices();
+    };
+    if (!open) return [head];
+    if (!storage) return [head, el('div', 'auto-hint muted', tr('Reading…'))];
+    const rows = list.map((o) => {
+      const row = el('div', `auto-row auto-service auto-object auto-${kind}-row`);
+      row.dataset.name = o.name;
+      const name = el('span', 'auto-name', o.name);
+      name.dataset.userText = '';
+      row.append(name, el('span', 'auto-state muted', kind === 'images' ? [o.size, o.created, o.used ? tr('in use') : ''].filter(Boolean).join(' · ') : ''), el('span', 'spacer'),
+        iconButton('clear', tr('Remove…'), 'auto-object-remove', () => removeObject(kind === 'images' ? 'image' : 'volume', kind === 'images' ? o.id : o.name, o.name)));
+      return row;
+    });
+    return [head, ...(rows.length ? rows : [el('div', 'auto-hint muted', tr('None'))])];
   }
 
   function buildBody(b) {
@@ -427,7 +548,7 @@
   }
 
   const tw = ide.registerToolWindow({
-    id: 'Automation', title: tr('Automation'), iconName: 'services', icon: '⚙', side: 'right', order: 30,
+    id: 'Automation', title: tr('Automation'), iconName: 'automation', icon: '⚙', side: 'right', order: 30,
     mount(container) {
       container.classList.add('auto-tool');
       host = el('div', 'auto-list');
@@ -440,7 +561,7 @@
 
   let fsTimer = 0;
   ide.on('projectOpened', () => { services.clear(); refresh(); });
-  ide.on('projectClosed', () => { services.clear(); refresh(); });
+  ide.on('projectClosed', () => { services.clear(); ide.ports?.setContainers?.([]); refresh(); });
   ide.on('filesChanged', () => { clearTimeout(fsTimer); fsTimer = setTimeout(() => { if (visible()) refresh(); }, 1500); });
   ide.on('toolWindowShown', (id) => { if (id === 'Automation') refresh(); });
   poll();

@@ -286,6 +286,10 @@
 - **Craft 문구는 "~해요" 말투입니다.** 새 문장을 "~합니다"로 쓰면 같은 화면에 두 말투가 섞입니다(0.3.34에서 64문장을 고쳤습니다). 테스트가 한국어 문장을 정규식으로 찾는 곳(`verify/minecraft-launcher.mjs`)도 같이 고쳐야 합니다.
 - **서버 카드의 버튼을 더 보기 메뉴로 옮기면 테스트의 `.mc-…` 선택자가 사라집니다.** 카드에 없는 동작은 `lib.mjs`의 `craftMore(card, 'mc-rp')`로 누르고 `craftHas`로 있는지 봅니다.
 
+## Code: Docker와 포트
+
+- **Docker Desktop이 연 포트는 netstat에 없습니다.** `docker run -p 127.0.0.1:16379:6379` 뒤에 `Test-NetConnection`은 성공하는데 `netstat -ano`와 `Get-NetTCPConnection`에는 그 포트가 없습니다(WSL 네트워크에서 넘겨 줍니다). 포트 창은 netstat과 프로세스 트리로 목록을 만들어서, 이 포트를 볼 방법이 없었습니다. 자동화 플러그인이 `docker compose ps`의 Publishers를 `ide.ports.setContainers`로 넘기고, main이 듣는 프로세스가 없어도 행을 만듭니다. 가짜 docker로 한 테스트는 테스트가 직접 연 포트(netstat에 보임)를 써서 이 경우를 지나쳤고, 실제 Docker로 돌려 보고서야 드러났습니다. `verify/automation.mjs`는 아무도 듣지 않는 포트도 하나 넣어 봅니다.
+
 ## Craft: 서버, 런처, Market
 
 - **서버 JVM의 인코딩은 `launch()`가 정합니다.** 메인은 출력을 UTF-8로 읽고 stdin도 UTF-8로 쓰는데, 한국어 Windows의 JVM은 파이프에 MS949를 씁니다(Java 21, 25에서 확인). 한글 채팅이 깨진 채 30일 저장됐습니다. `desc.jvmArgs`가 기본 옵션을 대체하므로 플래그는 그 밖에 두고, `verify/minecraft.mjs`가 `-Xmx`와 GC 옵션의 순서를 고정해서 맨 앞에 둡니다. stdin은 바닐라가 UTF-8로 고정이고 Paper는 기본 문자셋을 쓰므로 `file.encoding`이 맞춥니다. `stdin.encoding`만으로는 부족합니다.
@@ -388,6 +392,8 @@
 - **`URLSearchParams`는 매개변수 이름도 풉니다.** `k%65y=`는 키로 읽히지만 `redact.js`는 `key=`만 가립니다. 글자 그대로의 `key=` 수와 키 수가 다른 참여 코드는 거부합니다.
 - **공개 공유의 bore 클라이언트도 앱이 죽으면 끝나야 합니다.** 열쇠가 없어도 앱 없이 낯선 사람을 서버로 계속 이어 줍니다.
 
+- **테스트의 시간 문제는 "상태가 바뀜"과 "화면에 그려짐" 사이에서 납니다.** `verify/spring-boot.mjs`의 디버그 검사는 중단점에서 멈춘 직후 변수 창을 읽어서, 느린 CI 러너에서 "Not debugging"을 읽고 실패했습니다(0.3.33~0.3.35 배포마다 재실행). 상태를 기다린 뒤 그 상태가 그리는 요소도 기다립니다.
+
 ## Craft: 테스트
 
 - **이름을 푸는 코드가 생기면 테스트 주소가 실제 DNS로 나갑니다.** `mc.example.test` 같은 참여 코드 주소와 `packs.example` 팩 주소가 그랬습니다. 테스트는 `PYIDE_MC_DNS`로 이름을 대신 풀고, Node 테스트는 `dns.promises.lookup`과 `resolveSrv`를 실패하게 바꿔 불린 이름을 셉니다(0이어야 합니다).
@@ -443,6 +449,9 @@
 - **두 창이 같은 프로젝트를 저장하면 나중 것이 앞의 것을 지웠습니다.** 단일 인스턴스 잠금 없이, 읽거나 쓴 때의 mtime을 `cut:projectWrite`에 넘겨 다르면 `changed`로 거부하고 화면이 묻습니다.
 
 ## Cut: 엔진과 내보내기
+
+
+- **소스 모니터도 재생할 때 앞 구간을 미리 풀어야 합니다(`Monitors::prefetch_source`, `Engine::prefetch_media`).** 없으면 새 프레임마다 캐시에 없어서 한 번은 옛 그림으로 그리고 다시 그립니다. 1440p 파일 24초 재생에서 렌더 1,343번 중 731번이 그랬고, 고친 뒤 727번 중 0번입니다. `CUT_PLAY_SOURCE=1`과 `CUT_SOURCE=<미디어 이름>`으로 소스 모니터를 재생시키고, 보고서의 `source`(playing, renders, incomplete, sources)로 잽니다.
 
 
 - **미리 풀어 두는 구간(`FrameSource::prefetch`)은 앱에서 0.5초마다 정해지고, 재생 위치는 그 시작을 곧 지나갑니다.** 지나간 프레임을 다시 풀 목표로 삼으면 디코더가 앞선 키프레임에서 다시 시작합니다. 키프레임이 250프레임(8.3초)마다 있는 1440p 파일에서 초당 2번 다시 시작해 초당 3,000프레임을 캐시에 넣고 뺐고, 키프레임 구간의 끝에서 1~2초씩 화면이 늦었습니다(`cut-engine/src/media.rs` `goal`). 엔진 테스트는 매 프레임 prefetch해서 이 경우를 지나쳤습니다. `tests/ahead.rs`가 앱처럼 15프레임마다 정합니다.
