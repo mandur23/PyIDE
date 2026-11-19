@@ -3,7 +3,7 @@
 // verify/out/downloads-cache), then on a plain project (src as the source root) and a Maven project: completion, a
 // live error on a broken line in the editor and Problems, Go to Declaration (into the project and into a JDK class),
 // hover documentation, Optimize Imports, the import progress, the workspace kept under user data, and the server
-// stopped with the project. Needs a JDK 21 or later on this computer; without one, or offline without the cached
+// stopped with the project. Needs a JDK 25 or later on this computer (what JDT LS 1.63 runs on); without one, or offline without the cached
 // archive, it says SKIP and passes.
 import { createHash } from 'crypto';
 import http from 'http';
@@ -82,8 +82,8 @@ try {
   // ---------- Korean, before the server is installed ----------
   k = await launch({ fixture: 'core', port: 9791, name: 'java-lsp-ko', lang: 'ko-KR', projectDir: plain, env });
   const jdks = await k.js(`ide.toolchains.list('jdk').then((l) => l.map((t) => t.version))`);
-  if (!jdks.some((v) => parseInt(String(v).replace(/^1\./, ''), 10) >= 21)) {
-    console.log(`SKIP java-lsp: no JDK 21 or later on this computer (found ${jdks.join(', ') || 'none'})`);
+  if (!jdks.some((v) => parseInt(String(v).replace(/^1\./, ''), 10) >= 25)) {
+    console.log(`SKIP java-lsp: no JDK 25 or later on this computer (found ${jdks.join(', ') || 'none'})`);
     k.close();
     server.close();
     process.exit(0);
@@ -116,6 +116,20 @@ try {
   await openFile(a, 'src/app/Main.java');
   await a.until(READY, 'JDT LS ready (plain project)', 180000);
   check((await statusOf(a)).text === 'Java: ready', 'status item reads "Java: ready"');
+  // A project built with an older JDK (21 to 24, when this computer has one): the server still runs on a JDK it can
+  // run on. It was started on the project's JDK once, and ended with exit code 13 at once.
+  const older = await a.js(`ide.toolchains.list('jdk').then((l) => l.find((t) => { const m = parseInt(t.version, 10); return m >= 21 && m < 25; })?.id || '')`);
+  if (!older) console.log('SKIP java-lsp: no JDK 21 to 24 on this computer to be the JDK of the project');
+  else {
+    await a.js(`(ide.settings.set('toolchains.jdk:' + ide.root, ${JSON.stringify(older)}), true)`);
+    await a.until(`document.querySelector('#javaLspStatus')?.dataset.state === 'starting'`, 'the server restarts for the new project JDK', 30000);
+    await a.until(READY, 'JDT LS ready with an older project JDK', 180000);
+    const on = await a.js(`ide.toolchains.resolve('jdk').then((p) => p.version + ' | ' + document.querySelector('#javaLspStatus').title)`);
+    check(/^2[1-4]\./.test(on) && /JDK (2[5-9]|[3-9]\d)\./.test(on.split(' | ')[1]), `with JDK 21 to 24 as the project's JDK the server runs on a JDK 25 or later (${on})`);
+    await a.js(`(ide.settings.set('toolchains.jdk:' + ide.root, ''), true)`);
+    await a.until(`document.querySelector('#javaLspStatus')?.dataset.state === 'starting'`, 'the server restarts for the default JDK', 30000);
+    await a.until(READY, 'JDT LS ready again', 180000);
+  }
   check(!existsSync(path.join(plain, '.project')) && !existsSync(path.join(plain, '.classpath')) && !existsSync(path.join(plain, 'bin')),
     'no Eclipse files are written into the project');
   const dataRoot = path.join(a.userData, 'java-lsp');

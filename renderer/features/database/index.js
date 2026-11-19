@@ -1164,14 +1164,12 @@
     model.onDidChangeContent(() => { clearTimeout(saveTimer); saveTimer = setTimeout(flush, 300); });
 
     splitter.onmousedown = (down) => {
-      down.preventDefault();
+      if (down.button !== 0) return;
       const startY = down.clientY;
       const startH = editorHost.offsetHeight;
       const total = host.clientHeight - bar.offsetHeight - splitter.offsetHeight;
       const move = (e) => { editorHost.style.flex = `0 0 ${Math.max(60, Math.min(total - 60, startH + e.clientY - startY))}px`; };
-      const up = () => { removeEventListener('mousemove', move); removeEventListener('mouseup', up); };
-      addEventListener('mousemove', move);
-      addEventListener('mouseup', up);
+      ide.ui.dragResize(down, move);
     };
 
     const c = {

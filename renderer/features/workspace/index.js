@@ -317,12 +317,11 @@
       consoles = el('div', 'ws-consoles');
       container.append(list, split, detail);
       split.onmousedown = (down) => {
+        if (down.button !== 0) return;
         const start = down.clientY;
         const h = list.offsetHeight;
         const move = (e) => { list.style.flex = `0 0 ${Math.max(60, Math.min(container.offsetHeight - 120, h + e.clientY - start))}px`; };
-        const up = () => { removeEventListener('mousemove', move); removeEventListener('mouseup', up); };
-        addEventListener('mousemove', move);
-        addEventListener('mouseup', up);
+        ide.ui.dragResize(down, move);
       };
     },
   });

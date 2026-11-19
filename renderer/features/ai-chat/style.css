@@ -47,7 +47,7 @@
 .aic-tool:hover { background: var(--gray3); }
 .aic-chat-status { flex: 1; min-width: 0; margin: 0 4px; color: var(--gray8); font-size: 12px; overflow-wrap: anywhere; }
 .aic-chat-status.error { color: var(--red); }
-.aic-send { min-width: 64px; flex-shrink: 0; }
+.aic-send { min-width: 64px; flex-shrink: 0; height: 26px; padding-top: 0; padding-bottom: 0; }
 .aic-drop-hint { display: none; position: absolute; inset: 4px; z-index: 40; align-items: center; justify-content: center; border: 2px dashed var(--blue6);
   border-radius: 6px; background: var(--gray1); color: var(--gray11); pointer-events: none; }
 .aic.dropping .aic-drop-hint { display: flex; }

@@ -46,6 +46,11 @@ select:disabled { opacity: .5; }
 .ide-icon { display: inline-grid; place-items: center; width: 16px; height: 16px; line-height: 1; }
 .ide-icon:not(:has(svg)), .stripe-btn:not(.active) .ide-icon { filter: grayscale(1); }
 .ide-icon svg { width: 16px; height: 16px; display: block; }
+/* A button that holds an icon lays it out from its middle. As inline content the icon sat on the text baseline, 1.6px
+   above the middle of every icon button, and in a button narrower than its padding leaves room for (the terminal's
+   shell picker, the debugger's small buttons) it also stuck out to the right. No specificity of its own (:where), so a
+   button with a layout of its own keeps it. */
+:where(button:has(> .ide-icon:only-child), button:has(> svg:only-child)) { display: inline-flex; align-items: center; justify-content: center; }
 .stripe-btn .ide-icon, .stripe-btn .ide-icon svg { width: 20px; height: 20px; }
 .stripe-more { margin-top: 4px; color: var(--gray9); }
 .more-panel { position: fixed; z-index: 60; min-width: 280px; max-height: calc(100vh - 16px); overflow: auto; padding: 4px;
@@ -140,6 +145,19 @@ body .list-row.muted:only-child { height: auto; padding: 24px 16px; justify-cont
 /* An entry cut with Ctrl+X, until it is pasted (PyCharm and Explorer dim it). */
 .node.cut .icon, .node.cut .name, .node.cut .tree-badge { opacity: 0.5; }
 
+/* A button whose press is being carried out (ide.ui.working): a refresh icon turns, another button gets a sheen. */
+@keyframes ide-spin { to { transform: rotate(360deg); } }
+@keyframes ide-sheen { from { background-position: 150% 0; } to { background-position: -50% 0; } }
+button.working [data-icon-name="refresh"] { animation: ide-spin 0.7s linear infinite; transform-origin: 50% 50%; }
+button.working:not(:has([data-icon-name="refresh"])) {
+  background-image: linear-gradient(100deg, transparent 30%, color-mix(in srgb, var(--blue6) 35%, transparent) 50%, transparent 70%);
+  background-size: 200% 100%; background-repeat: no-repeat; animation: ide-sheen 0.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) { button.working [data-icon-name="refresh"], button.working { animation-duration: 2.4s; } }
+/* While a resize handle is dragged: a cover takes the pointer over the whole window, and nothing is selected. */
+.drag-cover { position: fixed; inset: 0; z-index: 100000; }
+body.resizing, body.resizing * { user-select: none !important; }
+.splitter.dragging, .splitter:hover { background: var(--blue6); }
 .splitter.v { width: 1px; background: var(--gray1); cursor: col-resize; position: relative; }
 .splitter.v::after { content: ''; position: absolute; inset: 0 -3px; z-index: 5; }
 .splitter.h { height: 1px; background: var(--gray1); cursor: row-resize; position: relative; }

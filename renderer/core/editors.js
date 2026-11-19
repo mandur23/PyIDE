@@ -793,7 +793,7 @@
       b.style.flex = `${1 - node.ratio} 1 0`;
       const handle = el('div', 'split-handle');
       handle.onmousedown = (down) => {
-        down.preventDefault();
+        if (down.button !== 0) return;
         const r = box.getBoundingClientRect();
         const move = (e) => {
           const pos = node.dir === 'row' ? (e.clientX - r.left) / r.width : (e.clientY - r.top) / r.height;
@@ -801,9 +801,7 @@
           a.style.flex = `${node.ratio} 1 0`;
           b.style.flex = `${1 - node.ratio} 1 0`;
         };
-        const up = () => { removeEventListener('mousemove', move); removeEventListener('mouseup', up); };
-        addEventListener('mousemove', move);
-        addEventListener('mouseup', up);
+        ide.ui.dragResize(down, move);
       };
       handle.ondblclick = () => { node.ratio = 0.5; renderLayout(); };
       box.append(a, handle, b);

@@ -79,7 +79,7 @@
       // Where a nested divider meets its parent's, the parent's (the longer one) takes the mouse.
       handle.style.zIndex = String(20 - depth);
       handle.onmousedown = (down) => {
-        down.preventDefault();
+        if (down.button !== 0) return;
         const r = box.getBoundingClientRect();
         const size = node.dir === 'row' ? r.width : r.height;
         const lo = Math.min(0.5, MIN_PANE[node.dir] / Math.max(1, size));
@@ -88,9 +88,7 @@
           node.ratio = Math.min(1 - lo, Math.max(lo, pos));
           apply();
         };
-        const up = () => { removeEventListener('mousemove', move); removeEventListener('mouseup', up); };
-        addEventListener('mousemove', move);
-        addEventListener('mouseup', up);
+        ide.ui.dragResize(down, move);
       };
       handle.ondblclick = () => { node.ratio = 0.5; apply(); };
       box.append(a, handle, b);

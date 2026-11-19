@@ -1468,6 +1468,33 @@ function refreshStripe() {
 }
 ide.sidebar = { isPinned, setPinned, pinned: pinnedIds, defaultPinned: () => [...DEFAULT_PINNED] };
 
+// A button that started something shows it: `.working` while `result` (what its handler returned, a promise or not)
+// is pending, and for WORKING_MS at least, since a refresh that takes 20 ms would otherwise show nothing and leave the
+// user wondering whether the press did anything. CSS turns a refresh icon and sweeps a sheen over a text button.
+const WORKING_MS = 600;
+ide.ui.working = (button, result) => {
+  if (!button) return result;
+  // Called again while it shows (the press itself, then the action's own promise): it lasts until the last one ends.
+  const turn = (button._working = (button._working || 0) + 1);
+  button.classList.add('working');
+  button.setAttribute('aria-busy', 'true');
+  const shown = new Promise((r) => setTimeout(r, WORKING_MS));
+  const before = button._worked || Promise.resolve();
+  button._worked = Promise.allSettled([before, Promise.resolve(result), shown]).then(() => {
+    if (button._working !== turn) return;
+    button.classList.remove('working');
+    button.removeAttribute('aria-busy');
+  });
+  return result;
+};
+// Refresh, Reload and Check Again buttons anywhere (by their refresh icon, or their id or class): pressed, they show
+// it for a moment. A tool window's header button waits for its action instead (renderAreaActions).
+document.addEventListener('click', (e) => {
+  const b = e.target.closest?.('button');
+  if (!b || b.disabled) return;
+  if (b.querySelector('[data-icon-name="refresh"]') || /refresh|reload|recheck/i.test(`${b.id} ${b.className}`)) ide.ui.working(b, null);
+}, true);
+
 function renderAreaActions(area) {
   area.actions.innerHTML = '';
   for (const a of area.active?.actionList || []) {
@@ -1476,7 +1503,7 @@ function renderAreaActions(area) {
     // keyAction: the action whose current shortcut the tooltip shows.
     if (a.keyAction) ide.keymap.tooltip(b, a.title, a.keyAction);
     else b.title = a.title;
-    b.onclick = a.run;
+    b.onclick = (e) => ide.ui.working(b, a.run(e));
     if (a.id) b.dataset.action = a.id;
     // domId: the button's element id, for code that hangs a menu from it (the Database window's New Data Source).
     if (a.domId) b.id = a.domId;
@@ -3012,8 +3039,39 @@ async function pickFolder() {
 }
 
 // ---------- splitters ----------
+// A drag that resizes (a splitter, a split handle, a column edge). Without this a press on a handle started the
+// browser's own text selection: dragged across a tool window or the editor, their text turned blue, and a press that
+// began on something draggable (a tree row under the handle's wider hit area) dragged it, with the editor's blue drop
+// zone following. The press is cancelled, what was selected is let go, and a cover over the whole window keeps the
+// pointer's shape and its moves (an editor, a terminal or a web view under the pointer would take them) until the
+// button is let go or the window loses the pointer.
+ide.ui.dragResize = (down, move, { cursor, end } = {}) => {
+  down.preventDefault();
+  const win = down.view || window;
+  const doc = win.document;
+  win.getSelection()?.removeAllRanges();
+  const cover = doc.createElement('div');
+  cover.className = 'drag-cover';
+  cover.style.cursor = cursor || win.getComputedStyle(down.currentTarget || down.target).cursor || 'default';
+  doc.body.classList.add('resizing');
+  const stop = () => {
+    win.removeEventListener('mousemove', onMove, true);
+    win.removeEventListener('mouseup', stop, true);
+    win.removeEventListener('blur', stop);
+    cover.remove();
+    doc.body.classList.remove('resizing');
+    end?.();
+  };
+  // The cover goes up with the first move, not with the press: under a cover the release would not be the handle's, and
+  // a handle's click and double click (a split's divider goes back to half) would never come.
+  const onMove = (e) => { e.preventDefault(); if (!cover.isConnected) doc.body.appendChild(cover); move(e); };
+  win.addEventListener('mousemove', onMove, true);
+  win.addEventListener('mouseup', stop, true);
+  win.addEventListener('blur', stop);
+};
 document.querySelectorAll('.splitter').forEach((s) => {
   s.onmousedown = (down) => {
+    if (down.button !== 0) return;
     const target = $(s.dataset.target);
     const vertical = s.classList.contains('v');
     const start = vertical ? down.clientX : down.clientY;
@@ -3023,9 +3081,8 @@ document.querySelectorAll('.splitter').forEach((s) => {
       if (vertical) target.style.width = `${Math.max(140, size + delta)}px`;
       else target.style.height = `${Math.max(80, size - delta)}px`;
     };
-    const up = () => { removeEventListener('mousemove', move); removeEventListener('mouseup', up); };
-    addEventListener('mousemove', move);
-    addEventListener('mouseup', up);
+    s.classList.add('dragging');
+    ide.ui.dragResize(down, move, { end: () => s.classList.remove('dragging') });
   };
 });
 

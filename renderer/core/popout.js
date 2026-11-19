@@ -131,7 +131,7 @@
       b.appendChild(ide.icon(a.icon));
       if (a.keyAction) ide.keymap.tooltip(b, a.title, a.keyAction);
       else b.title = a.title;
-      b.onclick = a.run;
+      b.onclick = (e) => ide.ui.working(b, a.run(e));
       if (a.id) b.dataset.action = a.id;
     // domId: the button's element id, for code that hangs a menu from it (the Database window's New Data Source).
     if (a.domId) b.id = a.domId;

@@ -104,12 +104,11 @@
     const con = s.console({ parent: right });
 
     split.onmousedown = (down) => {
+      if (down.button !== 0) return;
       const start = down.clientX;
       const w = left.offsetWidth;
       const move = (e) => (left.style.width = `${Math.max(180, w + e.clientX - start)}px`);
-      const up = () => { removeEventListener('mousemove', move); removeEventListener('mouseup', up); };
-      addEventListener('mousemove', move);
-      addEventListener('mouseup', up);
+      ide.ui.dragResize(down, move);
     };
 
     const log = []; // full console output, restored when the root is selected

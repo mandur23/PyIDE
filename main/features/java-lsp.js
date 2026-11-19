@@ -1,5 +1,6 @@
-// Eclipse JDT Language Server for Java (main/lsp-server.js runs it, under the java-lsp:* channels). It runs on a JDK 21
-// or later, imports Maven and Gradle projects itself (downloading their dependencies), and treats a folder without a
+// Eclipse JDT Language Server for Java (main/lsp-server.js runs it, under the java-lsp:* channels). It runs on the Java
+// its release asks for or a later one (the toolchain's runsOn: 25 for 1.63, whatever Java the project is built with),
+// imports Maven and Gradle projects itself (downloading their dependencies), and treats a folder without a
 // build file as a plain project with `src` (or the marked source roots) as its sources. Its workspace (the imported
 // projects, indexes) lives per project under <userData>/java-lsp, never in the project.
 const crypto = require('crypto');
@@ -127,7 +128,7 @@ exports.register = (ctx) => {
     return path.join(ctx.app.getPath('userData'), 'java-lsp', `${name}-${crypto.createHash('sha1').update(key).digest('hex').slice(0, 12)}`);
   };
 
-  // java-lsp:start(root, {java, jdk}): java is the home of the JDK (21 or later) that runs the server; jdk {home,
+  // java-lsp:start(root, {java, jdk}): java is the home of the JDK (server.runsOn or later) that runs the server; jdk {home,
   // version} the project's JDK, which the project compiles against (it may be older), or null.
   // Only a JDK found on this computer (toolchains:list) runs, never a path the renderer made up.
   const { current } = serve(ctx, 'java-lsp', async (root, opts = {}) => {
@@ -137,8 +138,8 @@ exports.register = (ctx) => {
     const jdks = await toolchains.detect('jdk');
     const found = (home) => (typeof home === 'string' ? jdks.find((t) => sameDir(t.home, home)) : null);
     const runner = found(opts.java);
-    if (!runner || parseInt(String(runner.version).replace(/^1\./, ''), 10) < 21 || !isFile(path.join(runner.home, 'bin', 'java.exe'))) {
-      throw expected('No JDK 21 or later', 'nojdk');
+    if (!runner || parseInt(String(runner.version).replace(/^1\./, ''), 10) < server.runsOn || !isFile(path.join(runner.home, 'bin', 'java.exe'))) {
+      throw expected(`No JDK ${server.runsOn} or later`, 'nojdk');
     }
     const project = found(opts.jdk?.home);
     const dataDir = dataDirOf(root);

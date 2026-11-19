@@ -4,7 +4,7 @@
 //   segment's folder, Reveal, and Settings › Editor › General › Compact middle packages turning it off and on;
 // - New › Java Class (class, interface, a dotted record name) and a plain new file named X.java getting the package
 //   of their folder below the source root and a type named after the file, no package line in the default package;
-// - with the Eclipse JDT Language Server (its cached archive, installed from a local server) and a JDK 21 or later:
+// - with the Eclipse JDT Language Server (its cached archive, installed from a local server) and a JDK 25 or later:
 //   accepting @RestController, @GetMapping and a class name adds each import once, in JDT's order, and none for
 //   java.lang. Spring's annotations come from a stub jar built here with javac. Without the cached archive or a JDK,
 //   that part says SKIP; nothing is downloaded.
@@ -183,8 +183,8 @@ try {
   const jdks = await js(`ide.toolchains.list('jdk').then((l) => l.map((x) => ({ home: x.home, version: x.version })))`);
   const major = (v) => parseInt(String(v).replace(/^1\./, ''), 10) || 0;
   const javac = jdks.map((j) => path.join(j.home, 'bin', 'javac.exe')).find(existsSync);
-  if (!haveArchive || !javac || !jdks.some((j) => major(j.version) >= 21)) {
-    console.log(`SKIP java-assist auto-import: ${!haveArchive ? `${ARCHIVE_NAME} is not in verify/out/downloads-cache` : 'no JDK 21 or later with javac on this computer'}`);
+  if (!haveArchive || !javac || !jdks.some((j) => major(j.version) >= 25)) {
+    console.log(`SKIP java-assist auto-import: ${!haveArchive ? `${ARCHIVE_NAME} is not in verify/out/downloads-cache` : 'no JDK 25 or later with javac on this computer'}`);
   } else {
     const classes = path.join(work, 'stub-classes');
     mkdirSync(classes, { recursive: true });

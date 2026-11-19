@@ -2,7 +2,8 @@
 // errors and warnings as you type, hover documentation, Go to Declaration (JDK and library classes open read-only),
 // Find Usages, Rename, Optimize Imports, Reformat Code and quick fixes, through the lsp plugin's client. It starts when
 // a trusted project has a Maven or Gradle build file, a JDK chosen in New Project, or a Java file open, and runs on the
-// project's JDK when that is 21 or later, else on another JDK 21+ (the built-in Temurin).
+// newest JDK that the server's release can run on (25 for JDT LS 1.63; the built-in Temurin when there is no other),
+// whatever JDK the project is built with: that one is only what the server compiles against and imports Gradle with.
 (() => {
   if (!ide.lsp?.createClient || !ide.toolchains) return;
   const { basename, joinPath } = ide.util;
@@ -12,7 +13,7 @@
   const major = (version) => parseInt(String(version || '').replace(/^1\./, ''), 10) || 0;
 
   const item = ide.toolchains.installable('jdtls', 'Eclipse JDT Language Server',
-    tr('Completion, error checking, navigation and refactoring for Java (EPL 2.0). Runs on a JDK 21 or later.'),
+    tr('Completion, error checking, navigation and refactoring for Java (EPL 2.0). Runs on a JDK 25 or later.'),
     'https://github.com/eclipse-jdtls/eclipse.jdt.ls');
   // A running server holds its jars open, and Windows would leave the folder half removed.
   const removeFiles = item.uninstall;
@@ -28,12 +29,18 @@
     return found.some(Boolean);
   }
 
-  // The project's JDK when it can run the server, else the newest JDK 21+ found.
+  // The Java the installed server runs on (main: the toolchain's runsOn). It was "21 or later" here once, true of an
+  // earlier server: with a project on JDK 21 the server was started on it and ended with exit code 13 at once.
+  let serverJava = 25;
+  const readServerJava = () => ide.api.invoke('installer:toolchains')
+    .then((l) => { serverJava = l.find((s) => s.name === 'jdtls')?.runsOn || serverJava; }).catch(() => {});
+  // The project's JDK when it can run the server, else the newest JDK found that can.
   async function runtimes() {
+    await readServerJava();
     const project = await ide.toolchains.resolve('jdk');
     const all = await ide.toolchains.list('jdk');
-    const runner = major(project?.version) >= 21 ? project
-      : all.filter((t) => major(t.version) >= 21).sort((a, b) => major(b.version) - major(a.version) || (b.builtin ? 1 : 0) - (a.builtin ? 1 : 0))[0];
+    const runner = major(project?.version) >= serverJava ? project
+      : all.filter((t) => major(t.version) >= serverJava).sort((a, b) => major(b.version) - major(a.version) || (b.builtin ? 1 : 0) - (a.builtin ? 1 : 0))[0];
     return { project, runner };
   }
 
@@ -47,7 +54,7 @@
       title: tr('Java code insight'), kind: 'info', group: 'Java',
       text: missing
         ? tr('Completion, error checking and navigation for Java need the Eclipse JDT Language Server (about 50 MB).')
-        : tr('The Java language server needs a JDK 21 or later to run.'),
+        : tr('The Java language server needs a JDK {version} or later to run.', { version: serverJava }),
       actions: [{ label: missing ? tr('Download') : tr('Download JDK'), run: (note) => { note.expire(); install(what); } }],
     });
   }
@@ -135,7 +142,7 @@
   const REFUSED = {
     untrusted: () => ({ state: 'safe', message: tr('Safe Mode: Java code insight starts once the project is trusted') }),
     missing: () => { offer('missing'); return { state: 'missing', message: tr('Eclipse JDT Language Server is not installed. Click to download it.') }; },
-    nojdk: () => { offer('nojdk'); return { state: 'nojdk', message: tr('No JDK 21 or later to run the Java language server. Click to download one.') }; },
+    nojdk: () => { offer('nojdk'); return { state: 'nojdk', message: tr('No JDK {version} or later to run the Java language server. Click to download one.', { version: serverJava }) }; },
   };
   const java = ide.lsp.createClient({
     id: 'java', language: 'java', match: /\.java$/i, channel: 'java-lsp', source: 'java', serverName: 'JDT LS',
@@ -143,7 +150,7 @@
     text: {
       status: {
         off: () => tr('Java: off'), starting: () => tr('Java: starting'), ready: () => tr('Java: ready'), error: () => tr('Java: error'),
-        missing: () => tr('Java: not installed'), nojdk: () => tr('Java: no JDK 21+'), safe: () => tr('Java: Safe Mode'),
+        missing: () => tr('Java: not installed'), nojdk: () => tr('Java: no JDK {version}+', { version: serverJava }), safe: () => tr('Java: Safe Mode'),
       },
       server: () => tr('Java language server'),
       starting: (name) => tr('Starting the Java language server for {name}', { name }),

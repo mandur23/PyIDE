@@ -59,11 +59,16 @@ const TOOLCHAINS = {
     top: 'w64devkit',
     probe: 'bin/gcc.exe',
   },
-  // Code insight for Java (main/features/java-lsp.js runs it on a JDK 21 or later). The archive has no top folder.
+  // Code insight for Java (main/features/java-lsp.js runs it). The archive has no top folder.
+  // runsOn: the Java this release's bundles ask for (Require-Capability osgi.ee JavaSE, version=25 in
+  // org.eclipse.core.filesystem and others). On an older Java, 21 included, no bundle resolves and the server ends with
+  // exit code 13 a second after it starts. Read it again from the bundles' manifests when the version above changes;
+  // the built-in JDK (jdk above) has to be at least this.
   jdtls: {
     kind: 'jdtls',
     title: 'Eclipse JDT Language Server',
     version: '1.63.0',
+    runsOn: 25,
     url: 'https://download.eclipse.org/jdtls/milestones/1.63.0/jdt-language-server-1.63.0-202610191322.tar.gz',
     size: 51143565,
     // Published by Eclipse next to the archive (<url>.sha256).
@@ -239,6 +244,7 @@ function createToolchains({ root = installRoot(), run } = {}) {
   function status(name) {
     const s = spec(name);
     return { name, kind: s.kind, title: s.title, version: s.version, size: s.size ?? null, dir: dirOf(name), home: homeOf(name), installed: installed(name),
+      ...(s.runsOn ? { runsOn: s.runsOn } : {}),
       ...(s.via ? { needs: s.via.tool, toolFound: !!findTool(s.via.tool) } : {}) };
   }
 
