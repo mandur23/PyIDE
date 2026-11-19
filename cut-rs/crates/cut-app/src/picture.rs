@@ -153,6 +153,15 @@ pub struct Monitors {
     pub quality: f64,
     /// The Program monitor's trim view: two engines of their own, made the first time it shows.
     pub trim_screens: Option<[Screen; 2]>,
+    /// What the source monitor's decode-ahead was last set for, and where.
+    source_ahead: Option<(SourceWant, Ticks)>,
+}
+
+/// What the source monitor plays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceWant {
+    Media(Id),
+    Sequence(Id),
 }
 
 /// The program monitor's prefetch reaches this far ahead of the playhead (player.js: two seconds at the rate).
@@ -166,7 +175,7 @@ impl Monitors {
         source.engine.warm_text();
         // the source monitor plays a file without effects: its few pipelines are made at its first picture
         let _ = program.engine.warm_pipelines();
-        Self { rs, program, source, proxy: false, quality: 1.0, trim_screens: None }
+        Self { rs, program, source, proxy: false, quality: 1.0, trim_screens: None, source_ahead: None }
     }
 
     /// The trim view's two pictures (`showTrim`): the sequence at `times` (left, right) a quarter of its size, at
@@ -271,6 +280,20 @@ impl Monitors {
     ) -> Option<Picture> {
         let opts = RenderOptions { proxy: self.proxy, quality: self.quality, ..RenderOptions::default() };
         self.source.show(&self.rs, project, revision, Want::Sequence { seq, t }, size, &opts)
+    }
+
+    /// Starts decoding what the source monitor will show from `t` on while it plays a media file or a sequence, in
+    /// the direction of `rate`. Asked every frame, it is passed on twice a second of the clip's time, as the program's.
+    pub fn prefetch_source(&mut self, project: &Project, item: SourceWant, t: Ticks, rate: f64) {
+        if self.source_ahead.is_some_and(|(i, at)| i == item && (t - at).abs() <= cut_time::TICKS / 2) {
+            return;
+        }
+        self.source_ahead = Some((item, t));
+        let reach = (PREFETCH as f64 * rate.signum() * rate.abs().max(1.0)) as Ticks;
+        match item {
+            SourceWant::Media(media) => self.source.engine.prefetch_media(project, media, t, t + reach, self.proxy),
+            SourceWant::Sequence(seq) => self.source.engine.prefetch(project, seq, t, t + reach, self.proxy),
+        }
     }
 
     /// Starts decoding what the program monitor will show from `t` on, in the direction of `rate`.

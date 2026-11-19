@@ -51,6 +51,32 @@ impl Page {
         Page::ALL.into_iter().find(|p| format!("{p:?}").eq_ignore_ascii_case(name))
     }
 
+    /// The settings a page holds, by their labels' keys: what the window's search looks in besides the title.
+    fn labels(self) -> &'static [&'static str] {
+        match self {
+            Page::Autosave => &["Keep a copy every:", "Copies to keep:"],
+            Page::Cache => &["Cache limit:", "In use:", "Clear Cache"],
+            Page::Timeline => &["Default transition length:", "Default still image length:"],
+            Page::Playback => &["Playback quality:"],
+            Page::Proxies => &["Proxy size:"],
+            Page::Speech => &["Speech Recognition"],
+            Page::Claude => &["Claude (Text AI)"],
+            Page::AiControl => &["AI Control"],
+            Page::Appearance => &["Appearance"],
+            Page::Language => &["Language"],
+            Page::Keyboard => &["Keyboard Layout Preset", "Keyboard Shortcuts", "Folder"],
+        }
+    }
+
+    /// Whether the page's title or one of its settings holds `query` (lower case), in the screen's language or English.
+    pub fn matches(self, query: &str) -> bool {
+        let q = query.trim().to_lowercase();
+        q.is_empty()
+            || std::iter::once(self.title())
+                .chain(self.labels().iter().copied())
+                .any(|k| k.to_lowercase().contains(&q) || tr(k).to_lowercase().contains(&q))
+    }
+
     /// The English title (the key of its translation).
     pub fn title(self) -> &'static str {
         match self {
@@ -75,6 +101,8 @@ pub struct PageState {
     pub cache: Option<(u64, usize)>,
     measuring: Option<Receiver<(u64, usize)>>,
     pub confirm_clear: bool,
+    /// What is typed in the window's search.
+    pub query: String,
 }
 
 fn cache_of(s: &Shell) -> crate::files::cache::Cache {
@@ -284,13 +312,27 @@ pub fn show(s: &mut Shell, ctx: &egui::Context) {
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
                 ui.set_width(150.0);
+                let mut query = std::mem::take(&mut s.features.prefs.page.query);
+                ui.add(egui::TextEdit::singleline(&mut query).hint_text(tr("Search settings")).desired_width(150.0));
+                ui.add_space(4.0);
                 ui.label(RichText::new(tr("Video Editor")).strong());
                 ui.add_space(4.0);
-                for p in Page::ALL {
-                    if ui.selectable_label(page == p, tr(p.title())).clicked() {
-                        page = p;
+                let found: Vec<Page> = Page::ALL.into_iter().filter(|p| p.matches(&query)).collect();
+                // the page shown is one of those found, while any is
+                if !found.contains(&page)
+                    && let Some(first) = found.first()
+                {
+                    page = *first;
+                }
+                for p in &found {
+                    if ui.selectable_label(page == *p, tr(p.title())).clicked() {
+                        page = *p;
                     }
                 }
+                if found.is_empty() {
+                    ui.label(RichText::new(tr("Nothing found")).color(s.palette.gray[8]));
+                }
+                s.features.prefs.page.query = query;
             });
             ui.add_space(12.0);
             ui.vertical(|ui| {

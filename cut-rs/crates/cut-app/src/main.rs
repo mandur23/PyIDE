@@ -4,7 +4,7 @@
 //!
 //! For looking at the app and measuring it without touching it: `CUT_THEME=light|dark`, `CUT_TIME=<seconds>` (the
 //! playhead), `CUT_SOURCE=<media name>` (selected, in the Source monitor), `CUT_ICONS=1` (the Project panel as
-//! thumbnails), `CUT_PLAY=1` (plays once the window is up), `CUT_OUTPUT_GAIN=0` (silent), and `CUT_REPORT=<file>`,
+//! thumbnails), `CUT_PLAY=1` (plays once the window is up), `CUT_PLAY_SOURCE=1` (plays the Source monitor instead), `CUT_OUTPUT_GAIN=0` (silent), and `CUT_REPORT=<file>`,
 //! which gets a JSON line a second while frames are drawn (none at rest: nothing asks for frames to write it): the
 //! start's milestones (`startup`), frame times (eframe's, the main window's layout, the panel windows' layout and
 //! paint, the longest gap between two frames), renders and the pipelines they had to compile, the clock, dropped
@@ -28,6 +28,8 @@ struct Launch {
     source: Option<String>,
     icons: bool,
     play: bool,
+    /// `CUT_PLAY_SOURCE=1`: plays the Source monitor once its clip (`CUT_SOURCE`) shows.
+    play_source: bool,
     frames: u32,
     report: Option<std::fs::File>,
     /// The adapter and backend the window draws with, for the report.
@@ -70,6 +72,7 @@ impl Launch {
             source: var("CUT_SOURCE"),
             icons: var("CUT_ICONS").is_some(),
             play: var("CUT_PLAY").is_some(),
+            play_source: var("CUT_PLAY_SOURCE").is_some(),
             report: var("CUT_REPORT").and_then(|p| std::fs::File::create(p).ok()),
             ..Self::default()
         }
@@ -104,6 +107,15 @@ impl Launch {
         // a moment for the first pictures and thumbnails before playing
         if self.play && self.frames > 2 && s.monitors.as_ref().is_some_and(|m| m.program.stats.complete) {
             self.play = false;
+            s.run_action("playPause", ctx);
+        }
+        if self.play_source
+            && self.frames > 4
+            && s.app.edit.source.clip.is_some()
+            && s.monitors.as_ref().is_some_and(|m| m.source.stats.complete)
+        {
+            self.play_source = false;
+            s.run_action("window.source", ctx);
             s.run_action("playPause", ctx);
         }
         self.measure(s);
@@ -153,6 +165,11 @@ impl Launch {
                 "decoders": m.program.engine.decoders(),
                 "sources": m.program.engine.source_stats(),
                 "pipelinesCompiled": m.program.engine.pipelines_compiled(),
+            })),
+            "source": m.map(|m| serde_json::json!({
+                "playing": s.app.edit.source.playing(),
+                "renders": m.source.stats.renders, "incomplete": m.source.stats.incomplete,
+                "sources": m.source.engine.source_stats(),
             })),
             "shown": s.play.shown,
             "dropped": s.play.dropped,

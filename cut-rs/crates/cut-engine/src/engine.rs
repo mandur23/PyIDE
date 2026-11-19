@@ -573,6 +573,16 @@ impl Engine {
         }
     }
 
+    /// Starts decoding what one media file shows between two source times (the source monitor, ahead of its playhead):
+    /// `render_media`'s sequence of the file, so the frames go to the source its renders read.
+    pub fn prefetch_media(&mut self, project: &Project, media: Id, from: Ticks, to: Ticks, proxy: bool) {
+        let mut p = project.clone();
+        let seq = media_sequence(&p, media);
+        let id = seq.id;
+        p.sequences.push(seq);
+        self.prefetch(&p, id, from.max(0), to.max(0), proxy);
+    }
+
     /// Starts decoding what the sequence shows between two times (the player calls it ahead of the playhead).
     pub fn prefetch(&mut self, project: &Project, seq: Id, from: Ticks, to: Ticks, proxy: bool) {
         let Some(s) = project.sequence(seq) else { return };

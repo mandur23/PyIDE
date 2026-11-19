@@ -11,7 +11,8 @@ const CORE_KO: &str = include_str!("../../../../renderer/locales/ko.json");
 const CUT_KO: &str = include_str!("../../../../renderer/features/cut/locales/ko.json");
 
 /// Texts only the native app shows (the JavaScript editor has no such sentence to reuse).
-const NATIVE_KO: [(&str, &str); 19] = [
+const NATIVE_KO: [(&str, &str); 20] = [
+    ("Search settings", "설정 검색"),
     ("Changes apply at once.", "바꾸면 바로 적용됩니다."),
     ("Drag clips from the Project panel here.", "프로젝트 패널의 클립을 여기로 끌어다 놓으세요."),
     ("Find Action", "동작 찾기"),

@@ -95,6 +95,14 @@ pub fn frame(s: &mut crate::shell::Shell, ctx: &eframe::egui::Context) {
     let revision = s.app.history.revision();
     let p = s.app.history.project();
     if s.app.edit.source.tick(p, revision) {
+        // the frames ahead of the source monitor's playhead are decoded before it reaches them
+        if let (Some(m), Some(c)) = (&mut s.monitors, s.app.edit.source.clip) {
+            let item = match c.item {
+                source::SourceItem::Media(id) => crate::picture::SourceWant::Media(id),
+                source::SourceItem::Sequence(id) => crate::picture::SourceWant::Sequence(id),
+            };
+            m.prefetch_source(p, item, c.t, s.app.edit.source.rate());
+        }
         ctx.request_repaint();
     }
     source_frame::poll(s, ctx);
