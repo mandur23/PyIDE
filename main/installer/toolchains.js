@@ -20,6 +20,32 @@ const TOOLCHAINS = {
     top: 'jdk-25.0.4.1+1',
     probe: 'bin/javac.exe',
   },
+  // The earlier long-term Java versions, for builds that ask for them: a Gradle before 9.1 does not run on Java 25, and
+  // a build's toolchain names one Java. Installed like the JDK above, beside it.
+  jdk21: {
+    kind: 'jdk',
+    title: 'Eclipse Temurin JDK 21',
+    version: '21.0.13',
+    url: 'https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9/OpenJDK21U-jdk_x64_windows_hotspot_21.0.13_9.zip',
+    size: 205421281,
+    // Published by Adoptium (api.adoptium.net).
+    sha256: 'a4dbaa05fca4bd89d84584e58c459bd732efebb1722af80ab13c6516832004f9',
+    folder: 'temurin',
+    top: 'jdk-21.0.13+9',
+    probe: 'bin/javac.exe',
+  },
+  jdk17: {
+    kind: 'jdk',
+    title: 'Eclipse Temurin JDK 17',
+    version: '17.0.21',
+    url: 'https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.21%2B9/OpenJDK17U-jdk_x64_windows_hotspot_17.0.21_9.zip',
+    size: 191117380,
+    // Published by Adoptium (api.adoptium.net).
+    sha256: '98518ecf554465057ee5509462631deeee374bc368c12a411d225cd29381f84b',
+    folder: 'temurin',
+    top: 'jdk-17.0.21+9',
+    probe: 'bin/javac.exe',
+  },
   cpp: {
     kind: 'cpp',
     title: 'w64devkit',
@@ -301,14 +327,17 @@ function createToolchains({ root = installRoot(), run } = {}) {
     const seen = new Set();
     const out = [];
     const add = (t) => { if (t && !seen.has(t.id)) { seen.add(t.id); out.push(t); } };
-    const builtin = Object.keys(TOOLCHAINS).find((n) => TOOLCHAINS[n].kind === kind);
+    // The first of a kind is the one a wizard offers to download; a kind may have more (the JDKs of other versions).
+    const builtins = Object.keys(TOOLCHAINS).filter((n) => TOOLCHAINS[n].kind === kind);
+    const builtin = builtins[0];
     const system = overrides().system !== false;
     if (kind === 'jdk') {
-      const homes = [...(installed(builtin) ? [homeOf(builtin)] : []), ...(system ? systemJdkHomes(env) : [])];
-      for (const h of homes) {
+      const own = builtins.filter((n) => installed(n)).map((n) => homeOf(n));
+      const ownIds = new Set(own.map((h) => real(h).toLowerCase()));
+      for (const h of [...own, ...(system ? systemJdkHomes(env) : [])]) {
         if (!isFile(path.join(h, 'bin', 'javac.exe'))) continue;
         const home = real(h);
-        add({ kind, id: home.toLowerCase(), home, bin: path.join(home, 'bin'), ...jdkInfo(home), builtin: !!installed(builtin) && home.toLowerCase() === real(homeOf(builtin)).toLowerCase() });
+        add({ kind, id: home.toLowerCase(), home, bin: path.join(home, 'bin'), ...jdkInfo(home), builtin: ownIds.has(home.toLowerCase()) });
       }
     } else if (kind === 'cpp') {
       if (installed(builtin)) add(await cppToolchain(real(path.join(homeOf(builtin), 'bin')), true));

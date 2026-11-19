@@ -72,5 +72,17 @@
   "Compiled Java class": "컴파일된 Java 클래스",
   "Open {name}": "{name} 열기",
   "A JDK shows what a compiled class declares. Install one in the Install Manager, or open the source file.": "JDK가 있으면 컴파일된 클래스의 선언을 보여 줍니다. 설치 관리자에서 JDK를 설치하거나 소스 파일을 여세요.",
-  "javap could not read this class: {error}": "javap가 이 클래스를 읽지 못했습니다: {error}"
+  "javap could not read this class: {error}": "javap가 이 클래스를 읽지 못했습니다: {error}",
+  "Java 21 (long-term support), for builds that ask for it or whose Gradle does not run on a newer Java.": "Java 21(장기 지원). 이 버전을 요구하는 빌드나, Gradle이 더 새 Java에서 돌지 않는 프로젝트에 씁니다.",
+  "Java 17 (long-term support), for builds that ask for it or whose Gradle does not run on a newer Java.": "Java 17(장기 지원). 이 버전을 요구하는 빌드나, Gradle이 더 새 Java에서 돌지 않는 프로젝트에 씁니다.",
+  "Java {version}": "Java {version}",
+  "This project needs {java}": "이 프로젝트는 {java}로 빌드해야 합니다",
+  "Its Gradle {gradle} runs on Java {max} at most, and the JDK in use is Java {using}: the project cannot be imported or built with it, and the editor shows its imports as errors.": "이 프로젝트의 Gradle {gradle}은 Java {max}까지만 지원하는데, 지금 쓰는 JDK는 Java {using}입니다. 이 JDK로는 프로젝트를 가져오거나 빌드할 수 없고, 편집기에 import가 오류로 나옵니다.",
+  "Its build asks for Java {wants}, and no JDK {wants} was found on this computer.": "빌드가 Java {wants}로 컴파일하도록 되어 있는데, 이 컴퓨터에는 JDK {wants}가 없습니다.",
+  "JDK {version} is now this project's JDK": "이제 이 프로젝트는 JDK {version}로 빌드합니다",
+  "The project is imported again with it; the errors go once that is done.": "이 JDK로 프로젝트를 다시 가져옵니다. 끝나면 오류가 사라집니다.",
+  "The JDK was installed but not found.": "JDK를 설치했지만 찾지 못했습니다.",
+  "JDK {version} was not installed": "JDK {version} 설치에 실패했습니다",
+  "Use JDK {version}": "JDK {version} 사용",
+  "Install JDK {version}": "JDK {version} 설치"
 }

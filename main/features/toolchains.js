@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const { createToolchains } = require('../installer/toolchains');
 const { isTrusted } = require('../trust');
+const javaCompat = require('../java-compat');
 
 const TOOL = /^[\w+.-]+$/;
 // What New Project runs in the background so the first run starts quickly, like IntelliJ's import. Maven resolves the
@@ -60,6 +61,13 @@ exports.register = ({ ipcMain, startProcess, procs }) => {
   let argfiles = 0;
 
   ipcMain.handle('toolchains:list', (_e, kind) => toolchains.detect(kind));
+
+  // Whether the JDK a Gradle project would use can import and build it (main/java-compat.js); usingId: the JDK the
+  // renderer resolved for the project. Reads the project's build files only.
+  ipcMain.handle('toolchains:javaCheck', async (_e, root, usingId) => {
+    if (typeof root !== 'string' || !path.isAbsolute(root)) return null;
+    return javaCompat.check(root, await toolchains.detect('jdk'), typeof usingId === 'string' ? usingId : '');
+  });
 
   // A compiled class as the JDK's javap prints it (its members with their signatures and constants): what the IDE shows
   // for a .class file. javap reads the file and runs nothing of it; the JDK is one of the detected ones, by its id.

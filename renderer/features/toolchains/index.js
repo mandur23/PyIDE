@@ -39,6 +39,68 @@
     return all.find((t) => t.id === want) || all.find((t) => t.builtin) || all[0] || null;
   }
 
+  // ---------- a Gradle build this computer's Java cannot run ----------
+  // Gradle stops at once on a JDK newer than it knows, and the editor then shows every import as unresolved. The
+  // project is told which Java fits, with one press to use a JDK found here or to install it and use it.
+  const javaChecked = new Map(); // project root -> what was said last (so it is said once)
+  let javaNote = null;
+  const javaCheck = async (root = ide.root) => (root ? ide.api.invoke('toolchains:javaCheck', root, (await resolve('jdk', ''))?.id || '').catch(() => null) : null);
+  function javaProblem(c) {
+    if (!c || c.ok) return null;
+    const need = tr('Java {version}', { version: c.recommend });
+    if (c.reason === 'gradle') {
+      return { title: tr('This project needs {java}', { java: need }),
+        text: tr('Its Gradle {gradle} runs on Java {max} at most, and the JDK in use is Java {using}: the project cannot be imported or built with it, and the editor shows its imports as errors.', { gradle: c.gradle, max: c.maxJava, using: c.using.major }) };
+    }
+    if (c.reason === 'toolchain') {
+      return { title: tr('This project needs {java}', { java: need }),
+        text: tr('Its build asks for Java {wants}, and no JDK {wants} was found on this computer.', { wants: c.wants }) };
+    }
+    return { title: tr('This project needs {java}', { java: need }), text: tr('No JDK was found on this computer.') };
+  }
+  async function useJdk(root, id, version) {
+    ide.settings.set(defaultKey('jdk', root), id);
+    ide.notifications?.notify({ title: tr('JDK {version} is now this project\'s JDK', { version }), text: tr('The project is imported again with it; the errors go once that is done.'), kind: 'ok', group: 'Toolchains' });
+  }
+  async function installJdk(root, name, major) {
+    try {
+      ide.installer?.open?.('toolchains');
+      await ide.installer.run(`toolchain:${name}`);
+      const st = ide.installer.state(`toolchain:${name}`);
+      if (st.phase === 'failed') throw new Error(st.error);
+      await refresh();
+      const jdk = (await list('jdk')).find((t) => t.builtin && String(t.version || '').split('.')[0] === String(major));
+      if (!jdk) throw new Error(tr('The JDK was installed but not found.'));
+      await useJdk(root, jdk.id, jdk.version);
+    } catch (err) {
+      ide.notifications?.notify({ title: tr('JDK {version} was not installed', { version: major }), text: String(err.message || err), kind: 'error', group: 'Toolchains', raw: true });
+    }
+  }
+  async function warnJava() {
+    const root = ide.root;
+    if (!root) return;
+    const c = await javaCheck(root);
+    if (root !== ide.root) return;
+    const problem = javaProblem(c);
+    const said = problem ? `${c.reason}|${c.recommend}|${c.using?.id || ''}` : '';
+    if (javaChecked.get(root) === said) return;
+    javaChecked.set(root, said);
+    javaNote?.expire();
+    javaNote = null;
+    ide.emit('javaCheckChanged', c);
+    if (!problem) return;
+    const actions = [];
+    if (c.candidate && c.candidate.id !== c.using?.id) actions.push({ label: tr('Use JDK {version}', { version: c.candidate.version }), run: () => useJdk(root, c.candidate.id, c.candidate.version) });
+    else if (c.installable && ide.installer?.run) {
+      actions.push({ label: tr('Install JDK {version}', { version: c.recommend }), run: () => installJdk(root, c.installable, c.recommend) });
+    }
+    javaNote = ide.notifications?.notify({ ...problem, kind: 'warn', group: 'Toolchains', timeout: 0, actions });
+  }
+  ide.on('projectOpened', () => setTimeout(warnJava, 1200));
+  ide.on('toolchainsChanged', () => warnJava());
+  ide.on('settingsChanged', (key) => { if (ide.root && key === defaultKey('jdk')) warnJava(); });
+  if (ide.root) setTimeout(warnJava, 1200);
+
   // ---------- Install Manager ----------
   let builtinList = null;
   const builtins = () => (builtinList ||= ide.api.invoke('installer:toolchains').then((l) => new Map(l.map((s) => [s.name, s]))));
@@ -60,6 +122,8 @@
   }
   (ide.installables ||= []).push(
     toolchainItem('jdk', 'Eclipse Temurin JDK', tr('OpenJDK build from Eclipse Adoptium (GPLv2 with the Classpath Exception), for Java projects.'), 'https://adoptium.net/'),
+    toolchainItem('jdk21', 'Eclipse Temurin JDK 21', tr('Java 21 (long-term support), for builds that ask for it or whose Gradle does not run on a newer Java.'), 'https://adoptium.net/'),
+    toolchainItem('jdk17', 'Eclipse Temurin JDK 17', tr('Java 17 (long-term support), for builds that ask for it or whose Gradle does not run on a newer Java.'), 'https://adoptium.net/'),
     toolchainItem('cpp', 'w64devkit', tr('GCC, G++, GDB and make for Windows in one portable folder, for C and C++ projects.'), 'https://github.com/skeeto/w64devkit'),
   );
   ide.emit('installablesChanged');
@@ -838,7 +902,7 @@ int main() {
 
   // installable(name, title, description, homepage): an Install Manager item for another built-in download of
   // main/installer/toolchains.js (java-lsp's Eclipse JDT Language Server).
-  ide.toolchains = { list, refresh, resolve, label, install: installBuiltin, installable: toolchainItem, parseJavac, parseGcc,
+  ide.toolchains = { list, refresh, resolve, label, javaCheck, javaProblem, install: installBuiltin, installable: toolchainItem, parseJavac, parseGcc,
     sync: syncDependencies, afterSync,
     // For plugins that add Java project types and run behaviour (spring-boot): the wizard's controls, the project's
     // default JDK key, saving a run configuration, the Maven / Gradle type's defaults, and the hooks above.
