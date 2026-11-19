@@ -33,23 +33,24 @@ try {
   const box = await js(`(() => { const r = document.querySelector('#sideSplitter').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, w: document.querySelector('#sidePanel').offsetWidth }; })()`);
   await mouse('mouseMoved', box.x, box.y);
   await mouse('mousePressed', box.x, box.y, 1);
-  for (let i = 1; i <= 6; i++) await mouse('mouseMoved', box.x + i * 20, box.y - i * 15, 1);
+  // To the left, 30 px: a 1024 px window leaves the panel next to no room to grow.
+  for (let i = 1; i <= 6; i++) await mouse('mouseMoved', box.x - i * 5, box.y - i * 15, 1);
   const during = await js(`(() => ({ cover: !!document.querySelector('.drag-cover'), resizing: document.body.classList.contains('resizing'), selected: String(getSelection()),
     dragging: document.querySelector('#sideSplitter').classList.contains('dragging'), w: document.querySelector('#sidePanel').offsetWidth,
-    over: document.elementFromPoint(${box.x} + 120, ${box.y} - 90)?.className }))()`);
+    over: document.elementFromPoint(${box.x} - 30, ${box.y} - 90)?.className }))()`);
   check(during.cover && during.resizing && during.dragging && during.over === 'drag-cover', `while a splitter is dragged a cover takes the pointer over the whole window (${S(during)})`);
   check(during.selected === '', `the drag selects no text on its way (${S(during.selected)})`);
-  check(Math.abs(during.w - box.w - 120) <= 2, `the panel follows the pointer: ${box.w} to ${during.w} px for 120 px`);
-  await mouse('mouseReleased', box.x + 120, box.y - 90);
+  check(Math.abs(box.w - during.w - 30) <= 2, `the panel follows the pointer: ${box.w} to ${during.w} px for 30 px`);
+  await mouse('mouseReleased', box.x - 30, box.y - 90);
   const after = await js(`(() => ({ cover: !!document.querySelector('.drag-cover'), resizing: document.body.classList.contains('resizing'), dragging: document.querySelector('#sideSplitter').classList.contains('dragging'), w: document.querySelector('#sidePanel').offsetWidth }))()`);
   check(!after.cover && !after.resizing && !after.dragging && after.w === during.w, `letting go ends it and keeps the size (${S(after)})`);
   // A drag that ends outside the window (the window loses the pointer) ends too.
   const again = await js(`(() => { const r = document.querySelector('#sideSplitter').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
   await mouse('mousePressed', again.x, again.y, 1);
-  await mouse('mouseMoved', again.x - 40, again.y, 1);
+  await mouse('mouseMoved', again.x - 20, again.y, 1);
   await js(`(window.dispatchEvent(new Event('blur')), true)`);
   check(await js(`!document.querySelector('.drag-cover') && !document.body.classList.contains('resizing')`), 'a drag ends when the window loses the pointer');
-  await mouse('mouseReleased', again.x - 40, again.y);
+  await mouse('mouseReleased', again.x - 20, again.y);
 
   // ---------- a Refresh button shows that it is working ----------
   // A tool window's header action: working for as long as its action takes.

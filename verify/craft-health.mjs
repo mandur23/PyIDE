@@ -175,8 +175,14 @@ try {
 
   // ---------- the settings tab's section ----------
   await toCards();
-  await pressAt(inCard('laggy', '.mc-settings'));
-  await until(`!!document.querySelector('.custom-tab.mcset:not(.hidden) .mcset-health')`, 'the section in the settings tab', 10000);
+  // The cards are drawn again when a server's state is read, and a press that falls on a card being replaced is lost
+  // (one run in six here, and on CI): pressed again when the tab has not come.
+  const SETTINGS_TAB = `!!document.querySelector('.custom-tab.mcset:not(.hidden) .mcset-health')`;
+  for (let i = 0; i < 3 && !(await js(SETTINGS_TAB)); i++) {
+    await pressAt(inCard('laggy', '.mc-settings'));
+    await until(SETTINGS_TAB, 'the section in the settings tab', 4000).catch(() => {});
+  }
+  await until(SETTINGS_TAB, 'the section in the settings tab', 10000);
   await sleep(500);
   const section = await js(`(() => { const tab = document.querySelector('.custom-tab.mcset:not(.hidden)'); const box = tab.querySelector('.mcset-health');
     return { page: [...tab.querySelectorAll('.mcset-page')].map((p) => p.textContent), switches: Object.fromEntries([...box.querySelectorAll('input[data-health]')].map((c) => [c.dataset.health, c.checked])),
