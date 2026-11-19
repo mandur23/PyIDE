@@ -95,6 +95,10 @@ impl Page {
     }
 }
 
+/// The page's part of the Settings window: what is left of its 640 points beside the list, and as tall as the list.
+const PAGE_W: f32 = 640.0 - 150.0 - 12.0 - 8.0;
+const PAGE_H: f32 = 400.0;
+
 /// The cache's size as last measured, and the question before Clear Cache.
 #[derive(Default)]
 pub struct PageState {
@@ -265,7 +269,11 @@ fn body(s: &mut Shell, ui: &mut egui::Ui, ctx: &egui::Context, page: Page) {
                     }
                 });
                 row(ui, "Folder", |ui| {
-                    ui.label(RichText::new(s.doc.home.home.to_string_lossy()).monospace().size(11.0));
+                    // a path is as long as it is: cut to what the page has left, whole in its tooltip
+                    let path = s.doc.home.home.to_string_lossy().into_owned();
+                    ui.set_max_width(PAGE_W - 190.0);
+                    ui.add(egui::Label::new(RichText::new(&path).monospace().size(11.0)).truncate())
+                        .on_hover_text(path);
                 });
             }
         },
@@ -335,9 +343,22 @@ pub fn show(s: &mut Shell, ctx: &egui::Context) {
                 s.features.prefs.page.query = query;
             });
             ui.add_space(12.0);
+            // one size for every page: a page longer than the window scrolls in it, and a long line (the folder's
+            // path) wraps in it, so neither makes the window taller or wider than the others
             ui.vertical(|ui| {
-                ui.set_min_height(300.0);
-                body(s, ui, ctx, page);
+                ui.set_width(PAGE_W);
+                // the height is the column's own, from the window's first frame: the scroll area shrinks to its
+                // contents while the window is being measured, and a window measured short is centred in one place
+                // and drawn full size in another a frame later (a press in that frame lands a row off)
+                ui.set_min_height(PAGE_H);
+                egui::ScrollArea::vertical()
+                    .id_salt("cut-prefs-page")
+                    .max_height(PAGE_H)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.set_max_width(PAGE_W - 14.0);
+                        body(s, ui, ctx, page);
+                    });
             });
         });
         ui.separator();

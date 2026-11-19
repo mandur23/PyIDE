@@ -241,7 +241,7 @@ pub fn settings_section(s: &mut Shell, ui: &mut egui::Ui) {
         Some(false) => "Claude Code is not installed: install it from claude.com/claude-code and sign in.",
     };
     ui.vertical(|ui| {
-        ui.set_max_width(560.0);
+        ui.set_max_width(360.0);
         note(ui, s, &tr(state));
         note(ui, s, &tr("Caption polish and translation, YouTube titles and chapters, highlights to shorts and edit commands send the transcript or caption text and clip and marker names to Claude through Claude Code. No video, sound or file paths are sent."));
     });

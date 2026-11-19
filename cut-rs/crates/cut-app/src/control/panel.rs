@@ -240,7 +240,7 @@ pub fn rows(s: &mut Shell, ui: &mut egui::Ui) {
     ui.end_row();
     ui.label("");
     ui.vertical(|ui| {
-        ui.set_max_width(560.0);
+        ui.set_max_width(360.0);
         ui.label(RichText::new(tr("An AI app on this PC (Claude Code, Claude Desktop or another MCP client) can then read and edit the open project with the same tools as the AI assistant. It needs the token below; a connection without it is refused. Its edits show live and can be undone.")).weak());
         if !on {
             return;

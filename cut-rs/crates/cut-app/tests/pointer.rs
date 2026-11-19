@@ -509,3 +509,33 @@ fn a_clip_dragged_to_the_edge_of_the_timeline_scrolls_it() {
     drop(h);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn the_settings_window_is_one_size_on_every_page_with_close_under_its_contents() {
+    let dir = scratch("settings-size");
+    let mut h = open(&dir, |_| {});
+    let mut seen: Vec<(String, Rect)> = Vec::new();
+    for page in ["autosave", "proxies", "speech", "claude", "aicontrol", "keyboard"] {
+        let ctx = h.ctx.clone();
+        h.state_mut().run_action(&format!("settings.{page}"), &ctx);
+        for _ in 0..6 {
+            h.step();
+        }
+        let close = h.get_by_role_and_label(Role::Button, "Close").rect();
+        seen.push((page.to_owned(), close));
+    }
+    let first = seen[0].1;
+    for (page, close) in &seen {
+        assert!(
+            (close.min - first.min).length() < 1.0 && (close.max - first.max).length() < 1.0,
+            "Close is in the same place on {page} as on {} ({close:?}, {first:?})",
+            seen[0].0
+        );
+    }
+    // under the list and the page, not in the middle of an empty stretch below them
+    // (the list's last row is the lowest thing named Keyboard Shortcuts: the page's heading and row are above it)
+    let last = h.get_all_by_label("Keyboard Shortcuts").map(|n| n.rect().bottom()).fold(0.0_f32, f32::max);
+    assert!(first.top() - last < 160.0, "Close follows the window's contents ({first:?} under {last})");
+    drop(h);
+    let _ = std::fs::remove_dir_all(&dir);
+}

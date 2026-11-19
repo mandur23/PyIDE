@@ -19,10 +19,14 @@ pub fn when(ms: i64) -> String {
     format!("{}-{}-{} {}:{}:{} UTC", &s[0..4], &s[4..6], &s[6..8], &s[9..11], &s[11..13], &s[13..15])
 }
 
+/// A dialog's row of buttons, at its right. The row is as tall as its buttons and no taller: a right-to-left layout
+/// left to itself takes all the height its window may have, which set the buttons in the middle of an empty stretch
+/// under the dialog's contents and made the window that much taller (the Settings window on a page with wrapped text).
 pub fn buttons(ui: &mut egui::Ui, list: &[(&str, bool)]) -> Option<usize> {
     let mut out = None;
     ui.add_space(10.0);
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+    let row = Vec2::new(ui.available_width(), 28.0);
+    ui.allocate_ui_with_layout(row, egui::Layout::right_to_left(egui::Align::Center), |ui| {
         for (i, (label, primary)) in list.iter().enumerate().rev() {
             let mut b = Button::new({
                 let t = RichText::new(tr(label)).size(13.5);
