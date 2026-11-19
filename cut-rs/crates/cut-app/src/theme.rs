@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use eframe::egui::{self, Color32, CornerRadius, Stroke, Visuals};
+use eframe::egui::{self, Color32, CornerRadius, Sense, Stroke, Vec2, Visuals};
 
 const CORE_CSS: &str = include_str!("../../../../renderer/core/styles.css");
 const LIGHT_CSS: &str = include_str!("../../../../renderer/features/settings/style.css");
@@ -171,7 +171,27 @@ impl Palette {
         // a slider's rail and a scroll bar use bg_fill; buttons keep the panel colour (weak_bg_fill)
         v.widgets.inactive.bg_fill = g[4];
         v.widgets.hovered.bg_stroke = Stroke::new(1.0, g[4]);
+        // a dialog, a menu and a panel of the main window are the same card: one corner, one edge
+        v.window_corner_radius = CornerRadius::same(CARD_RADIUS);
+        v.menu_corner_radius = CornerRadius::same(6);
+        v.window_shadow = egui::Shadow {
+            offset: [0, 8],
+            blur: 24,
+            spread: 0,
+            color: Color32::from_black_alpha(if self.light() { 40 } else { 110 }),
+        };
+        v.popup_shadow = egui::Shadow {
+            offset: [0, 4],
+            blur: 12,
+            spread: 0,
+            color: Color32::from_black_alpha(if self.light() { 30 } else { 90 }),
+        };
         v
+    }
+
+    /// The edge of a card: a dialog's and a panel's.
+    pub fn card_stroke(&self) -> Stroke {
+        Stroke::new(1.0, self.gray[4])
     }
 
     /// The fill of a button that carries out its dialog (Export, OK, Save): the same in the top bar and the dialogs.
@@ -182,6 +202,45 @@ impl Palette {
     pub fn apply(&self, ctx: &egui::Context) {
         ctx.set_visuals(self.visuals());
     }
+}
+
+/// The corner of a card: a dialog, a panel of the main window.
+pub const CARD_RADIUS: u8 = 8;
+
+/// A tab: its name, filled as the row in use of a dialog's list when it is the one shown. A panel's tabs and the
+/// workspaces' are drawn with it, so the tab in use looks the same wherever it is. `sense` adds dragging for a tab
+/// that can be pulled out of its row.
+pub fn tab(
+    ui: &mut egui::Ui,
+    pal: &Palette,
+    text: &str,
+    active: bool,
+    enabled: bool,
+    height: f32,
+    sense: Sense,
+) -> egui::Response {
+    let color = if !enabled {
+        pal.gray[6]
+    } else if active {
+        pal.gray[12]
+    } else {
+        pal.gray[9]
+    };
+    let font = egui::FontId::proportional(13.5);
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), font, color);
+    let size = Vec2::new(galley.size().x + 18.0, height);
+    let (rect, r) = ui.allocate_exact_size(size, if enabled { sense } else { Sense::hover() });
+    if ui.is_rect_visible(rect) {
+        let pill = rect.shrink2(Vec2::new(0.0, ((height - 24.0) / 2.0).max(1.0)));
+        if active {
+            ui.painter().rect_filled(pill, CornerRadius::same(5), ui.visuals().selection.bg_fill);
+        } else if enabled && r.hovered() {
+            ui.painter().rect_filled(pill, CornerRadius::same(5), pal.gray[3]);
+        }
+        ui.painter().galley(rect.center() - galley.size() / 2.0, galley, color);
+    }
+    r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, active, text));
+    r
 }
 
 /// The bars' icon buttons carry no edge at rest: the buttons `ui` draws from here on are their icons alone.

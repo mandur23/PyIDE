@@ -444,24 +444,9 @@ fn tab_row(
         ui.add_space(6.0);
         ui.spacing_mut().item_spacing.x = 2.0;
         for (panel, active, enabled) in list.iter().copied() {
-            let color = if !enabled {
-                pal.gray[6]
-            } else if active {
-                pal.gray[12]
-            } else {
-                pal.gray[9]
-            };
-            let b = Button::new(RichText::new(tr(panel_title(panel))).color(color).size(13.5))
-                .frame(false)
-                .min_size(Vec2::new(0.0, 26.0))
-                .sense(if enabled { Sense::click_and_drag() } else { Sense::click() });
-            let r = ui.add_enabled(enabled, b);
-            if active {
-                ui.painter().hline(r.rect.x_range(), r.rect.bottom() + 1.0, Stroke::new(2.0, pal.accent));
-            }
+            let r = crate::theme::tab(ui, pal, &tr(panel_title(panel)), active, enabled, 26.0, Sense::click_and_drag());
             if !enabled {
-                r.clone().on_disabled_hover_text(tr("Not available yet"));
-                ui.add_space(10.0);
+                r.on_hover_text(tr("Not available yet"));
                 continue;
             }
             if r.clicked() {
@@ -469,7 +454,6 @@ fn tab_row(
             }
             menu_of(s, &r, panel, in_window);
             drag_tab(s, ui, &r, panel, in_window);
-            ui.add_space(10.0);
         }
     });
     let rect = ui.min_rect();

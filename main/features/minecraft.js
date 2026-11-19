@@ -27,6 +27,8 @@ const { forNewServer } = require('../minecraft/players/bridge');
 const runMarker = require('../minecraft/run-marker');
 const { createBackups, registerIpc: registerBackupIpc } = require('../minecraft/backups');
 const { createHealthMonitor, markStops, GC_LOG_ARG } = require('../minecraft/health-monitor');
+const { createSchedule } = require('../minecraft/schedule');
+const { createMods } = require('../minecraft/mods');
 const { complete } = require('../ai/claude');
 const { privateShare } = require('./port-sharing');
 const { app, safeStorage } = require('electron');
@@ -571,6 +573,7 @@ const isRunning = (dir) => runningDirs.has(keyOf(dir));
 const ownPids = new Set(); // the processes of runningDirs
 // A process a folder's marker names that this app did not start (or no longer knows: it was started before a crash).
 let health = null; // health-monitor.js, made in register (it tells the window)
+let schedule = null; // schedule.js, made in register (it tells the window what is due)
 const leftOver = async (dir) => {
   const m = runMarker.read(dir);
   if (m && ownPids.has(m.pid)) return null;
@@ -695,6 +698,17 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics, getWindow
     },
   });
   app.on('before-quit', () => health.quitting());
+  // Scheduled restarts, stops and commands (main/minecraft/schedule.js): main keeps the clock, the window does the step.
+  schedule = createSchedule({ send, readServer: serverOf, writeServer: (dir, desc) => writeJson(path.join(dir, SERVER), desc) });
+  app.on('will-quit', schedule.shutdown);
+  // The jars in mods/ or plugins/: what each is, turning one off and on, and what they say about each other
+  // (main/minecraft/mods.js).
+  const mods = createMods({ readServer: serverOf, writeServer: (dir, desc) => writeJson(path.join(dir, SERVER), desc), running: isRunning, kinds: KINDS });
+  ipcMain.handle('minecraft:mods', (_e, root, dir) => { ofProject(root, dir); return mods.list(dir); });
+  ipcMain.handle('minecraft:toggleMod', (_e, root, dir, file, on) => { playersAt(root, dir); return mods.toggle(dir, file, !!on); });
+  ipcMain.handle('minecraft:schedule', (_e, root, dir) => { ofProject(root, dir); return { tasks: schedule.of(dir), next: schedule.upcoming(dir), now: schedule.now() }; });
+  ipcMain.handle('minecraft:setSchedule', (_e, root, dir, tasks) => { playersAt(root, dir); return { tasks: schedule.set(dir, tasks), next: schedule.upcoming(dir) }; });
+  ipcMain.handle('minecraft:skipSchedule', (_e, root, dir, task, occurrence) => { playersAt(root, dir); return schedule.skip(dir, String(task), Number(occurrence)); });
   ipcMain.handle('minecraft:healthOf', (_e, root, dir) => { ofProject(root, dir); return health.of(dir); });
   ipcMain.handle('minecraft:setHealth', (_e, root, dir, patch) => { playersAt(root, dir); return health.setSettings(dir, patch); });
   ipcMain.handle('minecraft:dismissHealth', (_e, root, dir) => { ofProject(root, dir); health.dismiss(dir); return true; });
@@ -761,6 +775,7 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics, getWindow
     markStops(proc);
     session?.attach(proc);
     if (session && !proxy && proc) backups.attach(spec.cwd, proc);
+    if (session && desc && proc) schedule.attach(spec.cwd, proc, { proxy });
     if (proc) {
       runningDirs.set(k, (runningDirs.get(k) || 0) + 1);
       if (proc.pid) {

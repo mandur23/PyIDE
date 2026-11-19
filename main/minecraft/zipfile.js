@@ -79,17 +79,21 @@ async function writeZipFile(file, entries) {
 // and packs use); size(name) is the size the directory declares, which read() inflates no further than.
 function openZip(file) {
   const fd = fs.openSync(file, 'r');
+  return openFrom({ size: fs.fstatSync(fd).size, label: path.basename(file), pread: (b, n, at) => fs.readSync(fd, b, 0, n, at), close: () => fs.closeSync(fd) });
+}
+// The same for a zip held in memory: a jar inside a jar (a mod's bundled libraries), read without writing it out.
+const openZipBuffer = (buf, label = 'archive') => openFrom({ size: buf.length, label, pread: (b, n, at) => buf.copy(b, 0, at, at + n), close: () => {} });
+function openFrom({ size, label, pread, close }) {
   try {
-    const size = fs.fstatSync(fd).size;
     const tail = Buffer.alloc(Math.min(size, 65557 + 20));
-    fs.readSync(fd, tail, 0, tail.length, size - tail.length);
-    const read64 = (at) => { const b = Buffer.alloc(56); fs.readSync(fd, b, 0, 56, at); return b; };
-    const { count, dirAt, dirSize } = locate(tail, size - tail.length, size, read64, path.basename(file));
+    pread(tail, tail.length, size - tail.length);
+    const read64 = (at) => { const b = Buffer.alloc(56); pread(b, 56, at); return b; };
+    const { count, dirAt, dirSize } = locate(tail, size - tail.length, size, read64, label);
     const dir = Buffer.alloc(dirSize);
-    fs.readSync(fd, dir, 0, dirSize, dirAt);
+    pread(dir, dirSize, dirAt);
     const list = entriesOf(dir, count);
     const entries = new Map(list.map((e) => [e.name, e]));
-    if (overlapping(list)) throw Object.assign(fail(`${path.basename(file)} is refused: its entries overlap, as in a zip bomb`), { bomb: true });
+    if (overlapping(list)) throw Object.assign(fail(`${label} is refused: its entries overlap, as in a zip bomb`), { bomb: true });
     return {
       names: [...entries.keys()],
       size: (name) => entries.get(name)?.size ?? 0,
@@ -100,21 +104,21 @@ function openZip(file) {
         if (e.method !== 0 && e.method !== 8) throw fail(`${name} uses a compression Nano Studio does not read (method ${e.method})`);
         if (e.size > LIMITS.entry) throw fail(`${name} is too large (${mb(e.size)} MB)`);
         const head = Buffer.alloc(30);
-        fs.readSync(fd, head, 0, 30, e.at);
+        pread(head, 30, e.at);
         const at = e.at + 30 + head.readUInt16LE(26) + head.readUInt16LE(28);
         if (head.readUInt32LE(0) !== 0x04034b50 || at + e.packed > size) throw fail(`${name} is damaged`);
         const data = Buffer.alloc(e.packed);
-        fs.readSync(fd, data, 0, e.packed, at);
+        pread(data, e.packed, at);
         // Limits count what an entry declares, so one that gives more than it declares is a bomb, not a file.
         let out;
         try { out = e.method === 0 ? data : zlib.inflateRawSync(data, { maxOutputLength: Math.max(e.size, 1) }); } catch { throw fail(`${name} is damaged`); }
         if (out.length !== e.size) throw fail(`${name} is damaged`);
         return out;
       },
-      close: () => fs.closeSync(fd),
+      close,
     };
   } catch (err) {
-    fs.closeSync(fd);
+    close();
     throw err;
   }
 }
@@ -160,4 +164,4 @@ function unpackZip(file, dest, prefix = '') {
   } finally { zip.close(); }
 }
 
-module.exports = { writeZip, writeZipFile, readEntry, openZip, unpackZip, canonical };
+module.exports = { writeZip, writeZipFile, readEntry, openZip, openZipBuffer, unpackZip, canonical };

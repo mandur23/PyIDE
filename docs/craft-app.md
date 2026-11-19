@@ -42,6 +42,8 @@ npm start -- --mode=craft
 | `backups.js` | 백업 탭(목록, 지금 백업, 되돌리기, 일정과 보관), 위험한 동작 전 자동 백업(`mc.backups.before`) |
 | `players.js`, `players-drag.js`, `players-bridge.js` | 플레이어 탭, 인벤토리 끌기, 상세 기록(NanoBridge) 설치 |
 | `health.js` | 카드의 비정상 종료·응답 없음·과부하 표시, 자동 재시작, 설정 탭의 "비정상 종료와 과부하" |
+| `schedule.js` | 예약된 단계의 실행(알림, 재시작, 정지, 명령), 설정 탭의 "예약" |
+| `mods.js` | 설정 탭의 "모드"·"플러그인": 목록과 스위치, 문제와 고치는 버튼, 시작할 때의 알림 |
 | `style.css`, `locales/ko.json` | 모양과 한국어 |
 
 ### 메인
@@ -64,6 +66,8 @@ npm start -- --mode=craft
 | `main/minecraft/zipfile.js` | zip 쓰기와 jar 안 파일 읽기 |
 | `main/minecraft/zip64.js` | 크기 제한 없는 zip 쓰기와 읽기(스트림, ZIP64). 백업과 `writeZipFile`, `openZip`이 씁니다 |
 | `main/minecraft/backups.js` | 월드 백업과 되돌리기, 보관 규칙, 일정. 다른 메인 코드는 `require('../features/minecraft').backups`의 API를 씁니다(파일 머리 주석) |
+| `main/minecraft/schedule.js` | 예약 작업의 규칙과 시계(재시작, 정지, 명령) |
+| `main/minecraft/mods.js` | 모드·플러그인 jar의 메타데이터 읽기, 켜고 끄기, 의존·충돌 확인 |
 | `main/minecraft/private-join.js` | 친구 쪽 비공개 참여 프로세스 |
 | `main/minecraft/players/` | 플레이어 세션, 로그 해석, 기록 저장, 동작 명령, NBT, 아이템, NanoBridge |
 | `main/bore-gate.js`, `main/bore-client.js` | 비공개 공유 터널의 프로토콜과 bore 클라이언트 |
@@ -85,6 +89,22 @@ npm start -- --mode=craft
   - Java 9 이상 서버는 `-Xlog:gc:file=.nano/gc.log`로 시작합니다(과부하의 메모리 판단). Paper 26.3에는 "Can't keep up" 줄이 없어서 Paper와 Purpur는 플레이어 세션의 숨은 질의로 `tps`를 묻습니다.
 - `server.properties`는 Java처럼 읽고 씁니다. 정규식으로 직접 고치지 않고 `readProperties`, `writeProperties`를 씁니다.
 - Paper 설정 파일 위치는 버전마다 다릅니다(1.18까지 `paper.yml`, 1.19부터 `config/`, 26.1부터 월드 안). 버전별 경로를 확인합니다.
+
+### 예약 (`main/minecraft/schedule.js`, 렌더러 `schedule.js`)
+
+- 작업은 `pyide-server.json`의 `schedule` 목록입니다(`normalize`가 남기는 것만: 시각, 종류 restart·stop·command, 요일, 한 줄 명령, 20개까지).
+- 시계는 메인이 갖고, 때가 된 단계를 창에 알립니다(`minecraft:schedule` `due`). 실행은 창이 합니다. 콘솔, 정지의 60초 규칙, 다시 시작하는 launch가 모두 창의 실행 세션에 있기 때문입니다. 재시작은 카드의 재시작과 같은 길(`mc.health.restart`)이라 비정상 종료로 잡히지 않습니다.
+- 지나간 시각은 보충하지 않습니다. 서버가 시작한 뒤에 첫 알림이 오는 회차만 그 실행의 것이고(03:58에 켠 서버를 04:00에 재시작하지 않습니다), 90초 넘게 늦은 단계는 버립니다(절전, 시계 변경).
+- 같은 분의 작업은 모두 실행하고 명령이 재시작·정지보다 먼저 갑니다. 프록시(Velocity)에는 `say`가 없어 알림 단계가 없습니다.
+- 테스트는 `PYIDE_MC_SCHEDULE_MS`(`speed`, `warn`)로 시계를 빠르게 돌립니다(`verify/craft-schedule.mjs`).
+
+### 모드와 플러그인 목록 (`main/minecraft/mods.js`, 렌더러 `mods.js`)
+
+- jar의 메타데이터만 읽습니다: `fabric.mod.json`, `quilt.mod.json`, `META-INF/mods.toml`·`neoforge.mods.toml`, `plugin.yml`·`paper-plugin.yml`, `velocity-plugin.json`. 아무것도 실행하지 않습니다. TOML과 YAML은 이 파일들이 쓰는 부분만 읽는 작은 파서입니다(새 의존성 없음).
+- jar 안의 jar(Fabric의 `jars`, Forge의 `META-INF/jarjar`)가 가져오는 모드도 "있는 것"으로 칩니다. Fabric API의 모듈처럼 다른 모드 안에 들어 있는 것을 없다고 하면 틀린 경고가 됩니다. `openZipBuffer`로 메모리에서 읽습니다.
+- **틀린 경고보다 놓치는 쪽을 택합니다.** 읽지 못한 버전이나 범위는 맞는 것으로 칩니다. 권장(recommends, softdepend, optional)은 문제가 아닙니다.
+- 끄기는 `<이름>.jar.disabled`로 이름 바꾸기입니다. Market의 기록(`market[id].files`)도 같이 바꿔서 Market이 그 프로젝트를 계속 알고 제거할 수 있습니다. 실행 중인 서버의 jar는 Java가 잡고 있어 거절합니다.
+- 테스트는 직접 만든 jar로 합니다(`verify/craft-mods.mjs`). 실제 모드를 내려받지 않습니다.
 
 ### 플레이와 참여 (`launcher.js`)
 

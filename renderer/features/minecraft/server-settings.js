@@ -93,13 +93,20 @@
       ['rate-limit', tr('Packet limit'), tr('Players who send more packets a second than this are kicked. 0 for no limit.')],
       ['$jvm', tr('JVM options'), ''],
     ] },
+    { id: 'schedule', title: tr('Schedule'), rows: [['$schedule', tr('Scheduled tasks'), tr('Restart the server, stop it or run a command at a set time. These apply at once, without Save.')]] },
     { id: 'health', title: tr('Crashes and Lag'), rows: [['$health', tr('When something goes wrong'), tr('These apply at once, without Save.')]] },
     { id: 'antixray', title: tr('Anti-Xray'), rows: [
       ['$antixray', tr('Protection level'), ''],
       ['$antixrayNew', tr('Apply to new servers too'), tr('Paper and Purpur servers made from now on start at this level. A new server has no settings file yet, so it goes in after its first start.')],
       ['$antixrayOthers', tr('My other servers'), tr('Sets the level chosen above on the other Paper and Purpur servers here. You see the list before anything changes.')],
     ] },
-    { id: 'mods', title: tr('Mods'), mods: true, rows: [['$translate', tr('Korean translation'), '']] },
+    { id: 'mods', title: tr('Mods'), mods: true, rows: [
+      ['$modlist', tr('Installed mods'), tr('Turn a mod off to leave it out without deleting it. Problems between mods are checked for you. These apply at once, without Save.')],
+      ['$translate', tr('Korean translation'), ''],
+    ] },
+    { id: 'plugins', title: tr('Plugins'), plugins: true, rows: [
+      ['$modlist', tr('Installed plugins'), tr('Turn a plugin off to leave it out without deleting it. Plugins that need another are checked for you. These apply at once, without Save.')],
+    ] },
     { id: 'other', title: tr('Other properties'), rows: [['$other', '', '']] },
   ];
 
@@ -241,7 +248,8 @@
     v.sections = [];
     for (const s of SECTIONS()) {
       if (s.mods && !srv.mods) continue;
-      const rows = s.rows.filter(([key]) => (base.proxy ? key === '$memory' || key === '$jvm' || key === '$health' :key === '$other' || key.startsWith('$') || v.schema.has(key))
+      if (s.plugins && !srv.plugins) continue;
+      const rows = s.rows.filter(([key]) => (base.proxy ? key === '$memory' || key === '$jvm' || key === '$health' || key === '$schedule' || key === '$modlist' :key === '$other' || key.startsWith('$') || v.schema.has(key))
         && (!XRAY_READY_ROWS.has(key) || base.antiXray.state === 'ready'));
       if (!rows.length) continue;
       const sec = el('section', 'mcset-section');
@@ -314,6 +322,8 @@
     if (key === '$antixrayNew') return xrayNewControl(v);
     if (key === '$antixrayOthers') return xrayOthersControl(v);
     if (key === '$health') return mc.health?.settingsControl(v.srv) || el('div');
+    if (key === '$modlist') return mc.mods?.settingsControl(v.srv) || el('div');
+    if (key === '$schedule') return mc.schedule?.settingsControl(v.srv) || el('div');
     if (key === 'motd') return motdControl(v);
     const p = v.schema.get(key);
     const value = v.draft.props[key];

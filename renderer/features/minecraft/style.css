@@ -503,6 +503,47 @@ img.mcpl-pick-icon { background: none; }
 .mcc-chip.mc-load-chip.fine { background: color-mix(in srgb, var(--green6) 18%, transparent); color: color-mix(in srgb, var(--green6) 45%, var(--gray10)); }
 .mcc-chip.mc-load-chip.lagging { background: color-mix(in srgb, var(--yellow) 22%, transparent); color: color-mix(in srgb, var(--yellow) 40%, var(--gray11)); }
 .mcc-chip.mc-load-chip.overloaded { background: color-mix(in srgb, var(--red) 18%, transparent); color: color-mix(in srgb, var(--red) 45%, var(--gray10)); }
+.mcset-schedule { display: flex; flex-direction: column; gap: 10px; min-width: 0; align-items: flex-start; }
+.mcset-schedule-list { display: flex; flex-direction: column; gap: 8px; align-self: stretch; }
+.mcset-schedule-list:empty { display: none; }
+.mcset-schedule-row { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--gray4); border-radius: 6px; background: var(--gray1); }
+.mcset-schedule-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.mcset-schedule-time { width: 110px; }
+.mcset-schedule-kind { width: 170px; }
+.mcset-schedule-days { display: flex; gap: 2px; }
+.mcset-schedule-day { min-width: 30px; height: 26px; padding: 0 6px; border: 1px solid var(--gray4); border-radius: 4px; background: transparent; color: var(--gray10); font-size: 12px; cursor: pointer; }
+.mcset-schedule-day:hover { background: var(--gray3); }
+.mcset-schedule-day.on { background: var(--blue6); border-color: var(--blue6); color: #fff; }
+.mcset-schedule-every { font-size: 12px; }
+.mcset-schedule-delete { margin-left: auto; }
+.mcset-schedule-extra { padding-left: 46px; }
+.mcset-schedule-command { width: 100%; font-family: var(--mono); font-size: 12px; }
+.mcset-schedule-warn { display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; }
+.mcset-schedule-next:empty, .mcset-schedule-status:empty { display: none; }
+.mcset-mods { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.mcset-mods-head { display: flex; align-items: center; gap: 12px; }
+.mcset-mods-summary { flex: 1; min-width: 0; font-weight: 500; }
+.mcset-mods-summary.ok { color: var(--green6); }
+.mcset-mods-summary.bad { color: var(--red); }
+.mcset-mods-summary.warn { color: var(--yellow, #c9a227); }
+.mcset-mods-problems { display: flex; flex-direction: column; gap: 6px; }
+.mcset-mods-problems:empty, .mcset-mods-list:empty, .mcset-mods-status:empty { display: none; }
+.mcset-mods-problem { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--gray4); border-left: 3px solid var(--yellow, #c9a227); background: var(--gray1); }
+.mcset-mods-problem.error { border-left-color: var(--red); }
+.mcset-mods-mark { flex-shrink: 0; width: 18px; height: 18px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #fff; background: var(--yellow, #c9a227); }
+.mcset-mods-problem.error .mcset-mods-mark { background: var(--red); }
+.mcset-mods-text { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 1.45; }
+.mcset-mods-fix { flex-shrink: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mcset-mods-list { display: flex; flex-direction: column; border: 1px solid var(--gray4); border-radius: 6px; max-height: 420px; overflow: auto; }
+.mcset-mods-row { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-left: 3px solid transparent; }
+.mcset-mods-row + .mcset-mods-row { border-top: 1px solid var(--gray3); }
+.mcset-mods-row.error { border-left-color: var(--red); }
+.mcset-mods-row.warn { border-left-color: var(--yellow, #c9a227); }
+.mcset-mods-row.off .mcset-mods-name { opacity: 0.6; }
+.mcset-mods-name { min-width: 0; flex: 1; }
+.mcset-mods-name .mcset-label { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.mcset-mods-name .mcset-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mcset-mods-version { font-weight: 400; font-size: 12px; }
 .mcset-health { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .mcset-health-row { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
 .mcset-health-numbers { margin: 0; padding: 8px 10px; border-radius: 4px; background: var(--gray2); font-family: var(--mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -370,3 +370,142 @@ fn the_history_panel_goes_to_a_step_clicked_among_many() {
     drop(h);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Two audio clips on A1 at 0 s and 2 s (one second each) and one on A2 at 0 s, the A1 clip at 0 s linked to it.
+fn marquee_project(hist: &mut History) -> [Id; 3] {
+    let seq = seq_id(hist);
+    let file = media::tone_aac();
+    let r = apply(
+        hist,
+        json!({ "type": "importMedia", "binId": null, "media": [{ "path": file.to_string_lossy(), "name": "tone.m4a",
+            "kind": "audio", "duration": 8 * TICKS, "audio": { "rate": 48000, "channels": 2 } }] }),
+    );
+    let m = r["ids"][0].as_str().unwrap().to_owned();
+    let audio: Vec<Id> = hist.project().sequences[0]
+        .tracks
+        .iter()
+        .filter(|t| t.kind == cut_model::TrackKind::Audio)
+        .map(|t| t.id)
+        .collect();
+    for (track, at) in [(audio[0], 0.0), (audio[0], 2.0), (audio[1], 0.0)] {
+        apply(
+            hist,
+            json!({ "type": "place", "seqId": seq, "opts": { "source": { "media": m }, "audio": track.as_str(),
+                "at": secs(at), "out": secs(1.0), "mode": "overwrite" } }),
+        );
+    }
+    let clips = &hist.project().sequences[0];
+    let at = |track: Id, t: f64| clips.clips().find(|c| c.track == track && c.start == secs(t)).unwrap().id;
+    let ids = [at(audio[0], 0.0), at(audio[0], 2.0), at(audio[1], 0.0)];
+    apply(hist, cut_app::cmd::link(clips.id, &[ids[0], ids[2]]));
+    ids
+}
+
+/// A point of the timeline's lanes: `t` seconds in, `dy` points into the row of the `n`th audio track.
+fn lane_point(h: &H, n: usize, t: f64, dy: f32) -> Pos2 {
+    let s = h.state();
+    let lanes = s.timeline.direct.lanes.expect("the timeline was drawn");
+    let row = s.timeline.layout().rows.iter().filter(|r| r.kind == RowKind::Audio).nth(n).expect("the audio row");
+    pos2(lanes.left() + s.timeline.view.x_of(secs(t)) as f32, lanes.top() + row.y - s.timeline.view.scroll_y + dy)
+}
+
+fn selected(h: &H) -> Vec<Id> {
+    h.state().app.selected()
+}
+
+fn drag_to(h: &mut H, to: Pos2, m: Modifiers) {
+    h.event(egui::Event::ModifiersChanged(m));
+    h.event(egui::Event::PointerMoved(to));
+    h.step();
+}
+
+#[test]
+fn a_marquee_selects_while_it_is_dragged_with_partners_and_ctrl_a_selects_everything() {
+    let dir = scratch("marquee");
+    let mut ids = [Id::new("x"); 3];
+    let mut h = open(&dir, |hist| ids = marquee_project(hist));
+    let [first, second, below] = ids;
+    let sorted = |mut v: Vec<Id>| {
+        v.sort();
+        v
+    };
+    // from the empty stretch of A1 between its clips, leftwards over the first clip: selected before the release,
+    // and its linked clip on A2 with it though the box never reaches A2
+    let from = lane_point(&h, 0, 1.5, 12.0);
+    button(&mut h, from, true, Modifiers::NONE);
+    assert!(selected(&h).is_empty(), "a press on an empty spot selects nothing");
+    let at = lane_point(&h, 0, 0.5, 20.0);
+    drag_to(&mut h, at, Modifiers::NONE);
+    assert_eq!(
+        sorted(selected(&h)),
+        sorted(vec![first, below]),
+        "the box selects as it is dragged, with the linked clip"
+    );
+    // dragged back to the right over the second clip instead: what it no longer covers is let go
+    let at = lane_point(&h, 0, 2.5, 20.0);
+    drag_to(&mut h, at, Modifiers::NONE);
+    assert_eq!(selected(&h), vec![second], "the selection follows the box");
+    let at = lane_point(&h, 0, 2.5, 20.0);
+    button(&mut h, at, false, Modifiers::NONE);
+    assert_eq!(selected(&h), vec![second], "the release keeps it");
+    // Shift keeps what was selected, and Alt takes a clip without its partner
+    let m = Modifiers { shift: true, alt: true, ..Modifiers::NONE };
+    button(&mut h, from, true, m);
+    let at = lane_point(&h, 0, 0.5, 20.0);
+    drag_to(&mut h, at, m);
+    let at = lane_point(&h, 0, 0.5, 20.0);
+    button(&mut h, at, false, m);
+    assert_eq!(
+        sorted(selected(&h)),
+        sorted(vec![first, second]),
+        "Shift adds to the selection, Alt leaves the linked clip out"
+    );
+    // a click on an empty spot lets everything go; Ctrl+A in the timeline takes every clip
+    let at = lane_point(&h, 1, 3.5, 12.0);
+    click(&mut h, at, Modifiers::NONE);
+    assert!(selected(&h).is_empty(), "a click on an empty spot deselects");
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
+    h.step();
+    assert_eq!(sorted(selected(&h)), sorted(vec![first, second, below]), "Ctrl+A selects every clip of the sequence");
+    h.key_press(egui::Key::Escape);
+    h.step();
+    assert!(selected(&h).is_empty(), "Escape deselects");
+    drop(h);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_clip_dragged_to_the_edge_of_the_timeline_scrolls_it() {
+    let dir = scratch("edge-scroll");
+    let mut ids = [Id::new("x"); 3];
+    let mut h = open(&dir, |hist| ids = marquee_project(hist));
+    // zoomed in until the sequence is wider than the lanes: there is somewhere to scroll to
+    h.state_mut().timeline.view.pps = 200.0;
+    h.step();
+    h.step();
+    let lanes = h.state().timeline.direct.lanes.unwrap();
+    assert_eq!(h.state().timeline.view.scroll_x, 0.0);
+    // the clip at 2 s, taken by its name (lower down is its volume line) and carried to within the last points of the
+    // lanes
+    let from = lane_point(&h, 0, 2.5, 7.0);
+    let edge = pos2(lanes.right() - 4.0, from.y);
+    button(&mut h, from, true, Modifiers::NONE);
+    drag_to(&mut h, pos2(from.x + 40.0, from.y), Modifiers::NONE);
+    for _ in 0..6 {
+        drag_to(&mut h, edge, Modifiers::NONE);
+    }
+    let scrolled = h.state().timeline.view.scroll_x;
+    assert!(scrolled > 60.0, "the timeline scrolls under a clip held at its right edge ({scrolled})");
+    button(&mut h, edge, false, Modifiers::NONE);
+    assert_eq!(steps(&h).last().map(String::as_str), Some("Move"), "the drag was a move ({:?})", steps(&h));
+    let seq = h.state().app.sequence().unwrap();
+    let start = seq.clip(ids[1]).unwrap().start;
+    // further than the pointer travelled on screen: by what the timeline scrolled as well
+    let travelled = secs(f64::from(edge.x - from.x) / 200.0);
+    assert!(
+        start - secs(2.0) > travelled + secs(0.25),
+        "and the clip moves by the scroll too, to a time that was not on screen ({start}, pointer {travelled})"
+    );
+    drop(h);
+    let _ = std::fs::remove_dir_all(&dir);
+}

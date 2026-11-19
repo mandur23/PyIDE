@@ -1061,7 +1061,7 @@
     showServersIn(container) { acceptDrops(container); host = container; refresh(); } };
 
   const here = document.currentScript.src.replace(/[^/]*$/, '');
-  for (const file of ['market.js', 'craft.js', 'screen.js', 'server-settings.js', 'players.js', 'health.js', 'backups.js']) {
+  for (const file of ['market.js', 'craft.js', 'screen.js', 'server-settings.js', 'players.js', 'health.js', 'backups.js', 'schedule.js', 'mods.js']) {
     const script = el('script');
     script.src = `${here}${file}`;
     script.async = false;

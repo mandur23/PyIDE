@@ -62,9 +62,15 @@ enum Drag {
         h0: f64,
         open: bool,
     },
+    /// A box dragged from an empty spot (`marquee`): its first corner in the content (seconds' points from the start
+    /// of the sequence, points from the first row's top), what was selected before it (Shift), and whether Alt takes
+    /// the clips without their partners. `moved` once it is more than a click.
     Marquee {
-        from: Pos2,
-        add: bool,
+        x0: f64,
+        y0: f32,
+        base: Vec<Id>,
+        alt: bool,
+        moved: bool,
     },
     ScrollBar {
         x0: f32,
@@ -694,11 +700,11 @@ impl Timeline {
         if let Some(g) = guide {
             painter.vline(x_of(g), rect.y_range(), Stroke::new(1.0, Color32::from_rgb(0x4f, 0xc3, 0xf7)));
         }
-        if let Drag::Marquee { from, .. } = self.drag
+        if let Drag::Marquee { x0, y0, moved: true, .. } = self.drag
             && let Some(p) = ui.ctx().pointer_latest_pos()
         {
-            let r = Rect::from_two_pos(from, p);
-            painter.rect_filled(r, 0.0, Color32::from_rgba_unmultiplied(84, 138, 247, 30));
+            let r = self.marquee_rect(rect, x0, y0, p);
+            painter.rect_filled(r, 0.0, Color32::from_rgba_unmultiplied(84, 138, 247, 38));
             painter.rect_stroke(r, 0.0, Stroke::new(1.0, pal.blue8), StrokeKind::Inside);
         }
         if let Some(o) = &self.overlay {
@@ -838,6 +844,7 @@ impl Timeline {
             let snap = app.snapping != m.shift;
             self.captions.step(app, seq, &self.view, lx, snap);
         }
+        let (content, shown) = (self.content_w(), self.view_w);
         match &mut self.drag {
             Drag::None | Drag::ScrollBar { .. } => {
                 if lanes.contains(p) {
@@ -867,6 +874,9 @@ impl Timeline {
                 ctx.set_cursor_icon(CursorIcon::Grabbing);
             }
             Drag::Move { d, .. } => {
+                if d.moved {
+                    Self::edge_scroll_view(&mut self.view, content, shown, lx);
+                }
                 d.step(&self.layout, &self.view, (lx, ly), m, app.snapping, frame);
                 if d.moved {
                     let sign = if d.delta < 0 { "-" } else { "+" };
@@ -881,6 +891,9 @@ impl Timeline {
                 }
             }
             Drag::Trim { d, open } => {
+                if d.moved {
+                    Self::edge_scroll_view(&mut self.view, content, shown, lx);
+                }
                 if let Some(c) = d.step(seq, &self.view, lx, m, app.snapping, frame) {
                     if *open {
                         app.history.cancel();
@@ -925,8 +938,27 @@ impl Timeline {
                 let _ = app.history.apply(&cmd::set_track(seq.id, *track, json!({ "height": h })));
                 ctx.set_cursor_icon(CursorIcon::ResizeVertical);
             }
-            Drag::Marquee { .. } => {}
-            Drag::Tool { .. } => self.step_tool(app, seq, lanes, p, m),
+            Drag::Marquee { x0, y0, base, alt, moved } => {
+                let (x0, y0, alt) = (*x0, *y0, *alt);
+                let x = f64::from(p.x - lanes.left());
+                if !*moved
+                    && (x + self.view.scroll_x - x0).hypot(f64::from(p.y - lanes.top() + self.view.scroll_y - y0)) > 3.0
+                {
+                    *moved = true;
+                }
+                if *moved {
+                    let base = base.clone();
+                    self.edge_scroll(lanes, x);
+                    let ids = self.marquee_ids(app, seq, lanes, x0, y0, p, &base, alt);
+                    if ids != app.selection {
+                        app.selection = ids;
+                    }
+                }
+            }
+            Drag::Tool { .. } => {
+                self.edge_scroll(lanes, lx);
+                self.step_tool(app, seq, lanes, p, m);
+            }
             Drag::Marker(_) => self.step_marker(app, seq, ruler, p),
         }
         if released && !down {
@@ -980,12 +1012,75 @@ impl Timeline {
                 }
             }
             Press::Empty => {
+                let base = if m.shift { app.selected() } else { Vec::new() };
                 if !m.shift {
                     app.selection.clear();
                 }
-                self.drag = Drag::Marquee { from: p, add: m.shift };
+                self.drag = Drag::Marquee {
+                    x0: f64::from(p.x - lanes.left()) + self.view.scroll_x,
+                    y0: p.y - lanes.top() + self.view.scroll_y,
+                    base,
+                    alt: m.alt,
+                    moved: false,
+                };
             }
         }
+    }
+
+    /// A drag near the left or right edge of the lanes scrolls the timeline under it (`autoScroll`: within 20 points
+    /// of an edge, twice the distance past it and 40 points a step at most), so a clip is moved, an edge trimmed or a
+    /// box drawn to a time that was not on screen. `x` is the pointer from the lanes' left edge.
+    fn edge_scroll(&mut self, lanes: Rect, x: f64) {
+        let content = self.content_w();
+        Self::edge_scroll_view(&mut self.view, content, f64::from(lanes.width()), x);
+    }
+
+    fn edge_scroll_view(view: &mut View, content_w: f64, w: f64, x: f64) {
+        if x > w - 20.0 {
+            view.scroll_x += ((x - (w - 20.0)) * 2.0).min(40.0);
+        } else if x < 20.0 {
+            view.scroll_x -= ((20.0 - x) * 2.0).min(40.0);
+        }
+        view.scroll_x = view.scroll_x.clamp(0.0, (content_w - w).max(0.0));
+    }
+
+    /// The marquee's box on screen: from its first corner, which stays on its time and row as the timeline scrolls,
+    /// to the pointer.
+    fn marquee_rect(&self, lanes: Rect, x0: f64, y0: f32, p: Pos2) -> Rect {
+        let from = Pos2::new(lanes.left() + (x0 - self.view.scroll_x) as f32, lanes.top() + y0 - self.view.scroll_y);
+        Rect::from_two_pos(from, p)
+    }
+
+    /// What the marquee from (`x0`, `y0`) to `p` selects (`marqueeSelect`): `base`, and every clip of the rows it
+    /// crosses that it overlaps in time, each with its partners (group, link) unless `alt`.
+    #[allow(clippy::too_many_arguments)]
+    fn marquee_ids(
+        &self,
+        app: &App,
+        seq: &Sequence,
+        lanes: Rect,
+        x0: f64,
+        y0: f32,
+        p: Pos2,
+        base: &[Id],
+        alt: bool,
+    ) -> std::collections::HashSet<Id> {
+        let r = self.marquee_rect(lanes, x0, y0, p);
+        let a = self.view.t_of(f64::from(r.left() - lanes.left())) as Ticks;
+        let b = self.view.t_of(f64::from(r.right() - lanes.left())) as Ticks;
+        let mut ids: std::collections::HashSet<Id> = base.iter().copied().collect();
+        for row in &self.layout.rows {
+            let top = lanes.top() + row.y - self.view.scroll_y;
+            if top + row.h < r.top() || top > r.bottom() {
+                continue;
+            }
+            if let Some(track) = row.id {
+                for s in self.layout.visible(track, a, b).iter().filter(|s| s.end > a && s.start < b) {
+                    ids.extend(gesture::partners(seq, s.id, alt, app.linked_selection));
+                }
+            }
+        }
+        ids
     }
 
     fn release(&mut self, app: &mut App, seq: &Sequence, lanes: Rect, p: Pos2, m: Mods) {
@@ -1028,28 +1123,9 @@ impl Timeline {
                     app.history.commit();
                 }
             }
-            Drag::Marquee { from, add } => {
-                let r = Rect::from_two_pos(from, p);
-                if r.width() > 3.0 || r.height() > 3.0 {
-                    let a = self.view.t_of(f64::from(r.left() - lanes.left())) as Ticks;
-                    let b = self.view.t_of(f64::from(r.right() - lanes.left())) as Ticks;
-                    let mut ids = Vec::new();
-                    for row in &self.layout.rows {
-                        let top = lanes.top() + row.y - self.view.scroll_y;
-                        if top + row.h < r.top() || top > r.bottom() {
-                            continue;
-                        }
-                        if let Some(track) = row.id {
-                            ids.extend(
-                                self.layout
-                                    .visible(track, a, b)
-                                    .iter()
-                                    .filter(|s| s.end > a && s.start < b)
-                                    .map(|s| s.id),
-                            );
-                        }
-                    }
-                    app.select(ids, add, false);
+            Drag::Marquee { x0, y0, base, alt, moved } => {
+                if moved {
+                    app.selection = self.marquee_ids(app, seq, lanes, x0, y0, p, &base, alt);
                 } else {
                     self.pick_gap(app, seq, lanes, p);
                 }

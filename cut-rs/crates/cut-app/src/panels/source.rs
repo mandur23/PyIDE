@@ -149,13 +149,32 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui) {
         }
     }
     if clip.is_none() {
+        // an empty monitor says what fills it and offers the first step, in the middle of its picture
+        let c = screen.center();
         ui.painter().text(
-            screen.center(),
+            c - Vec2::new(0.0, 34.0),
+            egui::Align2::CENTER_CENTER,
+            icons::IMPORT,
+            egui::FontId::proportional(26.0),
+            pal.gray[6],
+        );
+        ui.painter().text(
+            c,
             egui::Align2::CENTER_CENTER,
             tr("Double-click a clip in the project to open it here."),
             egui::FontId::proportional(12.5),
             pal.gray[8],
         );
+        if screen.height() > 150.0 {
+            let b = Button::new(RichText::new(tr("Import Media")).size(12.5)).min_size(Vec2::new(0.0, 26.0));
+            let at = Rect::from_center_size(c + Vec2::new(0.0, 34.0), Vec2::new(120.0, 26.0));
+            // in a child of its own: placed in the panel's own layout it would push the time bar down
+            let mut over = ui.new_child(egui::UiBuilder::new().max_rect(at));
+            if over.add_sized(at.size(), b).clicked() {
+                let ctx = ui.ctx().clone();
+                s.run_action("import", &ctx);
+            }
+        }
     }
     if let Some(m) = &mut s.monitors {
         m.source.rect = drawn;

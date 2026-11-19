@@ -488,6 +488,7 @@ pub fn layout(s: &mut Shell, ui: &mut egui::Ui) {
                 let (sz, list) = slots[last];
                 let key = format!("slot{ri}.{last}");
                 let r = egui::Panel::right(("ws", ws.id(), ri, last, g))
+                    .show_separator_line(false)
                     .frame(Frame::new())
                     .resizable(true)
                     .default_size(sized(s, ws, &key, (width * sz / flex).max(56.0)))
@@ -497,7 +498,7 @@ pub fn layout(s: &mut Shell, ui: &mut egui::Ui) {
                 last -= 1;
             }
             for (si, (sz, list)) in slots.iter().enumerate().take(last) {
-                let p = egui::Panel::left(("ws", ws.id(), ri, si, g)).frame(Frame::new());
+                let p = egui::Panel::left(("ws", ws.id(), ri, si, g)).show_separator_line(false).frame(Frame::new());
                 let key = format!("slot{ri}.{si}");
                 let p = if *sz == 0.0 {
                     p.exact_size(40.0).resizable(false)
@@ -521,6 +522,7 @@ pub fn layout(s: &mut Shell, ui: &mut egui::Ui) {
             let id = ("ws-row", ws.id(), ri, g);
             let key = format!("row{ri}");
             let r = egui::Panel::bottom(id)
+                .show_separator_line(false)
                 .resizable(true)
                 .default_size(sized(s, ws, &key, total * size / 100.0))
                 .size_range(160.0..=(total - 160.0).max(200.0))

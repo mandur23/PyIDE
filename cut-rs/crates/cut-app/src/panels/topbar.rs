@@ -2,7 +2,7 @@
 //! save state, the workspace tabs, Automation and Export. Workspaces the native app does not have yet and the features
 //! behind Automation it has not ported show disabled.
 
-use eframe::egui::{self, Align, Button, Color32, CornerRadius, Layout, RichText, Stroke, Vec2};
+use eframe::egui::{self, Align, Button, Color32, CornerRadius, Layout, RichText, Vec2};
 
 use crate::files::now_ms;
 use crate::i18n::{tr, trf};
@@ -85,19 +85,7 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui) {
                 break;
             }
             let active = ws == current;
-            let color = if active {
-                pal.gray[12]
-            } else if ws.ready() {
-                pal.gray[9]
-            } else {
-                pal.gray[6]
-            };
-            let b =
-                Button::new(RichText::new(tr(w)).color(color).size(13.5)).frame(false).min_size(Vec2::new(0.0, 30.0));
-            let r = ui.add_enabled(ws.ready(), b);
-            if active {
-                ui.painter().hline(r.rect.x_range(), r.rect.bottom() + 4.0, Stroke::new(2.0, pal.accent));
-            }
+            let r = crate::theme::tab(ui, &pal, &tr(w), active, ws.ready(), 30.0, egui::Sense::click());
             if r.clicked() {
                 crate::workspaces::set(s, ws);
             }
@@ -114,7 +102,9 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui) {
                     }
                 }
             });
-            r.on_disabled_hover_text(tr("Not available yet"));
+            if !ws.ready() {
+                r.on_hover_text(tr("Not available yet"));
+            }
         }
         if !rest.is_empty() {
             ui.menu_button("»", |ui| {
