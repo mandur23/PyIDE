@@ -677,6 +677,8 @@
 
 ## CI와 릴리스
 
+- **작업 폴더에 다른 세션의 커밋 안 된 파일이 있으면 그 폴더에서 릴리스하지 않습니다(0.3.39).** 빌드는 `main/**`, `renderer/**`를 작업 폴더에서 그대로 싸므로 만들다 만 기능까지 설치 파일에 들어갑니다. 푸시한 커밋의 사본에서 릴리스합니다: 옆 폴더에 `git clone`(origin은 GitHub 주소로), `git config core.autocrlf false`를 원본과 같게 맞춘 뒤 `git rm --cached -r . && git reset --hard`(안 맞추면 줄 끝이 CRLF로 바뀌어 `marketplace/index.json.sig`가 맞지 않는다는 경고가 나오고 실제 릴리스는 1단계에서 멈춥니다), `node_modules`와 `vendor`는 복사(링크는 release가 거부), `cut-rs/target`은 원본으로 가는 정션이어도 됩니다. 끝나면 설치 파일을 원본의 `dist/`로 옮기고, 정션은 `cmd /c rmdir`로 먼저 지운 다음(폴더째 지우면 원본의 빌드 폴더가 지워집니다) 사본을 지우고, 원본에서 `git pull --ff-only`를 합니다. 두 세션이 같이 고친 파일(`verify/ci-suites.json`, `verify/affected.mjs`)은 다른 세션의 줄을 뺀 내용을 `git hash-object -w`와 `git update-index --cacheinfo`로 인덱스에만 넣어 커밋했습니다.
+- **다른 무거운 작업이 도는 중의 스모크 테스트는 한 번의 실패로 판단하지 않습니다(0.3.39).** 다른 세션이 프로세스 12개짜리 벤치를 돌리는 동안 `smoke-build`의 Cut 실행 점검이 70개 중 4개 실패했고, 같은 빌드에 그 점검만 두 번, 스모크 전체를 한 번 다시 돌려 모두 통과했습니다. 실패하면 무엇이 같이 돌고 있는지(`Get-CimInstance Win32_Process`) 먼저 봅니다.
 - **CI는 같은 브랜치에 새 푸시가 오면 진행 중인 실행을 취소합니다(`cancel-in-progress`).** 0.3.12 때 ERD 커밋의 CI가 다음 푸시로 취소되어 그 커밋은 CI 결과 없이 배포됐습니다. 릴리스 스크립트의 `Release <버전>` 커밋도 진행 중인 CI를 취소합니다. 결과가 필요하면 끝날 때까지 푸시하지 않습니다(0.3.23부터 러너 6대로 나눠 약 15분).
 - **CI가 한 묶음에서 하나만 실패하면 그 묶음만 다시 돌립니다(`gh run rerun <id> --failed`).** 로컬에서 같은 화면 크기로 돌려 통과하고, 다시 돌린 CI도 통과하면 정식 릴리스의 CI 확인을 통과합니다. 같은 테스트가 두 번 실패하면 고칩니다.
 - **`npm run release -- <버전>`은 package.json보다 높은 버전만 받습니다.** 미리 버전을 올리지 않습니다. `CHANGELOG.md`에 그 버전 절이 있어야 합니다.
@@ -712,6 +714,7 @@
 
 ## 아직 남은 문제: Code
 
+- CI의 5번 묶음에서 `terminal-split`의 "Exit quits the app"과 `venv-prompt`의 "the requirements were installed with pip install -r requirements.txt"가 한 번씩 실패했습니다(2026-11-20, Release 0.3.39-beta.1 커밋; 같은 코드가 앞 커밋에서는 통과했고 로컬에서는 51/51, 44/44). 실패한 묶음을 다시 돌릴 때마다 다른 점검이 실패했습니다. 원인을 모릅니다.
 - CI에서 가끔 실패: `updater`의 "a signed manifest of another file, copied under this installer's name, is refused"(2026-11-19, 로컬 93/93 통과), `terminal-busy`의 "idle shell"(0.3.36-beta.1).
 
 - 디버그: Run/Debug의 debugpy `--listen`과 JDWP는 다른 로컬 계정이 먼저 접속할 수 있습니다. debugpy 1.8.22의 토큰 방식은 맞지 않습니다.
