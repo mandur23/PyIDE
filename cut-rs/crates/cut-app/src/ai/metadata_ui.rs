@@ -17,6 +17,7 @@ use super::metadata::{Chapter, MarkerLine, Metadata, chapter_text, metadata_prom
 use super::plan::marker_word;
 use crate::auto::dialog;
 use crate::i18n::{tr, trf};
+use crate::panels::dialogs::Titled as _;
 use crate::shell::Shell;
 
 /// Where the words came from.
@@ -169,71 +170,78 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     let chapters = chapter_text(&m.meta.chapters);
     let mut copies: Vec<(String, &str)> = Vec::new();
     let (mut add, mut close) = (false, false);
-    dialog("YouTube Title, Description and Chapters", "cutAiMetadata", 640.0).show(ctx, |ui| {
-        ui.label(RichText::new(tr("Titles")).strong());
-        for t in &m.meta.titles {
-            ui.horizontal(|ui| {
-                ui.label(t);
-                if ui.button(tr("Copy")).clicked() {
-                    copies.push((t.clone(), "The title"));
-                }
-            });
-        }
-        ui.separator();
-        ui.label(RichText::new(tr("Description")).strong());
-        ui.add(egui::TextEdit::multiline(&mut m.description).desired_rows(7).desired_width(f32::INFINITY));
-        ui.horizontal(|ui| {
-            if ui.button(tr("Copy")).clicked() {
-                copies.push((m.description.clone(), "The description"));
+    dialog("YouTube Title, Description and Chapters", "cutAiMetadata", 640.0).show_titled(
+        ctx,
+        tr("YouTube Title, Description and Chapters"),
+        None,
+        |ui| {
+            ui.label(RichText::new(tr("Titles")).strong());
+            for t in &m.meta.titles {
+                ui.horizontal(|ui| {
+                    ui.label(t);
+                    if ui.button(tr("Copy")).clicked() {
+                        copies.push((t.clone(), "The title"));
+                    }
+                });
             }
-            if ui.button(tr("Copy with Chapters")).clicked() {
-                let all = if chapters.is_empty() {
-                    m.description.clone()
-                } else {
-                    format!("{}\n\n{chapters}", super::js::trim(&m.description))
-                };
-                copies.push((all, "The description"));
-            }
-        });
-        ui.separator();
-        ui.label(RichText::new(tr("Chapters")).strong());
-        if chapters.is_empty() {
-            ui.label(tr("No chapters: YouTube needs a video of at least 30 seconds for three chapters of 10 seconds."));
-        } else {
-            ui.label(RichText::new(&chapters).monospace());
-        }
-        if !m.meta.fixed.is_empty() {
-            let notes: Vec<String> = m.meta.fixed.iter().map(|n| tr(n).into_owned()).collect();
-            note(ui, s, &trf("Fixed for YouTube: {notes}", &[("notes", &notes.join(" "))]));
-        }
-        if !m.meta.chapters.is_empty() {
+            ui.separator();
+            ui.label(RichText::new(tr("Description")).strong());
+            ui.add(egui::TextEdit::multiline(&mut m.description).desired_rows(7).desired_width(f32::INFINITY));
             ui.horizontal(|ui| {
                 if ui.button(tr("Copy")).clicked() {
-                    copies.push((chapters.clone(), "The chapters"));
+                    copies.push((m.description.clone(), "The description"));
                 }
-                add = ui
-                    .button(tr("Add as Chapter Markers"))
-                    .on_hover_text(tr("Replaces the sequence's chapter markers (one undo step)"))
-                    .clicked();
+                if ui.button(tr("Copy with Chapters")).clicked() {
+                    let all = if chapters.is_empty() {
+                        m.description.clone()
+                    } else {
+                        format!("{}\n\n{chapters}", super::js::trim(&m.description))
+                    };
+                    copies.push((all, "The description"));
+                }
             });
-        }
-        ui.separator();
-        ui.label(RichText::new(tr("Tags")).strong());
-        let tags = m.meta.tags.join(", ");
-        ui.horizontal(|ui| {
-            ui.label(if tags.is_empty() { "-".to_owned() } else { tags.clone() });
-            if ui.button(tr("Copy")).clicked() {
-                copies.push((tags.clone(), "The tags"));
+            ui.separator();
+            ui.label(RichText::new(tr("Chapters")).strong());
+            if chapters.is_empty() {
+                ui.label(tr(
+                    "No chapters: YouTube needs a video of at least 30 seconds for three chapters of 10 seconds.",
+                ));
+            } else {
+                ui.label(RichText::new(&chapters).monospace());
             }
-        });
-        let from = match m.source {
-            Source::Transcript => tr("Made from the transcript and the markers."),
-            Source::Captions => tr("Made from the captions and the markers."),
-        };
-        let line = [from.into_owned(), trimmed_note(&m.condensed)].into_iter().filter(|x| !x.is_empty());
-        note(ui, s, &line.collect::<Vec<_>>().join(" "));
-        close = ui.button(tr("Close")).clicked();
-    });
+            if !m.meta.fixed.is_empty() {
+                let notes: Vec<String> = m.meta.fixed.iter().map(|n| tr(n).into_owned()).collect();
+                note(ui, s, &trf("Fixed for YouTube: {notes}", &[("notes", &notes.join(" "))]));
+            }
+            if !m.meta.chapters.is_empty() {
+                ui.horizontal(|ui| {
+                    if ui.button(tr("Copy")).clicked() {
+                        copies.push((chapters.clone(), "The chapters"));
+                    }
+                    add = ui
+                        .button(tr("Add as Chapter Markers"))
+                        .on_hover_text(tr("Replaces the sequence's chapter markers (one undo step)"))
+                        .clicked();
+                });
+            }
+            ui.separator();
+            ui.label(RichText::new(tr("Tags")).strong());
+            let tags = m.meta.tags.join(", ");
+            ui.horizontal(|ui| {
+                ui.label(if tags.is_empty() { "-".to_owned() } else { tags.clone() });
+                if ui.button(tr("Copy")).clicked() {
+                    copies.push((tags.clone(), "The tags"));
+                }
+            });
+            let from = match m.source {
+                Source::Transcript => tr("Made from the transcript and the markers."),
+                Source::Captions => tr("Made from the captions and the markers."),
+            };
+            let line = [from.into_owned(), trimmed_note(&m.condensed)].into_iter().filter(|x| !x.is_empty());
+            note(ui, s, &line.collect::<Vec<_>>().join(" "));
+            close = ui.button(tr("Close")).clicked();
+        },
+    );
     let chapters_list = m.meta.chapters.clone();
     s.features.ai.metadata.shown = (!close).then_some(m);
     for (text, what) in copies {

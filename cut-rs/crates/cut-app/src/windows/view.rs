@@ -455,6 +455,10 @@ fn tab_row(
             menu_of(s, &r, panel, in_window);
             drag_tab(s, ui, &r, panel, in_window);
         }
+        // the header of the panel shown, on the rest of the row
+        if let Some((panel, _, _)) = list.iter().copied().find(|x| x.1 && x.2) {
+            crate::panels::header_in_tab_row(s, ui, panel);
+        }
     });
     let rect = ui.min_rect();
     ui.painter().hline(rect.x_range(), rect.bottom() + 2.0, Stroke::new(1.0, pal.gray[3]));

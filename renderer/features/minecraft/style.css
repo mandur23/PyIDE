@@ -226,6 +226,8 @@ body.app-craft.mc-craft-tab:not(.mc-craft-home) #craftHost { display: none !impo
 .mcc-chip { font-size: 11px; padding: 1px 8px; border-radius: 10px; background: var(--gray3); color: var(--gray10); white-space: nowrap; }
 .mcc-chip.sync { background: color-mix(in srgb, var(--green6) 22%, transparent); color: color-mix(in srgb, var(--green6) 45%, var(--gray10)); }
 .mcc-chip.private { background: color-mix(in srgb, var(--blue6) 20%, transparent); color: color-mix(in srgb, var(--blue6) 40%, var(--gray10)); }
+.mcc-chip.mc-build-chip { border: 0; cursor: pointer; font-family: inherit; line-height: inherit; background: color-mix(in srgb, var(--blue6) 22%, transparent); color: color-mix(in srgb, var(--blue6) 45%, var(--gray11)); }
+.mcc-chip.mc-build-chip:hover { background: color-mix(in srgb, var(--blue6) 34%, transparent); }
 .mcc-chip.bad { background: color-mix(in srgb, var(--red) 18%, transparent); color: color-mix(in srgb, var(--red) 45%, var(--gray10)); }
 .mcc-facts { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 12px; min-width: 0; }
 .mcc-server-of { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -546,6 +548,8 @@ img.mcpl-pick-icon { background: none; }
 .mcset-mods-version { font-weight: 400; font-size: 12px; }
 .mcset-health { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .mcset-health-row { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+.mcset-health-fit { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.mcset-health-fit.hidden { display: none; }
 .mcset-health-numbers { margin: 0; padding: 8px 10px; border-radius: 4px; background: var(--gray2); font-family: var(--mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* The Backups tab (backups.js). Its host also has .mcset for the header's look. */

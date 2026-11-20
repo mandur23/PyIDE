@@ -40,6 +40,7 @@ const REASONS = {
   world: { auto: true }, // before a dropped world replaces the level
   settings: { auto: true }, // before a change of level-name or account checks (the players' UUIDs)
   repair: { auto: true }, // before Repair rewrites pyide-server.json
+  update: { auto: true }, // before a newer build of the server replaces its jar
   schedule: { auto: true }, // every N hours while it runs
   stop: { auto: true }, // when it stops and the last backup is more than a day old
   restore: { auto: true }, // what was there before a restore

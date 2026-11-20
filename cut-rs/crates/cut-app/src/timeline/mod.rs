@@ -271,7 +271,9 @@ impl Timeline {
             }
         }
 
-        let bar = Rect::from_min_size(full.min, Vec2::new(full.width(), BAR_H));
+        // the bar is on the panel's tab row when that row had the room for it
+        let inline = crate::panels::header_on_tab_row(ui, "timeline");
+        let bar = Rect::from_min_size(full.min, Vec2::new(full.width(), if inline { 0.0 } else { BAR_H }));
         let corner = Rect::from_min_size(Pos2::new(full.left(), bar.bottom()), Vec2::new(HEADER_W, RULER_H));
         let ruler =
             Rect::from_min_max(Pos2::new(corner.right(), bar.bottom()), Pos2::new(full.right(), corner.bottom()));
@@ -291,7 +293,9 @@ impl Timeline {
             }
         }
 
-        self.bar(ui, bar, app, pal);
+        if !inline {
+            self.bar(ui, bar, app, pal);
+        }
         // Timecode of the playhead, typed into to move it.
         painter.rect_filled(corner, 0.0, pal.gray[2]);
         let tc = Rect::from_min_max(corner.min + Vec2::new(8.0, 6.0), corner.max - Vec2::new(8.0, 6.0));
@@ -345,18 +349,30 @@ impl Timeline {
                 .max_rect(rect.shrink2(Vec2::new(8.0, 3.0)))
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
         );
-        Self::tabs(&mut child, app, pal);
+        let under = child.max_rect().bottom() + 1.5;
+        self.bar_row(&mut child, app, pal, under);
+    }
+
+    /// The room [`Self::bar_row`] needs in a row.
+    pub fn bar_room(&self) -> f32 {
+        if self.tool_bar { 760.0 } else { 440.0 }
+    }
+
+    /// What the bar holds, in a row: the open sequences' tabs (the active one underlined at `under`), the tools when
+    /// the tool bar is on, and at the right snapping, linked selection and the zoom.
+    pub fn bar_row(&mut self, ui: &mut egui::Ui, app: &mut App, pal: &Palette, under: f32) {
+        Self::tabs(ui, app, pal, under);
         if self.tool_bar {
-            child.add_space(10.0);
+            ui.add_space(10.0);
             for t in crate::panels::tools::GROUPS.iter().flat_map(|g| g.iter().copied()) {
                 let glyph = egui::RichText::new(crate::panels::tools::glyph(t)).size(13.0);
-                let b = child.add(egui::Button::new(glyph).selected(app.tool == t)).on_hover_text(tr(t.title()));
+                let b = ui.add(egui::Button::new(glyph).selected(app.tool == t)).on_hover_text(tr(t.title()));
                 if b.clicked() {
                     app.tool = t;
                 }
             }
         }
-        child.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.button(crate::icons::FIT).on_hover_text(tr("Zoom to Sequence")).clicked() {
                 self.zoom_fit(app);
             }

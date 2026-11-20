@@ -19,6 +19,7 @@ use serde_json::{Value as Json, json};
 use super::pictures::{detect_scenes, histogram};
 use super::{Job, Step, Stop, dialog, number};
 use crate::i18n::{tr, trf};
+use crate::panels::dialogs::Titled as _;
 use crate::shell::Shell;
 use crate::state::App;
 
@@ -260,7 +261,7 @@ pub fn poll(s: &mut Shell, playing: bool) {
 pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     let Some(mut o) = s.features.auto.scenes.open else { return };
     let (mut go, mut cancel) = (false, false);
-    dialog("Detect Scene Changes", "cutAutoScenes", 440.0).show(ctx, |ui| {
+    dialog("Detect Scene Changes", "cutAutoScenes", 440.0).show_titled(ctx, tr("Detect Scene Changes"), None, |ui| {
         ui.label(trf(
             "Video clips: {n}. A scene change is where the colours of one frame differ from the frame before by more than the threshold.",
             &[("n", &o.clips.to_string())],
@@ -281,8 +282,8 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
             });
             ui.end_row();
         });
-        ui.horizontal(|ui| {
-            go = ui.button(tr("Detect")).clicked();
+        crate::panels::dialogs::actions(ui, |ui| {
+            go = crate::panels::dialogs::primary(ui, tr("Detect")).clicked();
             cancel = ui.button(tr("Cancel")).clicked();
         });
     });

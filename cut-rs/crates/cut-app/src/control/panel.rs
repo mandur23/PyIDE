@@ -11,6 +11,7 @@ use serde_json::json;
 
 use super::ShellHost;
 use crate::i18n::{tr, trf};
+use crate::panels::dialogs::Titled as _;
 use crate::shell::Shell;
 
 /// The setting that allows external AIs (off by default; the JavaScript Cut's `cut.control.external`, carried over
@@ -195,7 +196,7 @@ fn questions(ctx: &egui::Context, asks: &Rc<RefCell<Asks>>) {
             .resizable(false)
             .default_width(540.0)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
+            .show_titled(ctx, &a.title, None, |ui| {
                 ui.label(&a.message);
                 if !a.rows.is_empty() {
                     egui::Grid::new(("cut-control-rows", a.id)).num_columns(2).show(ui, |ui| {

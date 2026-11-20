@@ -11,6 +11,7 @@ use cut_sidecar::{Job, Phase, Progress, SetupCode, SetupFailure};
 use eframe::egui::{self, ProgressBar, RichText};
 
 use crate::i18n::{tr, trf};
+use crate::panels::dialogs::Titled as _;
 
 /// Which model the dialog is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -278,12 +279,11 @@ impl Setup {
         let (mut go, mut cancel, mut open) = (false, false, true);
         egui::Window::new(self.title())
             .id(egui::Id::unique(self.id()))
-            .open(&mut open)
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .default_width(480.0)
-            .show(ctx, |ui| {
+            .show_titled(ctx, self.title(), Some(&mut open), |ui| {
                 ui.set_max_width(480.0);
                 ui.label(self.intro());
                 for item in self.items() {

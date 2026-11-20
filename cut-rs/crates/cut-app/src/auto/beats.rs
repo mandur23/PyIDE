@@ -16,6 +16,7 @@ use serde_json::{Value as Json, json};
 use super::levels::{Read, read_sound};
 use super::{Job, Step, Stop, dialog};
 use crate::i18n::{tr, trf};
+use crate::panels::dialogs::Titled as _;
 use crate::shell::Shell;
 use crate::state::App;
 
@@ -163,7 +164,7 @@ pub fn poll(s: &mut Shell, playing: bool) {
 pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     let Some(mut every) = s.features.auto.beats.open else { return };
     let (mut go, mut cancel) = (false, false);
-    dialog("Detect Beats", "cutAutoBeats", 420.0).show(ctx, |ui| {
+    dialog("Detect Beats", "cutAutoBeats", 420.0).show_titled(ctx, tr("Detect Beats"), None, |ui| {
         ui.label(tr("Finds the tempo and the beats of the clip and puts beat markers on them. Edits snap to markers."));
         egui::Grid::new("cut-auto-beats").num_columns(2).show(ui, |ui| {
             ui.label(tr("Markers"));
@@ -181,8 +182,8 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
                 });
             ui.end_row();
         });
-        ui.horizontal(|ui| {
-            go = ui.button(tr("Detect")).clicked();
+        crate::panels::dialogs::actions(ui, |ui| {
+            go = crate::panels::dialogs::primary(ui, tr("Detect")).clicked();
             cancel = ui.button(tr("Cancel")).clicked();
         });
     });

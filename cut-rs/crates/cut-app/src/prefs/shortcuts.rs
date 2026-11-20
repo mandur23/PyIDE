@@ -142,15 +142,15 @@ pub fn editor(s: &mut Shell, ctx: &egui::Context) {
             ui.label(RichText::new(text).color(Color32::from_rgb(0xe0, 0x60, 0x60)));
         }
         ui.separator();
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button(tr("Cancel")).clicked() {
-                close = true;
+        crate::panels::dialogs::actions(ui, |ui| {
+            if crate::panels::dialogs::primary_if(ui, clash.is_empty(), tr("Save")).clicked() {
+                save = true;
             }
             if ui.add_enabled(d.any_modified(), egui::Button::new(tr("Reset All"))).clicked() {
                 d.reset_all();
             }
-            if ui.add_enabled(clash.is_empty(), egui::Button::new(tr("Save"))).clicked() {
-                save = true;
+            if ui.button(tr("Cancel")).clicked() {
+                close = true;
             }
         });
     });

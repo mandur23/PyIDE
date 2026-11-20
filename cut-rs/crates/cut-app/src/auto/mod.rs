@@ -23,6 +23,7 @@ use eframe::egui::{self, Align2, ProgressBar, Vec2};
 use serde_json::{Map, Value as Json};
 
 use crate::i18n::{tr, trf};
+use crate::panels::dialogs::Titled as _;
 use crate::shell::Shell;
 
 /// What an analysis thread is handed: whether to stop, whether to wait for the player, and where to put its progress.
@@ -201,12 +202,12 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     if let Some((title, f, paused, text)) = running {
         ctx.request_repaint_after(Duration::from_millis(50));
         let mut stop = false;
-        egui::Window::new(title)
+        egui::Window::new(title.clone())
             .id(egui::Id::unique("cut-auto-task"))
             .collapsible(false)
             .resizable(false)
             .anchor(Align2::CENTER_TOP, Vec2::new(0.0, 60.0))
-            .show(ctx, |ui| {
+            .show_titled(ctx, &title, None, |ui| {
                 ui.add(ProgressBar::new(f).desired_width(260.0));
                 let line = if paused {
                     tr("Paused while playing").into_owned()

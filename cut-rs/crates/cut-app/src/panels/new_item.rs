@@ -12,6 +12,7 @@ use eframe::egui::{self, Align2, Button, Color32, Vec2};
 use serde_json::json;
 
 use crate::i18n::{tr, trf};
+use crate::panels::dialogs::Titled as _;
 use crate::shell::Shell;
 
 /// The blue a new Color Matte starts as (`#2f6fdb`).
@@ -137,7 +138,7 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     };
     if let Some(mut color) = s.project.new_item.matte {
         let mut done = None;
-        window("Color Matte", "cutMatteDialog").default_width(360.0).show(ctx, |ui| {
+        window("Color Matte", "cutMatteDialog").default_width(360.0).show_titled(ctx, tr("Color Matte"), None, |ui| {
             ui.horizontal(|ui| {
                 ui.label(tr("Color"));
                 let mut v = [color.r(), color.g(), color.b()];
@@ -145,8 +146,8 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
                     color = Color32::from_rgb(v[0], v[1], v[2]);
                 }
             });
-            ui.horizontal(|ui| {
-                if ui.button(tr("OK")).clicked() {
+            crate::panels::dialogs::actions(ui, |ui| {
+                if crate::panels::dialogs::primary(ui, tr("OK")).clicked() {
                     done = Some(true);
                 }
                 if ui.button(tr("Cancel")).clicked() {
@@ -161,25 +162,30 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     }
     if let Some(ids) = s.project.new_item.unused.clone() {
         let mut done = None;
-        window("Remove Unused Media", "cutRemoveUnused").default_width(480.0).show(ctx, |ui| {
-            ui.label(trf(
+        window("Remove Unused Media", "cutRemoveUnused").default_width(480.0).show_titled(
+            ctx,
+            tr("Remove Unused Media"),
+            None,
+            |ui| {
+                ui.label(trf(
                 "Remove these {n} media items that no sequence uses from the project? The files stay where they are.",
                 &[("n", &ids.len().to_string())],
             ));
-            egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
-                for m in ids.iter().filter_map(|id| s.app.project().media(*id)) {
-                    ui.label(&m.name).on_hover_text(&m.path);
-                }
-            });
-            ui.horizontal(|ui| {
-                if ui.button(tr("Remove")).clicked() {
-                    done = Some(true);
-                }
-                if ui.button(tr("Cancel")).clicked() {
-                    done = Some(false);
-                }
-            });
-        });
+                egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                    for m in ids.iter().filter_map(|id| s.app.project().media(*id)) {
+                        ui.label(&m.name).on_hover_text(&m.path);
+                    }
+                });
+                crate::panels::dialogs::actions(ui, |ui| {
+                    if crate::panels::dialogs::primary(ui, tr("Remove")).clicked() {
+                        done = Some(true);
+                    }
+                    if ui.button(tr("Cancel")).clicked() {
+                        done = Some(false);
+                    }
+                });
+            },
+        );
         if let Some(yes) = done {
             s.project.new_item.unused = None;
             // checked again: an edit may have used one since the list was made

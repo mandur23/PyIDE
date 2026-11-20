@@ -15,6 +15,9 @@ try {
   await press('Alt+F12');
   await until(`ide.terminal.sessions().length === 1 && ide.terminal.sessions()[0].id`, 'session started');
   await until(prompt, 'Command Prompt at its prompt', 20000);
+  // What the shell runs as it starts may still be attached to its console when the prompt is first drawn (the tab asked
+  // once on CI, 0.3.36-beta.1): the other closes of this test wait the same moment after a prompt.
+  await sleep(1500);
 
   // An idle shell closes without a question.
   await click('.term-tab.active .term-tab-close');

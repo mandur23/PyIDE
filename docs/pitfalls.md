@@ -116,6 +116,8 @@
 
 ## 공통: 테스트
 
+- **스위트를 띄우는 방법이 CI와 다르면 그것만으로 실패합니다.** `verify/affected.mjs`의 첫 판은 `spawnSync`로 닫힌 입력에 물려 띄웠고, `private-share`가 거기서만 실패한 뒤 스크립트까지 멈췄습니다. 지금은 `verify/ci-shard.mjs`와 같이 띄웁니다(스위트의 `args`, 물려받은 입력, 시간 초과 때 프로세스 트리 종료). 테스트 도우미가 지우는 폴더도 봅니다: `tests/engine.rs`의 `open_text(name)`은 `cut-app-engine-<name>-<pid>`를 비우므로, 같은 이름의 폴더에 미리 둔 파일은 사라집니다("Media Offline").
+
 - **프로젝트 트리는 자식 폴더 하나뿐인 폴더를 한 줄로 합칩니다(`projectTree.compactFolders`, 기본 켜짐).** 그래서 `pkg`, `src` 줄을 찾던 `tests-tree-menu`와 `run-roots`가 CI에서 실패했습니다. 트리 모양을 시험하지 않는 테스트는 시작할 때 이 설정을 끕니다. 합치기 자체는 `tree`와 `java-assist`가 시험합니다.
 - **한국어 화면의 영어 검사(`verify/i18n-lib.mjs`)는 `0.3.23-beta.2`의 `beta`를 영어로 봤습니다.** 베타 버전으로 처음 CI를 돌렸을 때 `updater`와 `report-update`가 실패했습니다. 버전 표기는 `-beta.N`까지 버전으로 지웁니다.
 - **CI 화면(1024x720)에서는 목록 아래쪽 줄이 가려져 있습니다.** 그 자리에 마우스를 바로 올리면 다른 요소를 가리킵니다(`spring-boot`의 의존성 설명). 마우스를 옮기기 전에 그 줄을 `scrollIntoView`로 보이게 합니다. 고친 테스트는 `PYIDE_TEST_VIEWPORT=1024x720`으로도 돌립니다.
@@ -297,6 +299,10 @@
 - **Docker Desktop이 연 포트는 netstat에 없습니다.** `docker run -p 127.0.0.1:16379:6379` 뒤에 `Test-NetConnection`은 성공하는데 `netstat -ano`와 `Get-NetTCPConnection`에는 그 포트가 없습니다(WSL 네트워크에서 넘겨 줍니다). 포트 창은 netstat과 프로세스 트리로 목록을 만들어서, 이 포트를 볼 방법이 없었습니다. 자동화 플러그인이 `docker compose ps`의 Publishers를 `ide.ports.setContainers`로 넘기고, main이 듣는 프로세스가 없어도 행을 만듭니다. 가짜 docker로 한 테스트는 테스트가 직접 연 포트(netstat에 보임)를 써서 이 경우를 지나쳤고, 실제 Docker로 돌려 보고서야 드러났습니다. `verify/automation.mjs`는 아무도 듣지 않는 포트도 하나 넣어 봅니다.
 
 ## Craft: 서버, 런처, Market
+
+- **카드마다 부르는 IPC는 "답을 못 받음"을 오류로 던지지 않습니다.** `minecraft:buildCheck`가 Paper에 그 버전의 빌드가 없을 때 예외를 던지자, 렌더러가 잡아도 메인의 "Error occurred in handler"가 진단 목록에 쌓여(목록을 읽을 때마다 20건) `craft-polish`의 "IDE 내부 오류 없음"이 실패했습니다. 예상되는 실패(오프라인, 그 버전 없음)는 핸들러가 잡아 `{supported: false, unknown}`으로 돌려줍니다.
+
+- **"가끔 실패"의 원인은 넷 중 셋이 테스트가 한 시점만 본 것이었습니다(2026-11-20).** `minecraft-health-core`는 상태가 6번째 줄에서 바뀌는데 8줄이 다 온 판정을 기다리지 않았고, `minecraft-players-core`는 기록이 쓰이기를 30 ms만 기다렸고, `updater`는 Electron이 1분 안에 뜨지 못한 것을 "거절되지 않음"으로 읽었습니다(이제 한 번 더 돌리고, 거절이 없으면 대신 온 것을 적습니다). 기다릴 조건을 "처음 그 상태가 된 때"가 아니라 "확인하려는 값이 다 찬 때"로 씁니다. `sleep(n)` 뒤에 읽는 대신 `waitFor(조건)`을 씁니다.
 
 - **서버 JVM의 인코딩은 `launch()`가 정합니다.** 메인은 출력을 UTF-8로 읽고 stdin도 UTF-8로 쓰는데, 한국어 Windows의 JVM은 파이프에 MS949를 씁니다(Java 21, 25에서 확인). 한글 채팅이 깨진 채 30일 저장됐습니다. `desc.jvmArgs`가 기본 옵션을 대체하므로 플래그는 그 밖에 두고, `verify/minecraft.mjs`가 `-Xmx`와 GC 옵션의 순서를 고정해서 맨 앞에 둡니다. stdin은 바닐라가 UTF-8로 고정이고 Paper는 기본 문자셋을 쓰므로 `file.encoding`이 맞춥니다. `stdin.encoding`만으로는 부족합니다.
 - **26.3은 콘솔에 보내는 말을 `System chat: ` 뒤에 찍습니다.** `MinecraftServer.sendSystemMessage`가 로그 형식을 바꿨고, 서버 자신이 콘솔의 `CommandSource`라서 명령의 답과 방송(접속, 사망, 업적)이 전부 이 형식입니다. 1.20.1에는 없고 채팅은 로거가 달라서 없습니다. 위키에도 대역에도 없어서 `javap`로 클래스를 읽고서야 찾았습니다. 줄 형식의 가정은 실제 클래스에서 확인합니다.
@@ -587,6 +593,15 @@
 
 - **대화상자의 버튼 줄에 `ui.with_layout(right_to_left)`를 그대로 쓰지 않습니다.** 오른쪽 정렬 레이아웃은 창이 가질 수 있는 높이를 전부 차지합니다. 줄바꿈된 글이 있는 설정 페이지에서 창이 그만큼 길어지고 버튼이 그 한가운데에 놓였습니다. `allocate_ui_with_layout`으로 버튼 높이만큼만 줍니다(`panels::dialogs::buttons`). 설정 창의 페이지는 고정 크기(`PAGE_W`, `PAGE_H`)의 스크롤 영역 안에 그리고, 페이지 안에서 `set_max_width`를 그보다 크게 잡지 않습니다(560으로 잡은 두 페이지가 창을 넓혔습니다). `tests/pointer.rs`가 페이지마다 닫기 버튼의 자리가 같은지 봅니다.
 
+- **한 프레임 뒤에야 준비되는 것을 기다리는 패널은 다음 프레임을 스스로 청합니다.** Lumetri 스코프는 프로그램 모니터가 그린 뒤에 셀 수 있는데(모니터가 패널보다 나중에 그립니다), 처음 본 프레임에 그림이 없으면 그냥 돌아갔습니다. 가만히 있는 창은 다시 그리지 않으므로 마우스를 움직일 때까지 비어 있었습니다. 테스트 하네스는 매 단계 프레임을 그려서 이 문제를 볼 수 없습니다. 실제 앱을 띄워 가만히 둔 사진으로 확인합니다(`request_repaint_after`).
+- **표의 열은 좁아지면 이름부터 지킵니다.** 프로젝트 패널의 이름 열이 "남는 폭"이라, 패널이 좁으면 다섯 글자만 남고 숫자 열은 멀쩡했습니다. 이름에 최소 폭을 주고 덜 중요한 열부터 접습니다.
+
+- **대화상자의 버튼 줄은 `dialogs::actions`와 `dialogs::primary`로 그립니다.** 대화상자마다 `ui.horizontal`에 `ui.button`을 늘어놓아, 설정·새 시퀀스 창(오른쪽, 큰 버튼, 강조)과 나머지(왼쪽, 작은 버튼)가 달랐습니다. `actions`는 버튼을 넣은 순서 그대로 대화상자 내용의 오른쪽 끝에 맞춥니다(전 프레임의 줄 폭으로 자리를 잡습니다). 폭의 기준은 `available_width`가 아니라 내용의 폭(`min_rect`)입니다: 내용에 맞춰 크기가 정해지는 창에서 `available_width`는 화면만큼 넓어서, 그 폭의 줄이 창을 넓혔습니다.
+- **`egui::Window`의 제목은 가운데에만 놓입니다.** 제목 뒤에 늘어나는 빈칸을 여러 개 붙여 왼쪽으로 밀어 봤는데, 빈칸 사이의 간격(칸마다 8pt)이 창의 최소 폭을 330pt 늘려 되돌렸습니다. 그래서 창 모양 대화상자는 `egui::Window`의 `show` 대신 `dialogs::Titled`의 `show_titled(ctx, 제목, 닫을 수 있으면 Some(&mut open), |ui| …)`로 띄웁니다: egui의 머리줄을 끄고(`title_bar(false)`) 제목을 왼쪽에, 닫기 ×를 오른쪽에 직접 그립니다(×의 자리는 전 프레임의 내용 폭). `.open(&mut x)`를 같이 쓰면 egui의 닫기 버튼이 없어 닫히지 않으니 `show_titled`의 인자로 넘깁니다. 제목은 `tr("…")`를 그대로 넘깁니다(`&tr(…)`는 clippy `needless_borrows_for_generic_args`).
+- **패널의 머리줄은 탭 줄에 자리가 있으면 거기에 그립니다**(`panels::header_in_tab_row`, 두 모니터와 타임라인). 패널은 `header_on_tab_row`로 이번 프레임에 그렸는지 보고 자기 줄을 생략합니다. 탭 줄이 좁으면(모니터 230pt, 타임라인 440pt, 도구 막대를 켜면 760pt 미만) 전처럼 두 줄입니다. 타임라인의 줄은 `Timeline::bar_row` 하나가 두 자리에서 그립니다: 줄의 높이에 기대는 값(활성 시퀀스의 밑줄 위치)은 `max_rect`에서 읽지 말고 인자로 받습니다(`ui.horizontal`의 `max_rect`는 줄의 기본 높이뿐이라 밑줄이 탭 가운데로 올라갑니다).
+- **버튼 줄을 한꺼번에 바꿀 때는 `ui.button(tr(…))`만 찾으면 빠집니다.** 첫 버튼이 `ui.add_enabled(…, Button::new(tr(…)))`인 줄(음량 맞추기, 키보드 단축키, 미디어 다시 연결)은 2차에서 빠져 그림을 보고서야 찾았습니다. 꺼질 수 있는 강조 버튼은 `dialogs::primary_if(ui, enabled, text)`입니다. 바꾼 뒤에는 `add_enabled`와 `right_to_left`로도 한 번 더 찾습니다.
+- **대화상자의 높이가 바뀐 직후에는 두 프레임을 돌린 뒤 누릅니다(kittest).** 단축키 편집기에서 충돌 안내 두 줄이 사라지면 대화상자가 그 프레임에 짧아지고 다음 프레임에 다시 가운데로 옮겨집니다. `h.step()` 한 번 뒤의 `click()`은 한 프레임 전 자리를 눌러 저장 버튼을 19pt 빗나갔습니다(`text_prefs.rs`, 버튼 줄을 `actions`로 바꾸면서 드러남; 원인은 추정이고 두 프레임으로 통과하는 것만 확인했습니다). 또 `get_by_label("제목")`은 창 자체(창의 이름)와 제목 글자를 둘 다 찾아 실패하니 `get_by_role_and_label(Role::Label, …)`로 고릅니다.
+
 ## Cut: 테스트
 
 - **CSP의 `media-src`에 `blob:`이 없어 `<video>`로 내보낸 파일을 재생할 수 없습니다.** `verify/cut-export.mjs`는 그 단계에서만 `Page.setBypassCSP`를 켜고 새로고침합니다. 이 설정은 지금 문서에는 적용되지 않습니다.
@@ -682,8 +697,10 @@
 
 ## 아직 남은 문제: Cut
 
+- `verify/cut-rust-launch.mjs`의 "Electron waits for the box to be closed"가 흔들립니다(2026-11-20, 7번 중 2번 실패: 한 번은 "a crash at start", 한 번은 "no program"과 "a crash at start"). 메시지 상자가 뜬 뒤 1초 안에 Electron이 끝난 것으로 읽혔습니다. 원인을 모릅니다: 그때 바꾼 것은 `cut-rs`뿐이고 이 경로(`main.js`의 `showMessageBox`)는 그대로였으며, 다른 테스트가 돌지 않을 때 세 번 연속 통과했습니다. 다시 나오면 끝난 종료 코드와 IDE 로그의 끝을 실패 문구에 넣어 봅니다.
 - `cut-export`의 테스트 2개가 "media m3: audio without an audio stream"으로 한 번 실패했습니다(2026-11-20, 다시 돌리면 통과). %TEMP%의 테스트용 미디어를 지운 직후 여러 테스트가 같은 파일을 동시에 다시 만들 때 생깁니다. `node verify/clean.mjs --all` 뒤의 첫 Rust 전체 실행에서 보이면 그 크레이트만 다시 돌립니다.
 
+- (Rust Cut, 2026-11-20) 회전된 영상은 확인했습니다: `tests/engine.rs`가 테스트 영상의 트랙 헤더 행렬을 90도로 고친 사본을 가져와, 크기가 720x1280으로 읽히고 화면에 시계 방향으로 돌아 세로로 서는지 봅니다(파일을 새로 받거나 인코딩하지 않고 `tkhd`의 36바이트만 고칩니다). B 프레임은 테스트용 1080p 파일(`b_frames: 2`)로 돌고 있습니다. 실제 휴대폰·카메라가 만든 파일은 여전히 확인하지 못했습니다. 아래는 JavaScript Cut 때 적은 것입니다.
 - B 프레임이 있는 스트림, 회전된 영상(90/180/270), 실제 카메라와 휴대폰 파일은 확인하지 못했습니다. 이 PC의 인코더가 B 프레임을 만들지 않고, mp4write는 회전 행렬을 쓰지 못하고, 테스트는 다운로드를 하지 않습니다.
 - 하드웨어 디코더나 인코더가 중간에 실패할 때 소프트웨어로 넘어가는 경로는 강제로 실패시킬 방법이 없어 시험하지 않았습니다.
 - 내보낸 파일은 Chromium으로만 확인했습니다. Windows 미디어 플레이어와 휴대폰은 시험하지 않았습니다.

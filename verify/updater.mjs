@@ -108,7 +108,7 @@ function installerFeed(bytes, { sig = sigOf(bytes), manifest, extra = '', name =
 // One check and download in a fresh Electron process, as an NSIS (or MSI) install would. By default the feed is the
 // installation's default feed (served on 127.0.0.1); custom: it is a folder set by the user. local: the LOCALAPPDATA
 // holding the updater's cache. channel: the setting updates.channel.
-async function downloadFrom(feedDir, { custom = false, local = tempDir('signed-local'), kind = 'nsis', channel = 'stable' } = {}) {
+async function downloadFrom(feedDir, { custom = false, local = tempDir('signed-local'), kind = 'nsis', channel = 'stable', again = true } = {}) {
   const dir = tempDir('signed-run');
   const appDir = path.join(dir, 'app');
   mkdirSync(appDir);
@@ -131,12 +131,15 @@ async function downloadFrom(feedDir, { custom = false, local = tempDir('signed-l
   });
   server.close();
   server.closeAllConnections();
+  // An Electron that never came up or was ended at the minute (a loaded CI runner, once on 2026-11-19) says nothing of
+  // the updater: the case is run once more, in the same cache folder, before it counts.
+  if (!existsSync(out) && again) return downloadFrom(feedDir, { custom, local, kind, channel, again: false });
   const result = existsSync(out) ? JSON.parse(readFileSync(out, 'utf8')) : { error: 'the Electron run wrote no result', logs: [] };
   const pending = path.join(local, 'nano-studio-updater', 'pending');
   return { ...result, read, local, downloads: readdirSync(downloads), downloadsDir: downloads, cached: existsSync(pending) ? readdirSync(pending).filter((f) => f.endsWith('.exe')) : [] };
 }
 // Refused: the error the renderer explains, nothing cached, nothing shown or left in Downloads, and the reason logged.
-const refusal = (r) => r.logs?.find((l) => l.includes('update refused')) || '';
+const refusal = (r) => r.logs?.find((l) => l.includes('update refused')) || `no refusal logged: ${r.error || r.phase || 'no result'}`;
 const isRefused = (r, why = /./) => /UPDATE_SIGNATURE: /.test(r.error || '') && r.phase === 'error' && !r.cached.length && !r.downloads.length && !r.shown?.length && why.test(refusal(r));
 {
   const good = Buffer.from('the installer as it was released\n'.repeat(4000));

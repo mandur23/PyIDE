@@ -10,6 +10,7 @@ use eframe::egui::{self, Align, Color32, Frame, Key, Layout, Rect, RichText, Vec
 
 use crate::i18n::tr;
 use crate::keys;
+use crate::panels::dialogs::Titled as _;
 use crate::shell::Shell;
 use crate::state::Panel;
 use crate::workspaces::Ws;
@@ -273,8 +274,7 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
         .resizable(false)
         .anchor(egui::Align2::CENTER_TOP, Vec2::new(0.0, 90.0))
         .fixed_size(Vec2::new(460.0, 360.0))
-        .open(&mut open)
-        .show(ctx, |ui| {
+        .show_titled(ctx, tr("Find Action"), Some(&mut open), |ui| {
             let field = ui.add(
                 egui::TextEdit::singleline(&mut find.query)
                     .hint_text(tr("Search actions"))

@@ -181,6 +181,30 @@ function memoryAdvice({ memory, ramMB, gameHere = false, lower = false }) {
   return pick ? `${pick}G` : null;
 }
 
+// How much of its memory a run has needed, from the GC log: the most left in use after any collection is an upper bound
+// of what the server holds (a young collection leaves old garbage in the count, so the truth is lower). A heap wants
+// room above that to collect in: ROOM times it, and never under 2 GB. -> {peakAfterMB, minutes, to} where `to` is the
+// smallest step that is enough when it is below what the server has now, else null. Nothing is said before the run
+// is `minMs` old with `minSamples` collections seen: a server that has just started has not shown what it needs.
+const FIT_ROOM = 1.6;
+function createMemoryFit({ now = Date.now, xmxMB = 2048, minMs = 20 * 60000, minSamples = 8 } = {}) {
+  const started = now();
+  let peak = 0;
+  let samples = 0;
+  return {
+    gc(list) { for (const g of list) { samples++; if (g.afterMB > peak) peak = g.afterMB; } },
+    evaluate() {
+      if (!samples) return null;
+      const minutes = Math.floor((now() - started) / 60000);
+      const ready = now() - started >= minMs && samples >= minSamples;
+      const needGB = Math.max(2, (peak * FIT_ROOM) / 1024);
+      const step = STEPS_GB.find((g) => g >= needGB);
+      const to = ready && step && step * 1024 < xmxMB ? `${step}G` : null;
+      return { peakAfterMB: peak, minutes, to };
+    },
+  };
+}
+
 // ---------- automatic restart ----------
 // Causes that come back on every start: restarting only hides them behind a loop.
 const NEVER = new Set(['eula', 'port', 'java', 'dependency', 'memoryTooHigh', 'memory', 'pcMemory', 'world', 'startup']);
@@ -354,5 +378,5 @@ function suggestions({ reasons, memory, ramMB, gameHere = false, view = 10, sim 
 
 module.exports = {
   readEvidence, classify, dependencies, askedToStop, READY, memoryAdvice, toMB, createRestartPolicy, NEVER,
-  createHangWatch, createLoadWatch, parseGc, suggestions, BEHIND, TPS, MB,
+  createHangWatch, createLoadWatch, createMemoryFit, parseGc, suggestions, BEHIND, TPS, MB,
 };

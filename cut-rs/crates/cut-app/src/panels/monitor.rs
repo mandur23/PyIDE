@@ -64,6 +64,22 @@ pub fn picture(ui: &mut egui::Ui, rect: Rect, bg: Color32, picture: Option<Pictu
     fitted
 }
 
+/// The Program monitor's header inside a row: the sequence's name, then at the right its zoom and Full Screen.
+pub fn program_header(s: &mut Shell, ui: &mut egui::Ui) {
+    let Some(name) = s.app.sequence().map(|q| q.name.clone()) else { return };
+    let pal = s.palette.clone();
+    ui.add(egui::Label::new(RichText::new(&name).color(pal.gray[9])).truncate());
+    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        ui.add_space(8.0);
+        let full = Button::new(RichText::new(icons::FULLSCREEN).size(13.0)).frame(false);
+        if ui.add(full).on_hover_text(tr("Full Screen")).clicked() {
+            let ctx = ui.ctx().clone();
+            s.run_action("fullscreen", &ctx);
+        }
+        zoom_select(ui, &mut s.features.view.zoom);
+    });
+}
+
 /// The Program monitor: the active sequence at the playhead.
 pub fn program(s: &mut Shell, ui: &mut egui::Ui) {
     let pal = s.palette.clone();
@@ -73,19 +89,14 @@ pub fn program(s: &mut Shell, ui: &mut egui::Ui) {
     else {
         return;
     };
-    ui.horizontal(|ui| {
-        ui.add_space(8.0);
-        ui.label(RichText::new(&name).color(pal.gray[9]));
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+    // on the row of the panel's tab when that had the room (windows/view.rs), else on a row of its own
+    if !super::header_on_tab_row(ui, "program") {
+        ui.horizontal(|ui| {
             ui.add_space(8.0);
-            let full = Button::new(RichText::new(icons::FULLSCREEN).size(13.0)).frame(false);
-            if ui.add(full).on_hover_text(tr("Full Screen")).clicked() {
-                let ctx = ui.ctx().clone();
-                s.run_action("fullscreen", &ctx);
-            }
-            zoom_select(ui, &mut s.features.view.zoom);
+            program_header(s, ui);
         });
-    });
+    }
+    let _ = &name;
     let controls = 76.0;
     let avail = ui.available_rect_before_wrap();
     let screen = Rect::from_min_max(

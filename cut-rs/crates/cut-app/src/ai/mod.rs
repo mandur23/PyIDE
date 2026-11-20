@@ -41,6 +41,7 @@ use eframe::egui::{self, Align2, ProgressBar, Vec2};
 use serde_json::Value as Json;
 
 use crate::i18n::{tr, trf};
+use crate::panels::dialogs::Titled as _;
 use crate::shell::Shell;
 
 /// What a job hands the UI thread: the edit or the review that follows its answer.
@@ -182,7 +183,7 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
             .collapsible(false)
             .resizable(false)
             .anchor(Align2::CENTER_TOP, Vec2::new(0.0, 60.0))
-            .show(ctx, |ui| {
+            .show_titled(ctx, &j.title, None, |ui| {
                 ui.add(ProgressBar::new(p.fraction as f32).desired_width(260.0));
                 ui.label(progress_line(&p));
                 stop = ui.button(tr("Cancel")).clicked();

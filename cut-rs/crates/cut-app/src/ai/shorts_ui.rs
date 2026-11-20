@@ -16,6 +16,7 @@ use super::highlights::{Ask, Fit, Highlight, complement, highlights_prompt, shor
 use super::js::{T, to_fixed};
 use crate::auto::{dialog, number};
 use crate::i18n::{tr, trf};
+use crate::panels::dialogs::Titled as _;
 use crate::shell::Shell;
 
 /// The review: the highlights, which are kept, and how the video meets the frame.
@@ -180,7 +181,7 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     follow(s);
     if let Some(mut o) = s.features.ai.shorts.ask {
         let (mut go, mut cancel) = (false, false);
-        dialog("Highlights to Shorts", "cutAiHighlights", 460.0).show(ctx, |ui| {
+        dialog("Highlights to Shorts", "cutAiHighlights", 460.0).show_titled(ctx, tr("Highlights to Shorts"), None, |ui| {
             note(ui, s, &tr("Claude picks the best moments from the transcript. You review them, then they become a new 9:16 sequence (1080x1920)."));
             egui::Grid::new("cut-ai-highlights").num_columns(2).show(ui, |ui| {
                 ui.label(tr("Number of highlights"));
@@ -193,8 +194,8 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
                 number(ui, &mut o.max, (5.0, 180.0, 1.0), 0, "s");
                 ui.end_row();
             });
-            ui.horizontal(|ui| {
-                go = ui.button(tr("Find Highlights")).clicked();
+            crate::panels::dialogs::actions(ui, |ui| {
+                go = crate::panels::dialogs::primary(ui, tr("Find Highlights")).clicked();
                 cancel = ui.button(tr("Cancel")).clicked();
             });
         });
@@ -206,7 +207,7 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     let Some(mut r) = s.features.ai.shorts.review.clone() else { return };
     let fps = s.app.sequence().map(|q| q.fps);
     let (mut go, mut cancel) = (false, false);
-    dialog("Review Highlights", "cutAiHighlightsReview", 560.0).show(ctx, |ui| {
+    dialog("Review Highlights", "cutAiHighlightsReview", 560.0).show_titled(ctx, tr("Review Highlights"), None, |ui| {
         note(
             ui,
             s,
@@ -257,8 +258,8 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
         if !trimmed.is_empty() {
             note(ui, s, &trimmed);
         }
-        ui.horizontal(|ui| {
-            go = ui.button(tr("Create Shorts Sequence")).clicked();
+        crate::panels::dialogs::actions(ui, |ui| {
+            go = crate::panels::dialogs::primary(ui, tr("Create Shorts Sequence")).clicked();
             cancel = ui.button(tr("Cancel")).clicked();
         });
     });

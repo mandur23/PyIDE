@@ -13,6 +13,7 @@ use eframe::egui::{self, Align2, Vec2};
 use serde_json::{Value as Json, json};
 
 use crate::i18n::{tr, trf};
+use crate::panels::dialogs::Titled as _;
 use crate::state::App;
 
 /// A placement to run once the question is answered.
@@ -136,11 +137,11 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         .resizable(false)
         .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
         .default_width(440.0)
-        .show(ctx, |ui| {
+        .show_titled(ctx, tr("Clip Mismatch"), None, |ui| {
             ui.label(text);
             ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                if ui.button(tr("Change Sequence Settings")).clicked() {
+            crate::panels::dialogs::actions(ui, |ui| {
+                if crate::panels::dialogs::primary(ui, tr("Change Sequence Settings")).clicked() {
                     said = Some(true);
                 }
                 if ui.button(tr("Cancel")).clicked() {

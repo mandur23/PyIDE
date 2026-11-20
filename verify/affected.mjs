@@ -16,7 +16,7 @@
 // A change marked wide (the core, the harness, a crate everything builds on) says so: its plan is a sample, and the
 // full run is CI's. When CI fails on something the plan left out, add a line to LEARNED with the date and why:
 // that is how the next change of the same file is checked in time.
-import { execFileSync, spawnSync } from 'child_process';
+import { execFileSync, spawn, spawnSync } from 'child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -181,14 +181,33 @@ if (argv.includes('--run')) {
   const logs = path.join(ROOT, 'verify', 'out', 'affected');
   mkdirSync(logs, { recursive: true });
   const failed = [];
+  // A suite is started as verify/ci-shard.mjs starts it (its arguments, this process's input, its whole tree ended at
+  // its timeout): piped into a closed input, private-share failed here though it passes on CI and by hand.
+  const runSuite = (s) => new Promise((resolve) => {
+    const child = spawn(process.execPath, [s.file, ...(s.args || [])], { cwd: ROOT, stdio: ['inherit', 'pipe', 'pipe'], windowsHide: true });
+    let text = '';
+    let timedOut = false;
+    child.stdout.on('data', (d) => { text += d; });
+    child.stderr.on('data', (d) => { text += d; });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+      else child.kill('SIGKILL');
+    }, s.timeout * 60000);
+    child.on('exit', (code) => { clearTimeout(timer); setTimeout(() => resolve({ code, timedOut, text }), 50); });
+  });
   for (const s of chosen) {
     const started = Date.now();
-    const r = spawnSync(process.execPath, [s.file], { cwd: ROOT, encoding: 'utf8', timeout: s.timeout * 60000, maxBuffer: 1 << 28, windowsHide: true });
-    const text = `${r.stdout || ''}${r.stderr || ''}`;
-    const fails = lines(text).filter((l) => l.startsWith('FAIL'));
-    const ok = r.status === 0 && !fails.length;
-    console.log(`${ok ? 'PASS' : 'FAIL'} ${s.name} (${Math.round((Date.now() - started) / 1000)} s)${ok ? '' : `\n${fails.slice(0, 5).map((l) => `     ${l.slice(0, 300)}`).join('\n') || `     exit ${r.status ?? 'timeout'}`}`}`);
-    if (!ok) { failed.push(s.name); writeFileSync(path.join(logs, `${s.name.replace(/[^\w.-]+/g, '_')}.log`), text); }
+    const r = await runSuite(s);
+    const fails = lines(r.text).filter((l) => l.startsWith('FAIL'));
+    const ok = r.code === 0 && !r.timedOut && !fails.length;
+    console.log(`${ok ? 'PASS' : 'FAIL'} ${s.name} (${Math.round((Date.now() - started) / 1000)} s)${ok ? '' : `\n${fails.slice(0, 5).map((l) => `     ${l.slice(0, 300)}`).join('\n') || `     ${r.timedOut ? `no end within ${s.timeout} min` : `exit ${r.code}`}`}`}`);
+    if (!ok) {
+      failed.push(s.name);
+      // some suites empty verify/out as they go
+      mkdirSync(logs, { recursive: true });
+      writeFileSync(path.join(logs, `${s.name.replace(/[^\w.-]+/g, '_')}.log`), r.text);
+    }
   }
   for (const [cmd, args] of rust) {
     const r = spawnSync(cmd, args, { cwd: path.join(ROOT, RUST), encoding: 'utf8', env: { ...process.env, CARGO_INCREMENTAL: '0' }, maxBuffer: 1 << 28, windowsHide: true });
@@ -196,7 +215,7 @@ if (argv.includes('--run')) {
     const bad = lines(text).filter((l) => /^(error|test .* FAILED|thread .* panicked)/.test(l));
     const ok = r.status === 0;
     console.log(`${ok ? 'PASS' : 'FAIL'} ${cmd} ${args.slice(0, 6).join(' ')}${ok ? '' : `\n${bad.slice(0, 8).map((l) => `     ${l.slice(0, 300)}`).join('\n')}`}`);
-    if (!ok) { failed.push(`${cmd} ${args[0]}`); writeFileSync(path.join(logs, `cargo-${args[0]}.log`), text); }
+    if (!ok) { failed.push(`${cmd} ${args[0]}`); mkdirSync(logs, { recursive: true }); writeFileSync(path.join(logs, `cargo-${args[0]}.log`), text); }
   }
   console.log(failed.length ? `\n${failed.length} failed: ${failed.join(', ')} (output in verify/out/affected/)` : '\nall passed');
   process.exit(failed.length ? 1 : 0);

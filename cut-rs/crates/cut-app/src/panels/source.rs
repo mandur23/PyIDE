@@ -33,6 +33,51 @@ fn drag_from(s: &mut Shell, ui: &egui::Ui, r: &egui::Response, video: bool, audi
     }
 }
 
+/// The Source monitor's header inside a row: the name of what is open, the recent clips, then at the right its zoom.
+pub fn header(s: &mut Shell, ui: &mut egui::Ui) {
+    let pal = s.palette.clone();
+    let clip = s.app.edit.source.clip.filter(|c| source::timing(s.app.history.project(), c.item).is_some());
+    let p = s.app.history.project();
+    let name = clip.map(|c| match c.item {
+        SourceItem::Media(id) => p.media(id).map_or_else(String::new, |m| m.name.clone()),
+        SourceItem::Sequence(id) => p.sequence(id).map_or_else(String::new, |q| q.name.clone()),
+    });
+    // with nothing open the panel's tab already says Source
+    if let Some(name) = name {
+        ui.add(egui::Label::new(RichText::new(name).color(pal.gray[9])).truncate());
+    }
+    let recent: Vec<(cut_model::Id, String)> = s
+        .app
+        .edit
+        .source
+        .recent
+        .iter()
+        .filter_map(|id| s.app.project().media(*id).map(|m| (m.id, m.name.clone())))
+        .collect();
+    // the list of clips opened before, once there is one
+    if !recent.is_empty() {
+        // its arrow alone, without a button's edge (the zoom after it keeps its own)
+        ui.scope(|ui| {
+            crate::theme::flat(ui);
+            ui.menu_button("\u{E70D}", |ui| {
+                for (id, n) in recent {
+                    let on = clip.is_some_and(|c| c.item == SourceItem::Media(id));
+                    if ui.selectable_label(on, n).clicked() {
+                        s.app.edit.source.open(SourceClip::media(id));
+                        ui.close();
+                    }
+                }
+            })
+            .response
+            .on_hover_text(tr("Recent Clips"));
+        });
+    }
+    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        ui.add_space(8.0);
+        super::monitor::zoom_select(ui, &mut s.features.view.source_zoom);
+    });
+}
+
 pub fn show(s: &mut Shell, ui: &mut egui::Ui) {
     let pal = s.palette.clone();
     // its own sound device is opened once there is something to hear (opening one takes a few hundred ms)
@@ -56,36 +101,14 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui) {
         SourceItem::Media(id) => p.media(id).map_or_else(String::new, |m| m.name.clone()),
         SourceItem::Sequence(id) => p.sequence(id).map_or_else(String::new, |q| q.name.clone()),
     });
-    ui.horizontal(|ui| {
-        ui.add_space(8.0);
-        ui.label(RichText::new(name.clone().unwrap_or_else(|| tr("Source").into_owned())).color(pal.gray[9]));
-        let recent: Vec<(cut_model::Id, String)> = s
-            .app
-            .edit
-            .source
-            .recent
-            .iter()
-            .filter_map(|id| s.app.project().media(*id).map(|m| (m.id, m.name.clone())))
-            .collect();
-        ui.add_enabled_ui(!recent.is_empty(), |ui| {
-            crate::theme::flat(ui);
-            ui.menu_button("\u{E70D}", |ui| {
-                for (id, n) in recent {
-                    let on = clip.is_some_and(|c| c.item == SourceItem::Media(id));
-                    if ui.selectable_label(on, n).clicked() {
-                        s.app.edit.source.open(SourceClip::media(id));
-                        ui.close();
-                    }
-                }
-            })
-            .response
-            .on_hover_text(tr("Recent Clips"));
-        });
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+    let _ = &name;
+    // on the row of the panel's tab when that had the room (windows/view.rs), else on a row of its own
+    if !super::header_on_tab_row(ui, "source") {
+        ui.horizontal(|ui| {
             ui.add_space(8.0);
-            super::monitor::zoom_select(ui, &mut s.features.view.source_zoom);
+            header(s, ui);
         });
-    });
+    }
     let controls = 76.0;
     let avail = ui.available_rect_before_wrap();
     let screen = Rect::from_min_max(

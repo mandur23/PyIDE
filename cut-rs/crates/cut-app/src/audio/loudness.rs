@@ -16,6 +16,7 @@ use eframe::egui::{self, Align2, ProgressBar, Vec2};
 use serde_json::{Value as Json, json};
 
 use crate::i18n::{tr, trf};
+use crate::panels::dialogs::Titled as _;
 use crate::shell::Shell;
 
 /// The targets offered, LUFS, with their names.
@@ -294,7 +295,7 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
         None => return,
         Some(Open::Sequence { target, task, measured, .. }) => {
             egui::Window::new(tr("Match Loudness")).id(egui::Id::unique("cutAutoLoudness")).collapsible(false).resizable(false)
-                .anchor(Align2::CENTER_CENTER, Vec2::ZERO).default_width(460.0).show(ctx, |ui| {
+                .anchor(Align2::CENTER_CENTER, Vec2::ZERO).default_width(460.0).show_titled(ctx, tr("Match Loudness"), None, |ui| {
                     ui.label(tr("Measures the whole sequence and sets its master gain so the integrated loudness meets the target, with the true peak kept under -1 dBTP."));
                     ui.horizontal(|ui| {
                         ui.label(tr("Target"));
@@ -315,8 +316,8 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
                         let g = master_gain_for(sq, m, *target);
                         ui.label(trf("Master gain {gain} dB (now {now} dB)", &[("gain", &format!("{g:.2}")), ("now", &format!("{now_gain:.2}"))]));
                     }
-                    ui.horizontal(|ui| {
-                        if ui.add_enabled(ready, egui::Button::new(tr("Apply"))).clicked() {
+                    crate::panels::dialogs::actions(ui, |ui| {
+                        if crate::panels::dialogs::primary_if(ui, ready, tr("Apply")).clicked() {
                             apply = true;
                         }
                         if ui.button(tr("Cancel")).clicked() {
@@ -336,7 +337,7 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
                     .resizable(false)
                     .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
                     .default_width(440.0)
-                    .show(ctx, |ui| {
+                    .show_titled(ctx, tr("Match Clip Loudness"), None, |ui| {
                         ui.label(trf(
                             "Clips: {n}. Each clip's volume is set so its own loudness meets the target.",
                             &[("n", &clips.len().to_string())],
@@ -345,8 +346,8 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
                             ui.label(tr("Target"));
                             target_combo(ui, "cut-auto-clip-target", target);
                         });
-                        ui.horizontal(|ui| {
-                            if ui.button(tr("Match")).clicked() {
+                        crate::panels::dialogs::actions(ui, |ui| {
+                            if crate::panels::dialogs::primary(ui, tr("Match")).clicked() {
                                 start = true;
                             }
                             if ui.button(tr("Cancel")).clicked() {
@@ -361,7 +362,7 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
                     .collapsible(false)
                     .resizable(false)
                     .anchor(Align2::CENTER_TOP, Vec2::new(0.0, 60.0))
-                    .show(ctx, |ui| {
+                    .show_titled(ctx, tr("Measuring clip loudness…"), None, |ui| {
                         ui.add(ProgressBar::new(t.fraction()).desired_width(260.0).show_percentage());
                         if ui.button(tr("Cancel")).clicked() {
                             t.stop();

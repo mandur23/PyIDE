@@ -248,5 +248,9 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui) {
     } else {
         trf("{n} captions", &[("n", &n)])
     };
-    ui.label(RichText::new(foot).size(11.0).color(pal.gray[8]));
+    // in from the card's edge, as the Project panel's count is
+    ui.horizontal(|ui| {
+        ui.add_space(10.0);
+        ui.label(RichText::new(foot).size(11.0).color(pal.gray[8]));
+    });
 }

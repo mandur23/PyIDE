@@ -20,6 +20,7 @@ use serde_json::{Value as Json, json};
 use super::agent::{Agent, Done, Event, Turn, Usage};
 use super::claude::Code;
 use crate::i18n::{tr, trf};
+use crate::panels::dialogs::Titled as _;
 use crate::shell::Shell;
 
 const HISTORY_TURNS: usize = 6;
@@ -605,11 +606,11 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     poll(s);
     if let Some(request) = s.features.ai.assistant.notice.clone() {
         let (mut go, mut cancel) = (false, false);
-        crate::auto::dialog("AI Assistant", "cutAsNotice", 500.0).show(ctx, |ui| {
+        crate::auto::dialog("AI Assistant", "cutAsNotice", 500.0).show_titled(ctx, tr("AI Assistant"), None, |ui| {
             ui.label(tr("The AI assistant sends your request and a description of the project (clip, track and marker names and times, captions) to Claude (Anthropic) through Claude Code on this PC, and lets Claude edit the project with Cut's tools."));
             ui.label(RichText::new(tr("When Claude asks to see a frame, a picture of the program monitor is sent too. Files and file paths are not sent, and Claude cannot change files on this PC.")).color(s.palette.gray[8]).size(12.0));
-            ui.horizontal(|ui| {
-                go = ui.button(tr("Continue")).clicked();
+            crate::panels::dialogs::actions(ui, |ui| {
+                go = crate::panels::dialogs::primary(ui, tr("Continue")).clicked();
                 cancel = ui.button(tr("Cancel")).clicked();
             });
         });
@@ -633,11 +634,10 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     let mut input = s.features.ai.assistant.input.clone();
     egui::Window::new(tr("AI Assistant"))
         .id(egui::Id::unique("cut-assistant"))
-        .open(&mut open)
         .default_width(380.0)
         .default_height(520.0)
         .anchor(egui::Align2::RIGHT_TOP, egui::Vec2::new(-8.0, 48.0))
-        .show(ctx, |ui| {
+        .show_titled(ctx, tr("AI Assistant"), Some(&mut open), |ui| {
             let log = s.features.ai.assistant.log.clone();
             egui::ScrollArea::vertical().max_height(ui.available_height() - 110.0).stick_to_bottom(true).show(ui, |ui| {
                 if log.is_empty() {

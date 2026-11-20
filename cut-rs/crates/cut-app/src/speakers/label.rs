@@ -14,6 +14,7 @@ use super::core::{self as K, Labels, Opts, Speaker, Turn, Word};
 use super::embed::{Embedder, embed_media};
 use crate::auto::{Step, Stop};
 use crate::i18n::{tr, trf};
+use crate::panels::dialogs::Titled as _;
 use crate::shell::Shell;
 use crate::speech::text::Caption;
 use crate::state::App;
@@ -424,12 +425,11 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     let (mut ok, mut cancel, mut open) = (false, false, true);
     egui::Window::new(tr("Rename Speaker"))
         .id(egui::Id::unique("cutSpeakerRename"))
-        .open(&mut open)
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
         .default_width(400.0)
-        .show(ctx, |ui| {
+        .show_titled(ctx, tr("Rename Speaker"), Some(&mut open), |ui| {
             ui.horizontal(|ui| {
                 ui.label(tr("Name"));
                 let r = ui.add(egui::TextEdit::singleline(&mut name).hint_text(&unnamed).desired_width(260.0));
@@ -441,8 +441,8 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
                 "Empty: \"{name}\". The name shows in the Transcript panel and in captions that show speakers' names.",
                 &[("name", &unnamed)],
             ));
-            ui.horizontal(|ui| {
-                ok |= ui.button(tr("OK")).clicked();
+            crate::panels::dialogs::actions(ui, |ui| {
+                ok |= crate::panels::dialogs::primary(ui, tr("OK")).clicked();
                 cancel = ui.button(tr("Cancel")).clicked();
             });
         });

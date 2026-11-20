@@ -11,6 +11,7 @@ use eframe::egui::{self, Color32, Rect};
 use super::levels::{self, Read};
 use super::{Job, dialog, number};
 use crate::i18n::{tr, trf};
+use crate::panels::dialogs::Titled as _;
 use crate::shell::Shell;
 use crate::state::App;
 use crate::timeline::layout::Row;
@@ -153,7 +154,7 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     let p = plan(&s.app, &clips, o, &s.features.auto.levels);
     s.timeline.overlay = Some(Overlay { ranges: p.ranges.clone(), tracks: Some(p.changed.clone()) });
     let (mut go, mut cancel) = (false, false);
-    dialog("Remove Silence", "cutAutoSilence", 440.0).show(ctx, |ui| {
+    dialog("Remove Silence", "cutAutoSilence", 440.0).show_titled(ctx, tr("Remove Silence"), None, |ui| {
         ui.label(trf(
             "Clips with sound: {n}. Quiet stretches are ripple-deleted from their tracks and the tracks linked to them.",
             &[("n", &clips.len().to_string())],
@@ -177,8 +178,8 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
                 &[("n", &p.ranges.len().to_string()), ("time", &super::seconds(total(&p.ranges)))],
             )
         });
-        ui.horizontal(|ui| {
-            go = ui.button(tr("Remove")).clicked();
+        crate::panels::dialogs::actions(ui, |ui| {
+            go = crate::panels::dialogs::primary(ui, tr("Remove")).clicked();
             cancel = ui.button(tr("Cancel")).clicked();
         });
     });

@@ -33,6 +33,46 @@ pub fn frame(pal: &Palette, focused: bool) -> Frame {
         .outer_margin(Margin::same(3))
 }
 
+/// The room a tab row needs after its tabs to carry its panel's own header.
+const HEADER_ROOM: f32 = 230.0;
+
+/// Draws the header of the panel shown in a tab row after the row's tabs, when the panel has one that fits a row (the
+/// monitors', the timeline's bar) and the row has the room; the panel then leaves its own header row out
+/// ([`header_on_tab_row`]), and what it shows is that much taller.
+pub fn header_in_tab_row(s: &mut Shell, ui: &mut egui::Ui, panel: &'static str) {
+    let room = match panel {
+        "program" | "source" => HEADER_ROOM,
+        "timeline" if s.app.sequence_id.is_some() => s.timeline.bar_room(),
+        _ => return,
+    };
+    if ui.available_width() < room {
+        return;
+    }
+    ui.add_space(10.0);
+    match panel {
+        "program" => monitor::program_header(s, ui),
+        "source" => source::header(s, ui),
+        _ => {
+            // the active sequence's line sits on the line under the row
+            let under = ui.min_rect().bottom() + 2.0;
+            let pal = s.palette.clone();
+            ui.scope(|ui| {
+                crate::theme::flat(ui);
+                s.timeline.bar_row(ui, &mut s.app, &pal, under);
+                ui.add_space(6.0);
+            });
+        }
+    }
+    let pass = ui.ctx().cumulative_pass_nr();
+    ui.data_mut(|d| d.insert_temp(egui::Id::unique(("cut-header-row", panel)), pass));
+}
+
+/// Whether `panel`'s header was drawn on its tab's row in this pass.
+pub fn header_on_tab_row(ui: &egui::Ui, panel: &'static str) -> bool {
+    let pass = ui.ctx().cumulative_pass_nr();
+    ui.data(|d| d.get_temp::<u64>(egui::Id::unique(("cut-header-row", panel)))) == Some(pass)
+}
+
 /// The whole window's layout for one frame.
 pub fn layout(s: &mut Shell, ui: &mut egui::Ui) {
     if crate::view::fullscreen(s, ui, egui::ViewportId::ROOT) {

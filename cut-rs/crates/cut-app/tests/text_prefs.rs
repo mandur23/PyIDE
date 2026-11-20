@@ -355,6 +355,8 @@ fn a_rebound_key_works_at_once_and_after_a_restart_and_a_conflict_blocks_save() 
     h.step();
     assert!(draft(&h).is_some(), "Save waits while the conflict stands");
     set(&mut h, &|d| d.remove("addMarker", "Ctrl+K"));
+    // two frames: the dialog is shorter without the two lines about the conflict, and is centred again a frame later
+    h.step();
     h.step();
     h.get_by_label("Save").click();
     h.step();

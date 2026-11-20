@@ -13,6 +13,7 @@ use serde_json::{Value as Json, json};
 
 use super::meters::{self, Ballistics};
 use crate::i18n::tr;
+use crate::panels::dialogs::Titled as _;
 use crate::shell::Shell;
 use crate::theme::Palette;
 
@@ -492,18 +493,18 @@ pub fn typing_window(s: &mut Shell, ctx: &egui::Context) {
         Typing::Volume(_, t) | Typing::Pan(_, t) => t.clone(),
     };
     let mut done = None;
-    egui::Window::new(title)
+    egui::Window::new(title.clone())
         .id(egui::Id::unique("cut-mixer-typing"))
         .collapsible(false)
         .resizable(false)
         .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-        .show(ctx, |ui| {
+        .show_titled(ctx, &title, None, |ui| {
             let r = ui.text_edit_singleline(&mut text);
             r.request_focus();
             let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
             let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
-            ui.horizontal(|ui| {
-                if ui.button(tr("OK")).clicked() || enter {
+            crate::panels::dialogs::actions(ui, |ui| {
+                if crate::panels::dialogs::primary(ui, tr("OK")).clicked() || enter {
                     done = Some(true);
                 }
                 if ui.button(tr("Cancel")).clicked() || esc {

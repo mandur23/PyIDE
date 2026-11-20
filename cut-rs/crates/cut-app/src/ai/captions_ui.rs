@@ -16,6 +16,7 @@ use super::captions::{CHUNK, Line, SYSTEM, polish_prompt, translate_prompt, vali
 use super::lines::{Op, diff_chars, is_korean, keep_lines, known, line_break};
 use crate::auto::dialog;
 use crate::i18n::{tr, trf};
+use crate::panels::dialogs::Titled as _;
 use crate::shell::Shell;
 use crate::state::App;
 
@@ -307,7 +308,7 @@ fn track_row(s: &Shell, ui: &mut egui::Ui, track: &mut Id) {
 pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     if let Some(mut o) = s.features.ai.captions.polish.clone() {
         let (mut go, mut cancel) = (false, false);
-        dialog("Polish Captions", "cutAiPolish", 460.0).show(ctx, |ui| {
+        dialog("Polish Captions", "cutAiPolish", 460.0).show_titled(ctx, tr("Polish Captions"), None, |ui| {
             note(ui, s, &tr("Claude fixes spelling, spacing and punctuation; the times stay as they are. You review each change before it is applied."));
             egui::Grid::new("cut-ai-polish").num_columns(2).show(ui, |ui| {
                 track_row(s, ui, &mut o.track);
@@ -329,8 +330,8 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
                     ui.end_row();
                 }
             });
-            ui.horizontal(|ui| {
-                go = ui.button(tr("Polish")).clicked();
+            crate::panels::dialogs::actions(ui, |ui| {
+                go = crate::panels::dialogs::primary(ui, tr("Polish")).clicked();
                 cancel = ui.button(tr("Cancel")).clicked();
             });
         });
@@ -341,7 +342,7 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     }
     if let Some(mut o) = s.features.ai.captions.translate.clone() {
         let (mut go, mut cancel) = (false, false);
-        dialog("Translate Captions", "cutAiTranslate", 460.0).show(ctx, |ui| {
+        dialog("Translate Captions", "cutAiTranslate", 460.0).show_titled(ctx, tr("Translate Captions"), None, |ui| {
             note(ui, s, &tr("Claude translates every caption into a new caption track with the same times; the lines are broken again for the language."));
             egui::Grid::new("cut-ai-translate").num_columns(2).show(ui, |ui| {
                 track_row(s, ui, &mut o.track);
@@ -354,8 +355,8 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
                 });
                 ui.end_row();
             });
-            ui.horizontal(|ui| {
-                go = ui.button(tr("Translate")).clicked();
+            crate::panels::dialogs::actions(ui, |ui| {
+                go = crate::panels::dialogs::primary(ui, tr("Translate")).clicked();
                 cancel = ui.button(tr("Cancel")).clicked();
             });
         });
@@ -390,40 +391,49 @@ fn review_window(s: &mut Shell, ctx: &egui::Context) {
     let Some(mut r) = s.features.ai.captions.review.clone() else { return };
     let fps = s.app.sequence().map(|q| q.fps);
     let (mut apply, mut cancel) = (false, false);
-    dialog("Review Caption Changes", "cutAiPolishReview", 620.0).show(ctx, |ui| {
-        note(ui, s, &tr("Uncheck the changes you do not want. The times do not change; applying is one undo step."));
-        ui.horizontal(|ui| {
-            if ui.button(tr("Select All")).clicked() {
-                r.keep.iter_mut().for_each(|k| *k = true);
-            }
-            if ui.button(tr("Select None")).clicked() {
-                r.keep.iter_mut().for_each(|k| *k = false);
-            }
-            let chosen = r.keep.iter().filter(|k| **k).count();
-            ui.label(trf(
-                "{n} of {total} changes chosen",
-                &[("n", &chosen.to_string()), ("total", &r.changes.len().to_string())],
-            ));
-        });
-        egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-            for (c, keep) in r.changes.iter().zip(r.keep.iter_mut()) {
-                ui.horizontal(|ui| {
-                    ui.checkbox(keep, "");
-                    ui.vertical(|ui| {
-                        if let Some(fps) = fps {
-                            ui.label(RichText::new(cut_time::timecode(c.start, fps)).monospace().size(11.0));
-                        }
-                        diff_view(ui, &c.before, &c.after);
+    dialog("Review Caption Changes", "cutAiPolishReview", 620.0).show_titled(
+        ctx,
+        tr("Review Caption Changes"),
+        None,
+        |ui| {
+            note(
+                ui,
+                s,
+                &tr("Uncheck the changes you do not want. The times do not change; applying is one undo step."),
+            );
+            ui.horizontal(|ui| {
+                if ui.button(tr("Select All")).clicked() {
+                    r.keep.iter_mut().for_each(|k| *k = true);
+                }
+                if ui.button(tr("Select None")).clicked() {
+                    r.keep.iter_mut().for_each(|k| *k = false);
+                }
+                let chosen = r.keep.iter().filter(|k| **k).count();
+                ui.label(trf(
+                    "{n} of {total} changes chosen",
+                    &[("n", &chosen.to_string()), ("total", &r.changes.len().to_string())],
+                ));
+            });
+            egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                for (c, keep) in r.changes.iter().zip(r.keep.iter_mut()) {
+                    ui.horizontal(|ui| {
+                        ui.checkbox(keep, "");
+                        ui.vertical(|ui| {
+                            if let Some(fps) = fps {
+                                ui.label(RichText::new(cut_time::timecode(c.start, fps)).monospace().size(11.0));
+                            }
+                            diff_view(ui, &c.before, &c.after);
+                        });
                     });
-                });
-                ui.separator();
-            }
-        });
-        ui.horizontal(|ui| {
-            apply = ui.button(tr("Apply")).clicked();
-            cancel = ui.button(tr("Cancel")).clicked();
-        });
-    });
+                    ui.separator();
+                }
+            });
+            crate::panels::dialogs::actions(ui, |ui| {
+                apply = crate::panels::dialogs::primary(ui, tr("Apply")).clicked();
+                cancel = ui.button(tr("Cancel")).clicked();
+            });
+        },
+    );
     s.features.ai.captions.review = (!cancel).then_some(r);
     if apply {
         apply_polish(s);

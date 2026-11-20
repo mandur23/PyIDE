@@ -255,3 +255,92 @@ fn import_asks_the_picture_and_sound_engines_what_this_pc_decodes() {
     let webm = import::probe_file(&demo::media::fixture("video/voice.webm")).result.expect("Opus in WebM is imported");
     assert_eq!(webm["audio"]["codec"].as_str(), Some("opus"));
 }
+
+/// A copy of `src` whose video track says it is shown turned by 90 degrees clockwise, as a phone held upright writes
+/// it: the track header's matrix is (0, 1, -1, 0), the pictures in the file stay as they were encoded.
+fn turned_copy(src: &std::path::Path, to: &std::path::Path) {
+    let mut b = std::fs::read(src).expect("the test video");
+    let mut turned = 0;
+    let mut at = 0;
+    while let Some(i) = b[at..].windows(4).position(|w| w == b"tkhd") {
+        let payload = at + i + 4;
+        let matrix = payload + if b[payload] == 1 { 52 } else { 40 };
+        at = payload;
+        // the track's width (16.16) follows the matrix: a sound track has none
+        if matrix + 44 > b.len() || b[matrix + 36..matrix + 40] == [0, 0, 0, 0] {
+            continue;
+        }
+        let m: [i32; 9] = [0, 0x0001_0000, 0, -0x0001_0000, 0, 0, 0, 0, 0x4000_0000];
+        for (k, v) in m.iter().enumerate() {
+            b[matrix + k * 4..matrix + k * 4 + 4].copy_from_slice(&v.to_be_bytes());
+        }
+        turned += 1;
+    }
+    assert_eq!(turned, 1, "the file has one video track to turn");
+    std::fs::write(to, b).unwrap();
+}
+
+/// How much of a column range of a picture is black or white (the test video's strip of frame-number blocks; the rest
+/// of its picture is coloured).
+fn grey_share(px: &[u8], w: u32, h: u32, x0: u32, x1: u32) -> f64 {
+    let mut grey = 0usize;
+    let mut all = 0usize;
+    for y in h / 8..h - h / 8 {
+        for x in x0..x1 {
+            let p = &px[((y * w + x) * 4) as usize..];
+            all += 1;
+            grey += usize::from(p[0].abs_diff(p[1]) < 14 && p[1].abs_diff(p[2]) < 14);
+        }
+    }
+    grey as f64 / all.max(1) as f64
+}
+
+#[test]
+fn a_video_recorded_turned_is_imported_and_shown_upright() {
+    use cut_app::import;
+    use serde_json::json;
+    let dir = std::env::temp_dir().join(format!("cut-app-engine-turned-file-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("phone-upright.mp4");
+    turned_copy(&demo::media::h264_720p(), &file);
+    let probe = import::probe_file(&file).result.expect("a turned H.264 file is imported");
+    assert_eq!(
+        (probe["video"]["w"].as_f64(), probe["video"]["h"].as_f64(), probe["video"]["rotation"].as_f64()),
+        (Some(720.0), Some(1280.0), Some(90.0)),
+        "the size is the picture's as it is shown: 720 wide, 1280 high"
+    );
+    // on the timeline of a 1920 x 1080 sequence, three seconds from the start
+    let mut hist = cut_app::doc::fresh_history();
+    let seq = hist.project().sequences[0].id.as_str().to_owned();
+    let v1 = hist.project().sequences[0].tracks.iter().find(|t| t.kind == cut_model::TrackKind::Video).unwrap().id;
+    let r = hist.apply(&json!({ "type": "importMedia", "media": [probe], "binId": null })).expect("imported");
+    let m = r["ids"][0].as_str().unwrap().to_owned();
+    hist.apply(
+        &json!({ "type": "place", "seqId": seq, "opts": { "source": { "media": m }, "video": v1.as_str(), "at": 0,
+        "out": ticks(3.0), "mode": "overwrite" } }),
+    )
+    .expect("placed");
+    let mut h = open_text("turned", &hist.serialize(), 1280.0, 800.0);
+    h.state_mut().app.set_time(ticks(1.0));
+    settle(&mut h);
+    let (w, hh, px) = h.state().monitors.as_ref().unwrap().program.pixels().expect("the engine's picture");
+    // the clip fits the sequence's height: a column 720/1280 of the height wide, in the middle
+    let cw = (f64::from(hh) * 720.0 / 1280.0).round() as u32;
+    let (left, right) = ((w - cw) / 2, (w + cw) / 2);
+    // the file's strip of blocks lies a little under its top edge: a sixth of the width holds it
+    let strip = cw / 6;
+    let (l, r, mid) = (
+        grey_share(&px, w, hh, left + 2, left + strip),
+        grey_share(&px, w, hh, right - strip, right - 2),
+        grey_share(&px, w, hh, w / 2 - strip / 2, w / 2 + strip / 2),
+    );
+    eprintln!("grey share: left {l:.2}, middle {mid:.2}, right {r:.2} of a {w} x {hh} picture, clip {cw} wide");
+    assert!(grey_share(&px, w, hh, 2, left - 2) > 0.98, "beside the upright picture the frame is empty");
+    assert!(
+        r > 0.35 && l < 0.1 && mid < 0.1,
+        "the strip the file has along its top is along the right: the picture is turned clockwise (left {l:.2}, middle {mid:.2}, right {r:.2})"
+    );
+    drop(h);
+    let _ = std::fs::remove_dir_all(&dir);
+}

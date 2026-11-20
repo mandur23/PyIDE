@@ -212,6 +212,26 @@ try {
     check(e.state === 'overloaded' && e.reasons.memory && e.numbers.heapPct === 93 && e.numbers.fullGcs === 1, `93% left after a full GC: overloaded for memory (${S(e.numbers)})`);
     m.tps(14.2);
     check(m.evaluate().numbers.tps === 14.2, "Paper's tps is among the numbers");
+
+    // how much of its memory a run has needed
+    const n3 = clock();
+    const fit = H.createMemoryFit({ now: n3, xmxMB: 8192 });
+    check(fit.evaluate() === null, 'before any collection nothing is said of the memory a run needs');
+    fit.gc(Array.from({ length: 10 }, (_v, i) => ({ full: false, afterMB: 500 + i * 40, pauseMs: 5 })));
+    n3.go(5 * 60000);
+    let f = fit.evaluate();
+    check(f.peakAfterMB === 860 && f.minutes === 5 && f.to === null, `a run of five minutes shows its peak and advises nothing yet (${S(f)})`);
+    n3.go(16 * 60000);
+    f = fit.evaluate();
+    check(f.to === '2G' && f.minutes === 21, `after twenty minutes a server given 8 GB that kept 860 MB is told 2G is enough (${S(f)})`);
+    fit.gc([{ full: false, afterMB: 3000, pauseMs: 9 }]);
+    check(fit.evaluate().to === '6G', `a later peak of 3000 MB wants room above it: 6G (${S(fit.evaluate())})`);
+    fit.gc([{ full: true, afterMB: 5400, pauseMs: 300 }]);
+    check(fit.evaluate().to === null && fit.evaluate().peakAfterMB === 5400, 'a server that uses what it has is not told to take less');
+    const few = H.createMemoryFit({ now: n3, xmxMB: 8192 });
+    few.gc([{ full: false, afterMB: 300, pauseMs: 2 }]);
+    n3.go(60 * 60000);
+    check(few.evaluate().to === null, 'an hour with one collection seen is not enough to advise from');
   }
 
   // ---------- suggestions ----------
@@ -363,7 +383,9 @@ try {
   const lag = server('lag', { port: 25709, lag: 8, lagEveryMs: 60 });
   const s9 = await start(lag);
   let loadEv = null;
-  for (const end = Date.now() + 10000; Date.now() < end && !loadEv; await sleep(50)) loadEv = app.events.find((x) => x.dir === lag && x.event === 'load' && x.state === 'overloaded');
+  // The state turns at the sixth line, and the lines come 60 ms apart: on a slow runner the first overloaded reading
+  // was taken with six or seven of the eight in (CI, 2026-11-20). The reading waited for is the one that has them all.
+  for (const end = Date.now() + 10000; Date.now() < end && !loadEv; await sleep(50)) loadEv = app.events.find((x) => x.dir === lag && x.event === 'load' && x.state === 'overloaded' && x.numbers.behindCount === 8);
   check(loadEv?.reasons.ticks && loadEv.numbers.behindCount === 8 && S(loadEv.suggestions[0]) === S({ id: 'distance', view: { from: 12, to: 8 }, sim: { from: 10, to: 6 } }),
     `"Can't keep up" lines turn the state to overloaded with the distances to lower (${S(loadEv && { numbers: loadEv.numbers, suggestions: loadEv.suggestions })})`);
   let told = null;

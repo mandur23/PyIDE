@@ -9,6 +9,7 @@ use super::ask::Why;
 use super::claude::Code;
 use crate::auto::dialog;
 use crate::i18n::{tr, trf};
+use crate::panels::dialogs::Titled as _;
 use crate::shell::Shell;
 
 /// A step that waits for the notice's Continue.
@@ -114,10 +115,10 @@ pub fn resume(s: &mut Shell) {
 pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     if s.features.ai.notice.offer.is_some() {
         let (mut go, mut cancel) = (false, false);
-        dialog("Claude", "cutAiTranscribe", 460.0).show(ctx, |ui| {
+        dialog("Claude", "cutAiTranscribe", 460.0).show_titled(ctx, tr("Claude"), None, |ui| {
             ui.label(tr("This needs the words of the sequence. Recognize its speech on this PC first?"));
-            ui.horizontal(|ui| {
-                go = ui.button(tr("Transcribe")).clicked();
+            crate::panels::dialogs::actions(ui, |ui| {
+                go = crate::panels::dialogs::primary(ui, tr("Transcribe")).clicked();
                 cancel = ui.button(tr("Cancel")).clicked();
             });
         });
@@ -129,11 +130,11 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     }
     if s.features.ai.notice.pending.is_some() {
         let (mut go, mut cancel) = (false, false);
-        dialog("Claude", "cutAiNotice", 480.0).show(ctx, |ui| {
+        dialog("Claude", "cutAiNotice", 480.0).show_titled(ctx, tr("Claude"), None, |ui| {
             ui.label(tr("These features send text to Claude (Anthropic) through Claude Code on this PC: the transcript or the caption text, and clip, track and marker names with their times."));
             note(ui, s, &tr("No video, sound or file paths are sent. Claude Code uses your own Claude account."));
-            ui.horizontal(|ui| {
-                go = ui.button(tr("Continue")).clicked();
+            crate::panels::dialogs::actions(ui, |ui| {
+                go = crate::panels::dialogs::primary(ui, tr("Continue")).clicked();
                 cancel = ui.button(tr("Cancel")).clicked();
             });
         });
@@ -149,7 +150,7 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     }
     if let Some((code, detail)) = s.features.ai.notice.explain.clone() {
         let mut close = false;
-        dialog("Claude Code", "cutAiMissing", 500.0).show(ctx, |ui| {
+        dialog("Claude Code", "cutAiMissing", 500.0).show_titled(ctx, tr("Claude Code"), None, |ui| {
             match code {
                 Code::Auth => {
                     ui.label(tr("Claude Code is not signed in, or its sign-in has expired."));
@@ -176,7 +177,7 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     }
     if let Some((_, text)) = s.features.ai.notice.error.clone() {
         let mut close = false;
-        dialog("Claude", "cutAiError", 500.0).show(ctx, |ui| {
+        dialog("Claude", "cutAiError", 500.0).show_titled(ctx, tr("Claude"), None, |ui| {
             ui.label(&text);
             note(ui, s, &tr("Nothing was changed."));
             close = ui.button(tr("Close")).clicked();

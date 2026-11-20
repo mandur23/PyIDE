@@ -15,4 +15,6 @@ The owner asked for these three on 2026-11-20, for every task, without being ask
 2. **Write down what went wrong, where the next change will meet it.** One document: `docs/pitfalls.md`, a line in the section of the app, with the cause and the rule it leaves. When CI or a full run fails on something the plan left out, also add a line to `LEARNED` in `verify/affected.mjs` (the path, the checks, the date and why): the next change of that file then runs them in time. Read the pitfalls of the app before the next change there.
 3. **Leave nothing behind.** `node verify/clean.mjs --all` once no suite, Rust test or release is running (test folders in %TEMP%, `verify/out`, trial builds), and delete the scratch scripts, pictures and logs made along the way. Never `dist/`, `cut-rs/target`, `verify/out/downloads-cache` or `verify/out/*-venv`.
 
+Another session may be working in this same folder (on 2026-11-20 one was building a fourth app while this one worked on Cut). Before the three steps, `git status`: files that are not yours are left out of the commit (`git add` by path, never `-A`), no release is made while they are uncommitted (a build packs the working tree), and `clean.mjs --all` waits, since it removes that session's test folders too.
+
 Scripts that edit files are written to a file and run with node (a shell here-document drops backslashes).

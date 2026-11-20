@@ -106,6 +106,11 @@ npm start -- --mode=craft
 - 끄기는 `<이름>.jar.disabled`로 이름 바꾸기입니다. Market의 기록(`market[id].files`)도 같이 바꿔서 Market이 그 프로젝트를 계속 알고 제거할 수 있습니다. 실행 중인 서버의 jar는 Java가 잡고 있어 거절합니다.
 - 테스트는 직접 만든 jar로 합니다(`verify/craft-mods.mjs`). 실제 모드를 내려받지 않습니다.
 
+### 메모리 추천과 서버 빌드 업데이트
+
+- 메모리 추천은 `health.js`의 `createMemoryFit`입니다. GC 로그의 "정리 뒤 사용량" 최댓값이 서버가 쥐고 있는 메모리의 상한이고(young GC는 old 쓰레기를 포함하므로 실제는 더 적습니다), 그 1.6배와 2GB 중 큰 값을 담는 가장 작은 단계를 권합니다. 실행 20분, GC 8번이 지나기 전에는 말하지 않고, 서버가 버거워하는 중(`lagging`, `overloaded`)에도 말하지 않습니다. 늘리라는 조언은 과부하 쪽(`suggestions`)이 따로 합니다.
+- 빌드 업데이트(`main/features/minecraft.js`의 `buildCheck`, `buildUpdate`, `buildRevert`)는 빌드 번호를 내는 종류(Paper, Purpur, Velocity)의 **같은 버전** 안에서만 합니다. 새 jar는 `server.jar.new`로 받아 체크섬을 확인한 뒤에만 바꾸고, 쓰던 jar는 `server.jar.old`와 `previousBuild`로 한 단계 남깁니다. 최신 빌드는 서버마다 6시간에 한 번만 묻습니다(목록을 읽을 때마다 카드가 묻기 때문입니다). 실행 중인 서버는 거절합니다.
+
 ### 플레이와 참여 (`launcher.js`)
 
 - 게임은 공식 Minecraft Launcher로만 엽니다. 앱은 Microsoft 계정을 다루지 않고, 런처를 설치하지도 않습니다. 런처가 없으면 다운로드 페이지를 안내합니다.

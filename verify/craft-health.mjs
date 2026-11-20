@@ -7,7 +7,8 @@
 // on, and a server that keeps crashing is restarted twice and then left with the reason; a frozen stand-in is reported
 // as not responding, and Restart from its card stops it and starts it again; "Can't keep up" lines turn the card's
 // state to overloaded, the suggestion writes the distances and Undo puts them back; the settings tab's section has the
-// three switches with their defaults. Screenshots in both themes. Port 9744; the stand-ins listen on 25731-25735.
+// three switches with their defaults. Screenshots in both themes. A server given 8 GB whose GC log shows 600 MB kept is told 2G would be enough, and the button writes it. Port 9744;
+// the stand-ins listen on 25731-25736.
 // Usage: node verify/craft-health.mjs
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
@@ -31,13 +32,16 @@ server('onceler', { port: 25732, exitMs: 1200, code: 1, onceOnly: true });
 server('looper', { port: 25733, exitMs: 700, code: 1 });
 server('frozen', { port: 25734, freezeMs: 600 });
 server('laggy', { port: 25735, lag: 10, lagEveryMs: 60 });
+// Given 8 GB and keeping 600 MB: what the GC log of such a run says.
+server('roomy', { port: 25736, gc: Array.from({ length: 10 }, (_v, i) => `[${i + 1}.000s] GC(${i}) Pause Young (Normal) (G1 Evacuation Pause) 900M->${560 + i * 4}M(8192M) 4.210ms`) });
+write(path.join(serverDir('roomy'), 'pyide-server.json'), S({ kind: 'fabric', mc: '26.3', loader: '0.17.0', build: null, java: 21, memory: '8G', launch: { jar: 'server.jar' } }));
 const standIn = path.resolve('verify/fixtures/craft-health/stand-in-server.cjs');
 const java = path.join(work, 'java');
 write(path.join(java, 'bin', 'java.exe'), 'never run');
 const CLOSED = 'http://127.0.0.1:1';
 const env = { PYIDE_CRAFT_HOME: project, PYIDE_INSTALL_ROOT: path.join(work, 'install-root'), PYIDE_MC_LAUNCHER: 'off', PYIDE_MC_JAVA: java,
   PYIDE_MC_SOURCES: S({ mojang: `${CLOSED}/manifest.json`, mojangAssets: `${CLOSED}/assets`, paper: `${CLOSED}/paper`, modrinth: `${CLOSED}/modrinth` }),
-  PYIDE_MC_HEALTH_MS: S({ tick: 100, quiet: 1500, firstPing: 300, every: 200, recheck: 200, failing: 700, baseline: 200, pingTimeout: 300, evaluate: 300, sustain: 600, cpu: 3_600_000, tps: 200, delays: [1500, 2500] }) };
+  PYIDE_MC_HEALTH_MS: S({ tick: 100, quiet: 1500, firstPing: 300, every: 200, recheck: 200, failing: 700, baseline: 200, pingTimeout: 300, evaluate: 300, fit: 1500, sustain: 600, cpu: 3_600_000, tps: 200, delays: [1500, 2500] }) };
 
 const t = await launch({ name: 'craft-health', port: 9744, mode: 'craft', lang: 'ko-KR', projectDir: project, env });
 const { js, until, check, shot, cdp, sleep } = t;
@@ -191,6 +195,23 @@ try {
     `the settings tab has the section with automatic restart off and the two notices on, and the numbers behind the state (${S(section)})`);
   await js(`(document.querySelector('.custom-tab.mcset:not(.hidden) .mcset-section[data-section="health"]').scrollIntoView(), true)`);
   await views(`settings-${width}`);
+  await js(`(ide.run.sessions().filter((s) => s.cfg?.type === 'minecraft-server' && s.running).forEach((s) => s.stop()), true)`);
+
+  // ---------- memory a server does not need ----------
+  await toCards();
+  await pressAt(inCard('roomy', '.mc-start'));
+  await until(`ide.minecraft.runningAt(ide.minecraft.servers().find((s) => s.name === 'roomy').dir)`, 'roomy running', 20000);
+  await js(`(ide.minecraft.serverSettings(ide.minecraft.servers().find((s) => s.name === 'roomy')), true)`);
+  const FIT = `document.querySelector('.custom-tab.mcset:not(.hidden) .mcset-health-fit')`;
+  await until(`!!${FIT}?.querySelector('.mcset-health-fit-apply')`, 'the advice on memory', 20000);
+  const advice = await js(`({ text: ${FIT}.querySelector('.mcset-desc').textContent, button: ${FIT}.querySelector('button').textContent })`);
+  check(/최대 596MB/.test(advice.text) && /허용 8G/.test(advice.text) && /2G면 충분/.test(advice.text) && advice.button === await tr('Set Memory to {memory}', { memory: '2G' }),
+    `a server given far more memory than its run kept is told what would be enough, in Korean (${S(advice)})`);
+  await js(`(${FIT}.scrollIntoView({ block: 'center' }), true)`);
+  await shot('memory-fit.png');
+  await js(`(${FIT}.querySelector('button').click(), true)`);
+  for (let i = 0; i < 50 && JSON.parse(read(path.join(serverDir('roomy'), 'pyide-server.json'))).memory !== '2G'; i++) await sleep(100);
+  check(JSON.parse(read(path.join(serverDir('roomy'), 'pyide-server.json'))).memory === '2G', 'its button writes the memory for the next start');
   await js(`(ide.run.sessions().filter((s) => s.cfg?.type === 'minecraft-server' && s.running).forEach((s) => s.stop()), true)`);
 
   check(t.consoleErrors.length === 0, `no renderer exceptions${t.consoleErrors.length ? ` ${S(t.consoleErrors)}` : ''}`);

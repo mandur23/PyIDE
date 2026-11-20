@@ -386,12 +386,12 @@ pub fn dialog(s: &mut Shell, ctx: &egui::Context) {
         });
         ui.label(&s.features.prefs.relink.status);
         ui.separator();
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        crate::panels::dialogs::actions(ui, |ui| {
+            if crate::panels::dialogs::primary_if(ui, !busy, tr("Find in Folder…")).clicked() {
+                folder = true;
+            }
             if ui.button(tr("Close")).clicked() {
                 close = true;
-            }
-            if ui.add_enabled(!busy, egui::Button::new(tr("Find in Folder…"))).clicked() {
-                folder = true;
             }
         });
     });
@@ -418,8 +418,8 @@ fn shorter(s: &mut Shell, ctx: &egui::Context) {
             ui.label(&q.text);
         }
         ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if ui.button(tr("Relink")).clicked() {
+        crate::panels::dialogs::actions(ui, |ui| {
+            if crate::panels::dialogs::primary(ui, tr("Relink")).clicked() {
                 answer = Some(true);
             }
             if ui.button(tr("Cancel")).clicked() {

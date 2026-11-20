@@ -29,7 +29,7 @@ const STOP_LINE = /^(stop|end|shutdown|restart)$/i;
 const timing = () => {
   let t = {};
   try { t = JSON.parse(process.env.PYIDE_MC_HEALTH_MS || '{}') || {}; } catch {}
-  return { tick: 5000, quiet: 120000, firstPing: 30000, every: 15000, failing: 90000, evaluate: 30000, sustain: 60000, cpu: 60000, tps: 120000, recheck: 60000, baseline: 5000, pingTimeout: 5000, delays: [10000, 30000], ...t };
+  return { tick: 5000, quiet: 120000, firstPing: 30000, every: 15000, failing: 90000, evaluate: 30000, sustain: 60000, cpu: 60000, tps: 120000, fit: 20 * 60000, recheck: 60000, baseline: 5000, pingTimeout: 5000, delays: [10000, 30000], ...t };
 };
 const keyOf = (dir) => path.resolve(dir).toLowerCase();
 
@@ -94,7 +94,8 @@ function createHealthMonitor({ send, readServer, writeServer, describe = () => (
     let partial = '';
     const hang = H.createHangWatch({ now, quietMs: T.quiet, firstPingMs: T.firstPing, everyMs: T.every, failingMs: T.failing, baselineMs: T.baseline, recheckMs: T.recheck });
     const load = H.createLoadWatch({ now, xmxMB: H.toMB(info.memory), sustainMs: T.sustain });
-    const w = { proc, info, hang, load, started, frozen: false, last: null, cpu: null, gcAt: 0, gcOffset: 0, tpsAt: 0, tpsFails: 0, evaluatedAt: now(), pinging: false };
+    const fit = H.createMemoryFit({ now, xmxMB: H.toMB(info.memory), minMs: T.fit });
+    const w = { proc, info, hang, load, fit, started, frozen: false, last: null, cpu: null, gcAt: 0, gcOffset: 0, tpsAt: 0, tpsFails: 0, evaluatedAt: now(), pinging: false };
     watched.set(k, w);
 
     // Every stop the app makes is a line on stdin; so is an owner typing "stop" in the console.
@@ -153,7 +154,10 @@ function createHealthMonitor({ send, readServer, writeServer, describe = () => (
     const r = load.evaluate();
     const extra = describe(info.dir);
     const tips = r.state === 'fine' ? [] : H.suggestions({ reasons: r.reasons, memory: info.memory, ramMB, gameHere: gameHere(info.dir), ...extra });
-    w.last = { state: r.state, numbers: { ...r.numbers, workingSetMB: w.cpu?.wsMB ?? null }, reasons: r.reasons, suggestions: tips, at: now() };
+    // What the run has needed of its memory: said only of a server that keeps up (one that does not has its own advice).
+    const f = w.fit.evaluate();
+    const memoryFit = f && { ...f, from: info.memory, to: r.state === 'fine' ? f.to : null };
+    w.last = { state: r.state, numbers: { ...r.numbers, workingSetMB: w.cpu?.wsMB ?? null }, reasons: r.reasons, suggestions: tips, fit: memoryFit, at: now() };
     emit(info.dir, 'load', { ...w.last, notify: r.notify });
   }
 
@@ -172,7 +176,9 @@ function createHealthMonitor({ send, readServer, writeServer, describe = () => (
       // A line the JVM is still writing is read with the next part.
       const end = buf.lastIndexOf(10) + 1;
       w.gcOffset = size - len + end;
-      w.load.gc(H.parseGc(buf.subarray(0, end).toString('utf8')));
+      const gcs = H.parseGc(buf.subarray(0, end).toString('utf8'));
+      w.load.gc(gcs);
+      w.fit.gc(gcs);
     } catch {} finally { if (fd !== undefined) try { fs.closeSync(fd); } catch {} }
   }
 

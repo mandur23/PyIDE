@@ -633,28 +633,61 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui, inline: bool) {
     }
     outcome(s, ui);
     ui.add_space(8.0);
-    ui.horizontal(|ui| {
-        let start = ui.add_enabled(
-            !busy && problems.is_empty(),
-            Button::new(RichText::new(tr("Export")).strong()).fill(egui::Color32::from_rgb(0x35, 0x74, 0xf0)),
-        );
-        if start.clicked() {
-            go(s, false, false, &ctx);
-        }
-        if ui.add_enabled(problems.is_empty(), Button::new(tr("Add to Queue"))).clicked() {
-            go(s, true, false, &ctx);
-        }
-        if own && ui.button(tr("Cancel Export")).clicked() {
-            cancel(s, None);
-        }
-        if inline {
-            if ui.button(tr("Export Frame…")).clicked() {
-                super::export_frame(s);
+    // The buttons that carry the form out, as every dialog draws its own: of one height, the one that exports filled.
+    // In the Export Media window they stand at its right, Export outermost; in the Export workspace's panel they
+    // follow the form at its left.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Act {
+        Export,
+        Queue,
+        Cancel,
+        Frame,
+        Close,
+    }
+    let acts: &[Act] = if inline {
+        &[Act::Export, Act::Queue, Act::Cancel, Act::Frame]
+    } else {
+        &[Act::Close, Act::Cancel, Act::Queue, Act::Export]
+    };
+    let layout = if inline {
+        egui::Layout::left_to_right(egui::Align::Center)
+    } else {
+        egui::Layout::right_to_left(egui::Align::Center)
+    };
+    let size = egui::Vec2::new(84.0, 28.0);
+    let mut pressed = None;
+    ui.allocate_ui_with_layout(egui::Vec2::new(ui.available_width(), size.y), layout, |ui| {
+        for a in acts {
+            let hit = match a {
+                Act::Export => ui
+                    .add_enabled(
+                        !busy && problems.is_empty(),
+                        Button::new(RichText::new(tr("Export")).strong().color(egui::Color32::WHITE))
+                            .fill(s.palette.primary())
+                            .stroke(egui::Stroke::NONE)
+                            .min_size(size),
+                    )
+                    .clicked(),
+                Act::Queue => {
+                    ui.add_enabled(problems.is_empty(), Button::new(tr("Add to Queue")).min_size(size)).clicked()
+                }
+                Act::Cancel => own && ui.add(Button::new(tr("Cancel Export")).min_size(size)).clicked(),
+                Act::Frame => ui.add(Button::new(tr("Export Frame…")).min_size(size)).clicked(),
+                Act::Close => ui.add(Button::new(tr("Close")).min_size(size)).clicked(),
+            };
+            if hit {
+                pressed = Some(*a);
             }
-        } else if ui.button(tr("Close")).clicked() {
-            s.features.export.open = false;
         }
     });
+    match pressed {
+        Some(Act::Export) => go(s, false, false, &ctx),
+        Some(Act::Queue) => go(s, true, false, &ctx),
+        Some(Act::Cancel) => cancel(s, None),
+        Some(Act::Frame) => super::export_frame(s),
+        Some(Act::Close) => s.features.export.open = false,
+        None => {}
+    }
 }
 
 /// The dialog's last result (`showResult`).

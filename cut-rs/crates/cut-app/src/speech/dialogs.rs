@@ -17,6 +17,7 @@ use super::{Goal, backend, format_bytes, opts, project_terms, set_setting, setti
 use crate::auto::silence::Overlay;
 use crate::auto::{dialog, number};
 use crate::i18n::{tr, trf};
+use crate::panels::dialogs::Titled as _;
 use crate::shell::Shell;
 
 /// What went wrong with a setup, in plain words (`setupError`).
@@ -333,7 +334,7 @@ fn captions_window(s: &mut Shell, ctx: &egui::Context) {
     };
     let Some(f) = s.features.speech.captions.as_mut() else { return };
     let (mut go, mut cancel, mut speakers_mode) = (false, false, None);
-    dialog("Auto Captions", "cutSpeechCaptions", 460.0).show(ctx, |ui| {
+    dialog("Auto Captions", "cutSpeechCaptions", 460.0).show_titled(ctx, tr("Auto Captions"), None, |ui| {
         ui.set_max_width(460.0);
         ui.label(trf(
             "{scope}: {n} clips with speech. Captions of up to two lines, at most 6 seconds each, split at pauses and sentence ends.",
@@ -364,8 +365,8 @@ fn captions_window(s: &mut Shell, ctx: &egui::Context) {
             }
         }
         ui.label(trf("Model: {name}. It runs on this PC.", &[("name", model)]));
-        ui.horizontal(|ui| {
-            go = ui.button(tr("Create Captions")).clicked();
+        crate::panels::dialogs::actions(ui, |ui| {
+            go = crate::panels::dialogs::primary(ui, tr("Create Captions")).clicked();
             cancel = ui.button(tr("Cancel")).clicked();
         });
     });
@@ -480,7 +481,7 @@ fn fillers_window(s: &mut Shell, ctx: &egui::Context) {
     let (p, _, changed) = fillers_plan(s, &ids, range, &o);
     s.timeline.overlay = Some(Overlay { ranges: p.ranges.clone(), tracks: Some(changed) });
     let (mut go, mut cancel) = (false, false);
-    dialog("Remove Filler Words", "cutSpeechFillers", 460.0).show(ctx, |ui| {
+    dialog("Remove Filler Words", "cutSpeechFillers", 460.0).show_titled(ctx, tr("Remove Filler Words"), None, |ui| {
         ui.set_max_width(460.0);
         ui.label(tr("Hesitations (Korean 음, 어, 으음; 그, 저, 뭐 when a pause follows; English um, uh, er, ah, hmm) and long pauses between words are ripple-deleted from their tracks and the tracks linked to them."));
         ui.checkbox(&mut o.fillers, tr("Filler words"));
@@ -501,8 +502,8 @@ fn fillers_window(s: &mut Shell, ctx: &egui::Context) {
                 &[("f", &p.fillers.len().to_string()), ("p", &p.pauses.len().to_string()), ("time", &flow::removed(&p.ranges))],
             )
         });
-        ui.horizontal(|ui| {
-            go = ui.button(tr("Remove")).clicked();
+        crate::panels::dialogs::actions(ui, |ui| {
+            go = crate::panels::dialogs::primary(ui, tr("Remove")).clicked();
             cancel = ui.button(tr("Cancel")).clicked();
         });
     });
@@ -525,7 +526,7 @@ pub fn open_terms(s: &mut Shell) {
 fn terms_window(s: &mut Shell, ctx: &egui::Context) {
     let Some(text) = s.features.speech.terms.as_mut() else { return };
     let (mut ok, mut cancel) = (false, false);
-    dialog("Word List", "cutSpeechTerms", 460.0).show(ctx, |ui| {
+    dialog("Word List", "cutSpeechTerms", 460.0).show_titled(ctx, tr("Word List"), None, |ui| {
         ui.set_max_width(460.0);
         ui.horizontal(|ui| {
             ui.label(tr("Word list"));
@@ -533,8 +534,8 @@ fn terms_window(s: &mut Shell, ctx: &egui::Context) {
         });
         ui.label(RichText::new(tr("Names, products and terms that are spoken. Whisper is told of them, so it writes them the way you spell them here. Saved with the project.")).weak());
         ui.label(RichText::new(tr("Speech already recognized is recognized again with the new list the next time you transcribe or create captions.")).weak());
-        ui.horizontal(|ui| {
-            ok = ui.button(tr("OK")).clicked();
+        crate::panels::dialogs::actions(ui, |ui| {
+            ok = crate::panels::dialogs::primary(ui, tr("OK")).clicked();
             cancel = ui.button(tr("Cancel")).clicked();
         });
     });

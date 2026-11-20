@@ -22,6 +22,7 @@ use cut_time::Ticks;
 use eframe::egui;
 
 use crate::i18n::{tr, trf};
+use crate::panels::dialogs::Titled as _;
 use crate::shell::Shell;
 
 pub use form::Form;
@@ -244,14 +245,13 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
         let screen = ctx.content_rect();
         egui::Window::new(tr("Export Media"))
             .id(egui::Id::unique("cutExportDialog"))
-            .open(&mut open)
             .default_width(560.0)
             .default_height((screen.height() - 80.0).clamp(300.0, 820.0))
             .pivot(egui::Align2::CENTER_CENTER)
             .default_pos(screen.center())
             .resizable(true)
             .collapsible(false)
-            .show(ctx, |ui| {
+            .show_titled(ctx, tr("Export Media"), Some(&mut open), |ui| {
                 egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
                     form::show(s, ui, false);
                 });

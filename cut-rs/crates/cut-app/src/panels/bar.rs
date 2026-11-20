@@ -8,6 +8,7 @@ use crate::edit::source;
 use crate::i18n::tr;
 use crate::icons;
 use crate::keys;
+use crate::panels::dialogs::Titled as _;
 use crate::shell::Shell;
 use crate::state::Panel;
 
@@ -232,8 +233,7 @@ pub fn editor(s: &mut Shell, ctx: &egui::Context) {
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-        .open(&mut open)
-        .show(ctx, |ui| {
+        .show_titled(ctx, tr("Button Editor"), Some(&mut open), |ui| {
             ui.set_width(420.0);
             ui.label(RichText::new(tr("Choose the buttons under the picture.")).color(s.palette.gray[9]));
             ui.add_space(4.0);
@@ -246,8 +246,8 @@ pub fn editor(s: &mut Shell, ctx: &egui::Context) {
                 }
             });
             ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                ok = ui.button(tr("OK")).clicked();
+            crate::panels::dialogs::actions(ui, |ui| {
+                ok = crate::panels::dialogs::primary(ui, tr("OK")).clicked();
                 if ui.button(tr("Reset Layout")).clicked() {
                     for (id, on) in &mut boxes {
                         *on = m.defaults().contains(id) || *id == "playPause";

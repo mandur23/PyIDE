@@ -19,6 +19,115 @@ pub fn when(ms: i64) -> String {
     format!("{}-{}-{} {}:{}:{} UTC", &s[0..4], &s[4..6], &s[6..8], &s[9..11], &s[11..13], &s[13..15])
 }
 
+/// A dialog window's own bar, drawn first in it: the title at the left as a heading, and when the window can be closed
+/// a cross at the right (placed by the width the window's contents had the frame before). -> whether the cross was
+/// pressed. egui's own bar centres the title; the dialogs made with `egui::Modal` have theirs at the left.
+pub fn title_bar(ui: &mut egui::Ui, title: &str, closable: bool) -> bool {
+    let id = ui.scope_id().with("cut-dialog-title");
+    let known: f32 = ui.data(|d| d.get_temp(id)).unwrap_or(0.0);
+    let mut closed = false;
+    ui.horizontal(|ui| {
+        let from = ui.cursor().left();
+        ui.heading(title);
+        if closable {
+            let cross = 22.0;
+            let lead = known - (ui.cursor().left() - from) - cross;
+            ui.add_space(lead.max(8.0));
+            let b = Button::new(RichText::new("\u{E711}").size(12.0)).frame(false).min_size(Vec2::splat(cross));
+            closed = ui.add(b).on_hover_text(tr("Close")).clicked();
+        }
+    });
+    ui.add_space(4.0);
+    closed
+}
+
+/// Shows a window as a dialog of this app: without egui's bar, with [`title_bar`] above what `add` draws. `open`:
+/// the window can be closed, which sets it false (a window whose `open` is false is not shown).
+pub trait Titled<'a> {
+    fn show_titled<R>(
+        self,
+        ctx: &egui::Context,
+        title: impl AsRef<str>,
+        open: Option<&mut bool>,
+        add: impl FnOnce(&mut egui::Ui) -> R,
+    ) -> Option<egui::InnerResponse<Option<R>>>;
+}
+
+impl<'a> Titled<'a> for egui::Window<'a> {
+    fn show_titled<R>(
+        self,
+        ctx: &egui::Context,
+        title: impl AsRef<str>,
+        open: Option<&mut bool>,
+        add: impl FnOnce(&mut egui::Ui) -> R,
+    ) -> Option<egui::InnerResponse<Option<R>>> {
+        if open.as_deref() == Some(&false) {
+            return None;
+        }
+        let closable = open.is_some();
+        let mut closed = false;
+        let out = self.title_bar(false).show(ctx, |ui| {
+            let id = ui.scope_id().with("cut-dialog-title");
+            closed = title_bar(ui, title.as_ref(), closable);
+            let r = add(ui);
+            // what the contents came to: where the cross goes next frame
+            let width = ui.min_rect().width();
+            let known: f32 = ui.data(|d| d.get_temp(id)).unwrap_or(0.0);
+            if closable && (width - known).abs() > 0.5 {
+                ui.data_mut(|d| d.insert_temp(id, width));
+                ui.ctx().request_discard("a dialog found its width");
+            }
+            r
+        });
+        if closed && let Some(o) = open {
+            *o = false;
+        }
+        out
+    }
+}
+
+/// The size of a dialog's button.
+pub const BUTTON: Vec2 = Vec2::new(84.0, 28.0);
+
+/// A row of a dialog's own buttons (`ui.button` and [`primary`] inside `add`), at the dialog's right and of one
+/// size, in the order they are added. The row ends where the dialog's contents end, placed by its width of the frame before (a right-to-left layout
+/// would turn the order around, and the order is each dialog's own: the button that carries it out first).
+pub fn actions<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let id = ui.next_auto_id().with("cut-dialog-actions");
+    let was: f32 = ui.data(|d| d.get_temp(id)).unwrap_or(0.0);
+    // to the right edge of what the dialog holds above the row: a window sized by its contents has no width of its own
+    // to measure from (the width it may take is the screen's, and a row that wide would widen it)
+    let lead = (ui.min_rect().width() - was).max(0.0);
+    let row = ui.horizontal(|ui| {
+        ui.spacing_mut().interact_size.y = BUTTON.y;
+        ui.spacing_mut().button_padding = Vec2::new(14.0, 5.0);
+        ui.add_space(lead);
+        let from = ui.cursor().left();
+        let out = add(ui);
+        (out, ui.min_rect().right() - from)
+    });
+    let (out, width) = row.inner;
+    if (width - was).abs() > 0.5 {
+        ui.data_mut(|d| d.insert_temp(id, width));
+        // The row was placed by a width that is not its own (none yet, when the dialog opens): this pass is drawn
+        // again with the right one, so the buttons are never shown, or pressed, a row's width off their place.
+        ui.ctx().request_discard("a dialog's button row found its width");
+    }
+    out
+}
+
+/// The button that carries a dialog out (OK, Export, Apply): filled, as in every dialog.
+pub fn primary(ui: &mut egui::Ui, text: impl Into<String>) -> egui::Response {
+    primary_if(ui, true, text)
+}
+
+/// [`primary`], dimmed and not to be pressed unless `enabled`.
+pub fn primary_if(ui: &mut egui::Ui, enabled: bool, text: impl Into<String>) -> egui::Response {
+    let t = RichText::new(text).size(13.5).color(egui::Color32::WHITE);
+    let b = Button::new(t).fill(egui::Color32::from_rgb(0x35, 0x74, 0xf0)).stroke(egui::Stroke::NONE).min_size(BUTTON);
+    ui.add_enabled(enabled, b)
+}
+
 /// A dialog's row of buttons, at its right. The row is as tall as its buttons and no taller: a right-to-left layout
 /// left to itself takes all the height its window may have, which set the buttons in the middle of an empty stretch
 /// under the dialog's contents and made the window that much taller (the Settings window on a page with wrapped text).

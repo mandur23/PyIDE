@@ -9,6 +9,7 @@ use eframe::egui::{self, Align2, Color32, DragValue, Vec2};
 use serde_json::{Value as Json, json};
 
 use crate::i18n::{tr, trf};
+use crate::panels::dialogs::Titled as _;
 use crate::shell::Shell;
 use crate::theme::hex;
 
@@ -118,7 +119,7 @@ pub fn window(s: &mut Shell, ctx: &egui::Context) {
     }
     let mut done = None;
     egui::Window::new(tr("Caption Style")).id(egui::Id::unique("cutCaptionStyle")).collapsible(false).resizable(false)
-        .anchor(Align2::CENTER_CENTER, Vec2::ZERO).default_width(420.0).show(ctx, |ui| {
+        .anchor(Align2::CENTER_CENTER, Vec2::ZERO).default_width(420.0).show_titled(ctx, tr("Caption Style"), None, |ui| {
             egui::Grid::new("cut-cap-style").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
                 ui.label(tr("Font"));
                 let shown = fonts.iter().find(|(v, _)| *v == f.font).map_or(f.font.clone(), |(_, l)| l.clone());
@@ -165,8 +166,8 @@ pub fn window(s: &mut Shell, ctx: &egui::Context) {
                 &[("n", &f.timed.0.to_string()), ("m", &f.timed.1.to_string())],
             )).size(11.0));
             crate::speakers::label::style_row(ui, &mut f.speakers);
-            ui.horizontal(|ui| {
-                if ui.button(tr("OK")).clicked() {
+            crate::panels::dialogs::actions(ui, |ui| {
+                if crate::panels::dialogs::primary(ui, tr("OK")).clicked() {
                     done = Some(true);
                 }
                 if ui.button(tr("Cancel")).clicked() {

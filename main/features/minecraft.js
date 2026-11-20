@@ -316,6 +316,73 @@ async function create({ root, name, kind, mc, loader, memory = '2G', port = 2556
   }
 }
 
+// ---------- a newer build of the same server ----------
+// Paper, Purpur and Velocity publish numbered builds of one version (fixes; the world and the plugins stay as they
+// are), and pyide-server.json keeps the build a server was made with. A newer Minecraft version is another matter (the
+// world is converted, plugins may not follow) and is not offered here. Vanilla has one jar a version; Fabric's, Forge's
+// and NeoForge's loaders are installed, not swapped.
+//   buildCheck(dir, fresh?) -> {supported: false} | {supported, title, mc, build, latest, newer, previous}
+//   buildUpdate(dir, log) -> {from, to}     the new jar is downloaded and checked beside the old one, which stays as
+//                                           server.jar.old (one step back: buildRevert)
+// The newest build is asked for once in BUILD_CHECK_MS a server: the card of every server asks when the list is read.
+const BUILD_KINDS = new Set(['paper', 'purpur', 'velocity']);
+const BUILD_CHECK_MS = 6 * 3600 * 1000;
+const buildSeen = new Map(); // folder -> {at, mc, kind, latest}
+const buildOf = (desc) => (BUILD_KINDS.has(desc.kind) && Number.isInteger(Number(desc.build)) && Number(desc.build) > 0 && desc.launch?.jar === 'server.jar' ? Number(desc.build) : null);
+async function buildCheck(dir, fresh = false) {
+  const desc = serverOf(dir);
+  const build = buildOf(desc);
+  if (build === null) return { supported: false };
+  const k = keyOf(dir);
+  let hit = buildSeen.get(k);
+  if (fresh || !hit || hit.mc !== desc.mc || hit.kind !== desc.kind || Date.now() - hit.at > BUILD_CHECK_MS) {
+    const r = await KINDS[desc.kind].resolve(desc.mc);
+    hit = { at: Date.now(), mc: desc.mc, kind: desc.kind, latest: Number(r.build) || build };
+    buildSeen.set(k, hit);
+  }
+  const previous = Number.isInteger(desc.previousBuild) && isFile(path.join(dir, 'server.jar.old')) ? desc.previousBuild : null;
+  return { supported: true, title: KINDS[desc.kind].title, mc: desc.mc, build, latest: hit.latest, newer: hit.latest > build, previous };
+}
+async function buildUpdate(dir, log) {
+  const desc = serverOf(dir);
+  const build = buildOf(desc);
+  const source = KINDS[desc.kind];
+  if (build === null) throw fail(`${source?.title || desc.kind} publishes no builds to update to`, 'unsupported');
+  if (isRunning(dir)) throw fail(`Stop ${path.basename(dir)} first: while it runs, Java holds its server file`, 'running');
+  const r = await source.resolve(desc.mc);
+  if (!(Number(r.build) > build)) throw fail(`${source.title} ${desc.mc} build ${build} is the newest`, 'current');
+  log(`${source.title} ${desc.mc}: build ${build} -> ${r.build}\n`);
+  const jar = path.join(dir, 'server.jar');
+  const next = `${jar}.new`;
+  try {
+    await fetchFile(r.url, next, { sha256: r.sha256, size: r.size }, log);
+    if (r.sha1 && hashOf('sha1', next) !== r.sha1) throw fail('Checksum mismatch for the new server file');
+    if (r.md5 && hashOf('md5', next) !== r.md5) throw fail('Checksum mismatch for the new server file');
+    // The old jar stays beside the new one, so one step back needs no download.
+    fs.rmSync(`${jar}.old`, { force: true });
+    fs.renameSync(jar, `${jar}.old`);
+    try { fs.renameSync(next, jar); } catch (err) { fs.renameSync(`${jar}.old`, jar); throw err; }
+  } finally { fs.rmSync(next, { force: true }); }
+  const java = source.java === 'jar' ? javaOfJar(jar) : desc.java;
+  writeJson(path.join(dir, SERVER), { ...desc, build: Number(r.build), previousBuild: build, java });
+  buildSeen.set(keyOf(dir), { at: Date.now(), mc: desc.mc, kind: desc.kind, latest: Number(r.build) });
+  log(`${path.basename(dir)} runs build ${r.build} from its next start. The build before it is kept as server.jar.old.\n`);
+  return { from: build, to: Number(r.build) };
+}
+function buildRevert(dir) {
+  const desc = serverOf(dir);
+  const jar = path.join(dir, 'server.jar');
+  if (!Number.isInteger(desc.previousBuild) || !isFile(`${jar}.old`)) throw fail('There is no earlier build to go back to', 'none');
+  if (isRunning(dir)) throw fail(`Stop ${path.basename(dir)} first: while it runs, Java holds its server file`, 'running');
+  fs.renameSync(jar, `${jar}.new`);
+  try { fs.renameSync(`${jar}.old`, jar); } catch (err) { fs.renameSync(`${jar}.new`, jar); throw err; }
+  fs.rmSync(`${jar}.new`, { force: true });
+  const { previousBuild, ...rest } = desc;
+  const java = KINDS[desc.kind]?.java === 'jar' ? javaOfJar(jar) : desc.java;
+  writeJson(path.join(dir, SERVER), { ...rest, build: previousBuild, java });
+  return { from: Number(desc.build), to: previousBuild };
+}
+
 // Garbage collector options a server starts with unless pyide-server.json gives its own jvmArgs ([] for none). A
 // Minecraft server gets Aikar's flags, which PaperMC's documentation recommends (G1 sized for a game loop's short-lived
 // objects: fewer and shorter pauses, the lag spikes players notice); a Velocity proxy gets Velocity's. Both leave out
@@ -704,6 +771,13 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics, getWindow
   // The jars in mods/ or plugins/: what each is, turning one off and on, and what they say about each other
   // (main/minecraft/mods.js).
   const mods = createMods({ readServer: serverOf, writeServer: (dir, desc) => writeJson(path.join(dir, SERVER), desc), running: isRunning, kinds: KINDS });
+  // A source that does not answer, or has no build of that version, is no error of the app's: every card asks.
+  ipcMain.handle('minecraft:buildCheck', async (_e, root, dir, fresh) => {
+    ofProject(root, dir);
+    try { return await buildCheck(dir, !!fresh); } catch (err) { return { supported: false, unknown: String(err.message || err) }; }
+  });
+  ipcMain.handle('minecraft:buildUpdate', (_e, root, dir, job) => { playersAt(root, dir); return buildUpdate(dir, logTo(job)); });
+  ipcMain.handle('minecraft:buildRevert', (_e, root, dir) => { playersAt(root, dir); return buildRevert(dir); });
   ipcMain.handle('minecraft:mods', (_e, root, dir) => { ofProject(root, dir); return mods.list(dir); });
   ipcMain.handle('minecraft:toggleMod', (_e, root, dir, file, on) => { playersAt(root, dir); return mods.toggle(dir, file, !!on); });
   ipcMain.handle('minecraft:schedule', (_e, root, dir) => { ofProject(root, dir); return { tasks: schedule.of(dir), next: schedule.upcoming(dir), now: schedule.now() }; });

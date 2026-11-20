@@ -299,6 +299,27 @@
     const v = viewOf(dir);
     for (const c of document.querySelectorAll('.mc-load-chip')) if (c.dataset.dir && keyOf(c.dataset.dir) === keyOf(dir)) c.title = numbersText(v.load?.numbers).join('\n') || tr('No numbers yet');
     for (const t of document.querySelectorAll('.mcset-health-numbers')) if (keyOf(t.dataset.dir || '') === keyOf(dir)) t.textContent = numbersBlock(dir);
+    for (const t of document.querySelectorAll('.mcset-health-fit')) if (keyOf(t.dataset.dir || '') === keyOf(dir)) paintFit(t, dir);
+  }
+  // What this run has needed of its memory (main: createMemoryFit), and the step that would be enough when the server
+  // was given far more. It is said, not done: the button writes the memory for the next start, and can be undone.
+  function paintFit(box, dir) {
+    const f = mc.runningAt(dir) ? viewOf(dir).load?.fit : null;
+    box.replaceChildren();
+    box.classList.toggle('hidden', !f);
+    if (!f) return;
+    const max = f.from;
+    box.append(el('div', 'mcset-desc', f.to
+      ? tr('In this run ({minutes} min) the server kept at most {peak} MB in use after cleaning up, of the {max} it may take. {to} would be enough, and leaves the rest to the game and the other programs on this PC.', { minutes: f.minutes, peak: f.peakAfterMB, max, to: f.to })
+      : tr('In this run ({minutes} min) the server kept at most {peak} MB in use after cleaning up, of the {max} it may take.', { minutes: f.minutes, peak: f.peakAfterMB, max })));
+    if (!f.to) return;
+    const b = el('button', 'secondary mcset-health-fit-apply', tr('Set Memory to {memory}', { memory: f.to }));
+    b.type = 'button';
+    b.onclick = async () => {
+      await applyMemory(dir, f.from, f.to, false);
+      box.replaceChildren(el('div', 'mcset-desc', tr('Memory is {memory} from the next start. Undo Change on the server\'s card puts it back.', { memory: f.to })));
+    };
+    box.append(b);
   }
   function paintCountdown(dir) {
     const v = viewOf(dir);
@@ -443,7 +464,10 @@
     }
     const nums = el('pre', 'mcset-health-numbers', numbersBlock(srv.dir));
     nums.dataset.dir = srv.dir;
-    box.append(status, el('div', 'mcset-label', tr('Now')), nums);
+    const fit = el('div', 'mcset-health-fit hidden');
+    fit.dataset.dir = srv.dir;
+    paintFit(fit, srv.dir);
+    box.append(status, el('div', 'mcset-label', tr('Now')), nums, fit);
     // The tab may have been opened from a list older than the last change.
     ide.api.invoke('minecraft:healthOf', ide.root, srv.dir).then((h) => {
       current = h.settings;

@@ -17,6 +17,7 @@ use crate::auto::levels::{self, Read};
 use crate::auto::silence::{Overlay, Plan as Silence, Silence as Settings};
 use crate::auto::{Job, Outcome, dialog};
 use crate::i18n::{tr, trf};
+use crate::panels::dialogs::Titled as _;
 use crate::shell::Shell;
 
 /// A plan waiting for its preview: the request, the plan and the prompt's words.
@@ -238,7 +239,7 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_TOP, egui::Vec2::new(0.0, 60.0))
-            .show(ctx, |ui| {
+            .show_titled(ctx, &j.title, None, |ui| {
                 ui.add(egui::ProgressBar::new(j.fraction()).desired_width(260.0));
                 stop = ui.button(tr("Cancel")).clicked();
             });
@@ -248,7 +249,7 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     }
     if let Some(mut text) = s.features.ai.command.form.clone() {
         let (mut go, mut cancel) = (false, false);
-        dialog("Edit Command", "cutAiCommand", 560.0).show(ctx, |ui| {
+        dialog("Edit Command", "cutAiCommand", 560.0).show_titled(ctx, tr("Edit Command"), None, |ui| {
             let r = ui.add(
                 egui::TextEdit::singleline(&mut text)
                     .hint_text(tr("e.g. cut the first 10 seconds"))
@@ -259,8 +260,8 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
             }
             note(ui, s, &tr("Say what to change, for example: remove all silences longer than 1 s · add a chapter marker at every topic · make the music 6 dB quieter · cut the first 10 seconds."));
             note(ui, s, &tr("Claude answers with a plan of simple edits (cut, lift, add edit, markers, volume, silence removal). You see the plan before anything changes."));
-            ui.horizontal(|ui| {
-                go |= ui.button(tr("Ask Claude")).clicked();
+            crate::panels::dialogs::actions(ui, |ui| {
+                go |= crate::panels::dialogs::primary(ui, tr("Ask Claude")).clicked();
                 cancel = ui.button(tr("Cancel")).clicked();
             });
         });
@@ -271,7 +272,7 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     }
     if let Some(message) = s.features.ai.command.empty.clone() {
         let mut close = false;
-        dialog("Edit Command", "cutAiPlanEmpty", 500.0).show(ctx, |ui| {
+        dialog("Edit Command", "cutAiPlanEmpty", 500.0).show_titled(ctx, tr("Edit Command"), None, |ui| {
             ui.label(tr("Claude did not plan any edits for this request."));
             if !message.is_empty() {
                 note(ui, s, &message);
@@ -287,7 +288,7 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     let selection = Context::of(seq, &s.app.selection).selection;
     let lines = describe_plan(&p.planned.plan.ops, seq, &selection, &p.silence);
     let (mut go, mut cancel) = (false, false);
-    dialog("Edit Plan", "cutAiPlan", 560.0).show(ctx, |ui| {
+    dialog("Edit Plan", "cutAiPlan", 560.0).show_titled(ctx, tr("Edit Plan"), None, |ui| {
         ui.label(RichText::new(&p.planned.request).strong());
         for (k, (text, params)) in lines.iter().enumerate() {
             let params: Vec<(&str, &str)> = params.iter().map(|(k, v)| (*k, v.as_str())).collect();
@@ -303,8 +304,8 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
                 note(ui, s, &t);
             }
         }
-        ui.horizontal(|ui| {
-            go = ui.button(tr("Apply")).clicked();
+        crate::panels::dialogs::actions(ui, |ui| {
+            go = crate::panels::dialogs::primary(ui, tr("Apply")).clicked();
             cancel = ui.button(tr("Cancel")).clicked();
         });
     });

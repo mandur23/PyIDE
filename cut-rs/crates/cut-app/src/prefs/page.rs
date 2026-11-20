@@ -384,8 +384,8 @@ fn confirm_clear(s: &mut Shell, ctx: &egui::Context) {
         ui.heading(tr("Clear Cache"));
         ui.label(tr("Delete the thumbnails, waveforms and proxies in the cache? They are made again when needed."));
         ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if ui.button(tr("Clear Cache")).clicked() {
+        crate::panels::dialogs::actions(ui, |ui| {
+            if crate::panels::dialogs::primary(ui, tr("Clear Cache")).clicked() {
                 answer = Some(true);
             }
             if ui.button(tr("Cancel")).clicked() {

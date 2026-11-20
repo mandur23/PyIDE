@@ -12,6 +12,7 @@ use serde_json::Value as Json;
 use super::levels::{self, Read};
 use super::{Job, dialog, number};
 use crate::i18n::{tr, trf};
+use crate::panels::dialogs::Titled as _;
 use crate::shell::Shell;
 use crate::state::App;
 
@@ -160,13 +161,13 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     match &mut s.features.auto.duck.open {
         None => return,
         Some(Open::Roles) => {
-            dialog("Auto Ducking", "cutAutoDuckRoles", 440.0).show(ctx, |ui| {
+            dialog("Auto Ducking", "cutAutoDuckRoles", 440.0).show_titled(ctx, tr("Auto Ducking"), None, |ui| {
                 ui.label(tr(ROLES_FIRST));
                 close = ui.button(tr("OK")).clicked();
             });
         }
         Some(Open::Ask { o, dialogue, music }) => {
-            dialog("Auto Ducking", "cutAutoDuck", 440.0).show(ctx, |ui| {
+            dialog("Auto Ducking", "cutAutoDuck", 440.0).show_titled(ctx, tr("Auto Ducking"), None, |ui| {
                 ui.label(trf(
                     "Dialogue clips: {d}, music clips: {m}. The music is lowered wherever the dialogue speaks.",
                     &[("d", &dialogue.to_string()), ("m", &music.to_string())],
@@ -182,8 +183,8 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
                     number(ui, &mut o.threshold, (-90.0, -5.0, 1.0), 0, "dB");
                     ui.end_row();
                 });
-                ui.horizontal(|ui| {
-                    if ui.button(tr("Duck")).clicked() {
+                crate::panels::dialogs::actions(ui, |ui| {
+                    if crate::panels::dialogs::primary(ui, tr("Duck")).clicked() {
                         go = Some(*o);
                     }
                     close = ui.button(tr("Cancel")).clicked();

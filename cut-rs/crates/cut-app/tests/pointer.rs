@@ -539,3 +539,55 @@ fn the_settings_window_is_one_size_on_every_page_with_close_under_its_contents()
     drop(h);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_dialog_window_has_its_title_at_the_left_and_closes_by_its_cross() {
+    let dir = scratch("titled");
+    let mut h = open(&dir, |_| {});
+    let ctx = h.ctx.clone();
+    h.state_mut().run_action("findAction", &ctx);
+    for _ in 0..4 {
+        h.step();
+    }
+    let title = h.get_by_role_and_label(Role::Label, "Find Action").rect();
+    let cross = h.get_by_label("\u{E711}").rect();
+    assert!(
+        (title.center().y - cross.center().y).abs() < 8.0 && cross.left() - title.right() > 200.0,
+        "the title is at the left of the dialog's own bar and the cross at its right ({title:?}, {cross:?})"
+    );
+    click(&mut h, cross.center(), Modifiers::NONE);
+    h.step();
+    assert!(h.query_by_label("\u{E711}").is_none(), "the cross closes the dialog");
+    drop(h);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_timeline_bar_is_on_its_tab_row_when_the_row_has_the_room() {
+    let dir = scratch("tab-row-bar");
+    let mut h = open(&dir, |_| {});
+    // the tab of the open sequence: the button with its name above the lanes
+    let name = h.state().app.sequence().unwrap().name.clone();
+    let lanes = |h: &H| h.state().timeline.direct.lanes.unwrap();
+    let tab = |h: &H| -> Rect {
+        let l = lanes(h);
+        let mut all = h.get_all_by_role_and_label(Role::Button, &name).map(|n| n.rect());
+        all.find(|r| r.bottom() < l.top() && r.left() >= l.left() - HEADER_W).expect("the sequence's tab")
+    };
+    let wide = lanes(&h).top();
+    tab(&h);
+    // a narrow window and the tool bar on: the row has not the room, and the bar is a row of the panel again
+    cut_app::prefs::set(h.state_mut(), "timelineTools", json!(true));
+    h.set_size(vec2(900.0, 800.0));
+    for _ in 0..4 {
+        h.step();
+    }
+    let own = lanes(&h).top();
+    tab(&h);
+    assert!(
+        (own - wide - 30.0).abs() < 1.5,
+        "with the bar on the tab row the lanes start the bar's height (30) higher ({wide}, on its own row {own})"
+    );
+    drop(h);
+    let _ = std::fs::remove_dir_all(&dir);
+}

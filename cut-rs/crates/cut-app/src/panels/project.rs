@@ -685,17 +685,27 @@ fn rows(s: &mut Shell, ui: &mut egui::Ui, list: &[Entry]) -> Option<Entry> {
     use crate::timeline::fit_text;
     let pal = s.palette.clone();
     let mut open = None;
-    // a timecode, a frame size and a rate have a width of their own; the name takes the rest (a narrow panel scrolls)
-    let (duration_w, video_w, fps_w, uses_w) = (92.0, 80.0, 60.0, 36.0);
-    let fixed = duration_w + video_w + fps_w + uses_w;
-    let w = ui.available_width().max(fixed + 80.0);
-    let cols = [
-        (Column::Name, "Name", w - fixed),
-        (Column::Duration, "Duration", duration_w),
-        (Column::Video, "Video", video_w),
-        (Column::Fps, "Frame Rate", fps_w),
-        (Column::Uses, "Uses", uses_w),
+    // A timecode, a frame size and a rate have a width of their own; the name takes the rest, and keeps NAME_MIN of
+    // it: a panel too narrow for all of them leaves out Frame Rate, then Video, then Uses (each is in the item's
+    // tooltip and menu), instead of cutting every name to five letters. Narrower still, the panel scrolls.
+    const NAME_MIN: f32 = 130.0;
+    let mut rest = vec![
+        (Column::Duration, "Duration", 92.0_f32),
+        (Column::Video, "Video", 80.0),
+        (Column::Fps, "Frame Rate", 60.0),
+        (Column::Uses, "Uses", 36.0),
     ];
+    let avail = ui.available_width();
+    for gone in [Column::Fps, Column::Video, Column::Uses] {
+        if avail - rest.iter().map(|c| c.2).sum::<f32>() >= NAME_MIN {
+            break;
+        }
+        rest.retain(|c| c.0 != gone);
+    }
+    let fixed: f32 = rest.iter().map(|c| c.2).sum();
+    let w = avail.max(fixed + NAME_MIN);
+    let mut cols = vec![(Column::Name, "Name", w - fixed)];
+    cols.extend(rest);
     let starts: Vec<f32> = cols
         .iter()
         .scan(0.0, |x, c| {
@@ -782,9 +792,15 @@ fn rows(s: &mut Shell, ui: &mut egui::Ui, list: &[Entry]) -> Option<Entry> {
         }
         let duration = if offline { tr("Offline").into_owned() } else { e.duration.clone() };
         let uses = if e.uses > 0 { e.uses.to_string() } else { String::new() };
-        for (i, text) in [&duration, &e.size, &e.fps, &uses].into_iter().enumerate() {
-            let x = rect.left() + starts[i + 1] + 6.0;
-            fit_text(ui.painter(), egui::pos2(x, y), text, cols[i + 1].2 - 10.0, font.clone(), pal.gray[9]);
+        for (i, (col, _, cw)) in cols.iter().enumerate().skip(1) {
+            let text = match col {
+                Column::Duration => &duration,
+                Column::Video => &e.size,
+                Column::Fps => &e.fps,
+                _ => &uses,
+            };
+            let x = rect.left() + starts[i] + 6.0;
+            fit_text(ui.painter(), egui::pos2(x, y), text, cw - 10.0, font.clone(), pal.gray[9]);
         }
         if click(s, list, e, &r) {
             open = Some(e.clone());

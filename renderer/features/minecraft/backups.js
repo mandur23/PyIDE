@@ -9,7 +9,7 @@
   const same = (a, b) => a.toLowerCase() === b.toLowerCase();
   const REASON = () => ({
     manual: tr('Made by you'), market: tr('Before a Market change'), world: tr('Before a world was dropped in'), settings: tr('Before a settings change'),
-    repair: tr('Before Repair'), schedule: tr('On schedule'), stop: tr('When the server stopped'), restore: tr('Before a restore'),
+    repair: tr('Before Repair'), update: tr('Before a server update'), schedule: tr('On schedule'), stop: tr('When the server stopped'), restore: tr('Before a restore'),
   });
   const PHASE = () => ({
     starting: tr('Starting…'), pausing: tr('Asking the server to pause its saves…'), flushing: tr('Waiting for the server to save its world…'),
@@ -116,7 +116,7 @@
 
   // ---------- before something risky ----------
   // -> true when the action goes on: backed up, skipped, or nothing to back up (no world yet, a proxy).
-  const WHY = () => ({ market: tr('the Market change'), world: tr('the world you dropped in'), settings: tr('the settings change'), repair: tr('Repair') });
+  const WHY = () => ({ market: tr('the Market change'), world: tr('the world you dropped in'), settings: tr('the settings change'), repair: tr('Repair'), update: tr('the server update') });
   const waiting = new Map(); // server folder (lower case) -> the answer of the before() under way: a second press waits for it
   function before(srv, reason) {
     if (!srv || srv.proxy || ide.trusted === false) return Promise.resolve(true);

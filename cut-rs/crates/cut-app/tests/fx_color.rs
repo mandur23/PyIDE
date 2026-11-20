@@ -427,3 +427,17 @@ fn a_lut_loaded_through_the_dialog_turns_the_red_cyan() {
     assert!(h.state().app.project().luts.as_ref().and_then(Json::as_object).is_none_or(|l| l.is_empty()));
     assert_eq!(middle(&mut h), before, "and the red is back");
 }
+
+#[test]
+fn the_scopes_fill_for_a_picture_drawn_before_they_were_shown() {
+    // The Color workspace opened on a picture already on the Program monitor: no time, edit or input follows. This
+    // harness draws a frame at every step, so it shows that the count comes with nothing changing, not that an idle
+    // window asks for the frames it takes (`RETRY` in scopes/mod.rs: seen in the running app, where the scopes stayed
+    // empty until the pointer moved).
+    let dir = folder("scopes-first");
+    let mut h = open(&dir);
+    until(&mut h, "the scopes of the picture that was there", |s| s.features.fx.scopes.last.is_some());
+    assert!(h.state().features.fx.scopes.count >= 1);
+    drop(h);
+    let _ = std::fs::remove_dir_all(&dir);
+}

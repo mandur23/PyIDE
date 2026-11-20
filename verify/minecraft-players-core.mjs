@@ -2099,8 +2099,10 @@ process.stdin.on('data', (d) => {
     check(players.bridgeRemove(dir).ok, 'the plugin of a stopped server is removed');
     await waitFor(() => !existsSync(file));
     check(!existsSync(file), 'and its last file goes with it, with no server left to tail it');
-    await sleep(30);
-    check(readFileSync(path.join(dir, '.nano', 'players', `${STEVE}.jsonl`), 'utf8').includes('"type":"break"'), 'after it was read into the records');
+    // The records are written a flush later, and on a loaded runner 30 ms was not always enough for it (CI, 2026-11-19).
+    const records = path.join(dir, '.nano', 'players', `${STEVE}.jsonl`);
+    await waitFor(() => existsSync(records) && readFileSync(records, 'utf8').includes('"type":"break"'));
+    check(readFileSync(records, 'utf8').includes('"type":"break"'), 'after it was read into the records');
   }
 }
 

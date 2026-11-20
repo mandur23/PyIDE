@@ -749,6 +749,63 @@
     [list, blocked, damaged] = await Promise.all([ide.api.invoke('minecraft:servers', ide.root).catch(() => []), ide.api.invoke('minecraft:blockedNames', ide.root).catch(() => []),
       ide.api.invoke('minecraft:damagedServers', ide.root).catch(() => [])]);
     render();
+    checkBuilds();
+  }
+
+  // ---------- a newer build of a server ----------
+  // Paper, Purpur and Velocity publish builds of one version (main: buildCheck asks once in six hours a server). The
+  // card of a server that has a newer one says so; Update backs the world up, swaps the server file and keeps the old
+  // one, so Back to Build puts it back. Nothing is updated by itself.
+  const builds = new Map(); // server folder (lower case) -> {title, mc, build, latest, newer, previous}
+  const buildAt = (dir) => builds.get(dir.toLowerCase()) || null;
+  let buildTurn = 0;
+  async function checkBuilds(fresh = false) {
+    if (ide.trusted === false) return;
+    const mine = ++buildTurn;
+    const asked = list.filter((s) => ['paper', 'purpur', 'velocity'].includes(s.kind) && s.build);
+    const answers = await Promise.all(asked.map((s) => ide.api.invoke('minecraft:buildCheck', ide.root, s.dir, fresh).catch(() => null)));
+    if (mine !== buildTurn) return;
+    let changed = false;
+    asked.forEach((s, i) => {
+      const a = answers[i];
+      const k = s.dir.toLowerCase();
+      const was = builds.get(k);
+      // an answer that did not come (offline) leaves what was known
+      if (!a) return;
+      if (a.unknown) return;
+      if (!a.supported) { changed ||= builds.delete(k); return; }
+      if (!was || was.latest !== a.latest || was.build !== a.build || was.previous !== a.previous) changed = true;
+      builds.set(k, a);
+    });
+    if (changed) render();
+  }
+  async function updateBuild(srv) {
+    if (!trusted()) return;
+    const b = buildAt(srv.dir);
+    if (!b?.newer) return;
+    if (busyAt(srv.dir)) { ide.ui.alert(tr('Stop {name} first: its server file cannot be replaced while it runs.', { name: srv.name })); return; }
+    if (!(await ide.ui.confirm(tr('Update {name} from {title} {mc} build {from} to build {to}? Its world is backed up first, and the server file in use now is kept, so you can go back.', { name: srv.name, title: b.title, mc: b.mc, from: b.build, to: b.latest }),
+      { title: tr('Update Server'), ok: tr('Update') }))) return;
+    if (ide.minecraft.backups && !(await ide.minecraft.backups.before(srv, 'update'))) return;
+    const con = jobSession(tr('Server Update'));
+    const j = job(con);
+    try {
+      const r = await ide.api.invoke('minecraft:buildUpdate', ide.root, srv.dir, j.id);
+      con.append(`${tr('{name} is on build {to}. It runs from the next start.', { name: srv.name, to: r.to })}\n`, 'ok');
+      ide.notifications?.notify({ title: tr('{name} updated to build {to}', { name: srv.name, to: r.to }), text: tr('Build {from} is kept: Back to Build {from} in the card\'s More menu puts it back.', { from: r.from }), kind: 'ok', group: 'Minecraft', raw: true });
+    } catch (err) {
+      con.append(`${tr('{name} was not updated: {error}', { name: srv.name, error: errorText(err) })}\n`, 'err');
+    } finally { j.done(); }
+    await refresh();
+  }
+  async function revertBuild(srv) {
+    if (!trusted()) return;
+    const b = buildAt(srv.dir);
+    if (!b?.previous) return;
+    if (busyAt(srv.dir)) { ide.ui.alert(tr('Stop {name} first: its server file cannot be replaced while it runs.', { name: srv.name })); return; }
+    if (!(await ide.ui.confirm(tr('Put {name} back on build {to}? The server file of build {from} is removed.', { name: srv.name, from: b.build, to: b.previous }), { title: tr('Back to the Earlier Build'), ok: tr('Go Back') }))) return;
+    try { await ide.api.invoke('minecraft:buildRevert', ide.root, srv.dir); } catch (err) { ide.ui.alert(tr('{name} was not put back: {error}', { name: srv.name, error: errorText(err) })); }
+    await refresh();
   }
   function button(label, cls, onClick, title) {
     const b = el('button', `secondary ${cls}`, label);
@@ -797,6 +854,9 @@
       add('mc-rp', tr('Resource Pack'), () => resourcePack(srv), { group: 2, title: tr('A folder for the textures, sounds and models players get') });
       if (srv.resourcePack && ide.ports) add('mc-rp-send', tr('Send to Players'), () => sendPack(srv), { group: 2, title: tr('Players download the resource pack when they join') });
     }
+    const b = buildAt(srv.dir);
+    if (b?.newer) add('mc-build-update', tr('Update to Build {build}', { build: b.latest }), () => updateBuild(srv), { group: 3, title: tr('{title} {mc} has a newer build than the {build} this server runs', { title: b.title, mc: b.mc, build: b.build }) });
+    if (b?.previous) add('mc-build-revert', tr('Back to Build {build}', { build: b.previous }), () => revertBuild(srv), { group: 3, title: tr('The server file kept from before the update') });
     add('mc-folder', tr('Open Folder'), () => ide.api.invoke('shell:openPath', srv.dir), { group: 3, icon: 'folder' });
     if (!busyAt(srv.dir)) add('mc-delete', tr('Delete…'), () => deleteServer(srv), { group: 3, icon: 'clear', title: tr('Moves the server folder to the Recycle Bin') });
     return acts;
@@ -854,6 +914,14 @@
         el('span', 'mc-server-kind muted', `${kindTitle(srv.kind)} ${srv.mc} · Java ${srv.java}${srv.loader ? ` · ${srv.loader}` : ''} · :${port}`));
       const load = ide.minecraft.health?.chip(srv);
       if (load) head.append(load);
+      const newer = buildAt(srv.dir);
+      if (newer?.newer) {
+        const chip = el('button', 'mcc-chip mc-build-chip', tr('Build {build} available', { build: newer.latest }));
+        chip.type = 'button';
+        chip.title = tr('{title} {mc} has a newer build than the {build} this server runs', { title: newer.title, mc: newer.mc, build: newer.build });
+        chip.onclick = (e) => { e.preventDefault(); updateBuild(srv); };
+        head.append(chip);
+      }
       const actions = el('div', 'mc-server-actions');
       // Starting (a Java download, a busy port being waited out) and saving after Stop take a while, and a second
       // press does nothing then: the card says so instead of offering a button that cannot work.
@@ -1056,7 +1124,7 @@
   ide.registerAction({ id: 'Minecraft.NewServer', title: tr('New Minecraft Server…'), needsProject: true, run: newServer });
   ide.registerAction({ id: 'Minecraft.NewServerFromModpack', title: tr('New Minecraft Server from Modpack…'), needsProject: true, run: () => newFromModpack() });
   ide.minecraft = { refresh, servers: () => list, newServer, createServer, newFromModpack, createFromModpack, dropped, clientPack, autoSync, deleteServer, serverSettings, sendCommand, translateKorean, runTranslation, sharePack, resourcePack, sendPack,
-    job, jobSession, errorText, rawErrorText, kindTitle, runningAt, stoppingAt, restartIfRunning, startServer: (srv) => launchOnce(srv, run.runConfig), render,
+    job, jobSession, errorText, rawErrorText, kindTitle, runningAt, stoppingAt, restartIfRunning, checkBuilds, buildAt, startServer: (srv) => launchOnce(srv, run.runConfig), render,
     // The server list (with drops) in the Minecraft screen's My Servers page.
     showServersIn(container) { acceptDrops(container); host = container; refresh(); } };
 

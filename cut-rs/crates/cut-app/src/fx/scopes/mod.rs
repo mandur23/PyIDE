@@ -132,6 +132,9 @@ fn read_show(s: &Shell) -> Vec<Kind> {
     Kind::ALL.into_iter().filter(|k| ids.iter().any(|i| i == k.id())).collect()
 }
 
+/// How soon a count that found no picture to count looks again.
+const RETRY: Duration = Duration::from_millis(100);
+
 /// Counts the program monitor's last picture when it is new and the gap since the last count has passed.
 fn count(s: &mut Shell, ctx: &egui::Context) {
     let playing = s.transport.playing();
@@ -146,7 +149,13 @@ fn count(s: &mut Shell, ctx: &egui::Context) {
     }
     let renders = m.program.stats.renders;
     let paused_after_play = !playing && st.last.as_ref().is_some_and(|c| c.playing);
-    if renders == 0 || (st.renders == Some(renders) && !paused_after_play && !st.now) {
+    // No picture yet (the workspace was just opened, the monitor draws after this panel): looked at again shortly.
+    // Without this the scopes stayed empty until the pointer moved, since nothing else asks an idle window to draw.
+    if renders == 0 {
+        ctx.request_repaint_after(RETRY);
+        return;
+    }
+    if st.renders == Some(renders) && !paused_after_play && !st.now {
         return;
     }
     let gap = Duration::from_millis(if playing { 150 } else { 40 });
@@ -162,6 +171,7 @@ fn count(s: &mut Shell, ctx: &egui::Context) {
     let Some((bins, layout, rect, step)) =
         m.program.engine.scopes(COLS, SIZE, if playing { BUDGET / 4 } else { BUDGET })
     else {
+        ctx.request_repaint_after(RETRY);
         return;
     };
     let cost = started.elapsed();

@@ -19,6 +19,7 @@ use super::words::RATE;
 use super::{Goal, backend, opts, store};
 use crate::auto::{Job, Outcome, Step, Stop};
 use crate::i18n::{tr, trf};
+use crate::panels::dialogs::Titled as _;
 use crate::shell::Shell;
 use crate::state::App;
 
@@ -323,12 +324,12 @@ fn progress_box(s: &mut Shell, ctx: &egui::Context) {
     let loading = s.features.speech.backend.as_ref().is_some_and(|b| b.engine() == EngineState::Loading);
     ctx.request_repaint_after(Duration::from_millis(50));
     let mut stop = false;
-    egui::Window::new(title)
+    egui::Window::new(title.clone())
         .id(egui::Id::unique("cut-speech-task"))
         .collapsible(false)
         .resizable(false)
         .anchor(Align2::CENTER_TOP, Vec2::new(0.0, 60.0))
-        .show(ctx, |ui| {
+        .show_titled(ctx, &title, None, |ui| {
             ui.add(ProgressBar::new(f).desired_width(260.0));
             ui.label(if loading {
                 tr("Loading the speech model…").into_owned()

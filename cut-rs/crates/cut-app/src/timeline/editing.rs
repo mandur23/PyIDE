@@ -355,7 +355,7 @@ impl Timeline {
     }
 
     /// The sequence tabs (`buildTabs`): the active one underlined, a close button when there are two or more.
-    pub(super) fn tabs(ui: &mut egui::Ui, app: &mut App, pal: &Palette) {
+    pub(super) fn tabs(ui: &mut egui::Ui, app: &mut App, pal: &Palette, under: f32) {
         let p = app.project();
         let mut tabs: Vec<Id> = app.edit.tabs.iter().copied().filter(|id| p.sequence(*id).is_some()).collect();
         if let Some(active) = app.sequence_id
@@ -371,7 +371,7 @@ impl Timeline {
             let color = if active { pal.gray[12] } else { pal.gray[9] };
             let r = ui.add(Button::new(RichText::new(&s.name).color(color)).frame(false)).on_hover_text(&s.name);
             if active {
-                ui.painter().hline(r.rect.x_range(), ui.max_rect().bottom() + 1.5, Stroke::new(2.0, pal.accent));
+                ui.painter().hline(r.rect.x_range(), under, Stroke::new(2.0, pal.accent));
             }
             if r.clicked() {
                 pick = Some(*id);
