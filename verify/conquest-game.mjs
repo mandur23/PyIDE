@@ -21,6 +21,10 @@ import { fileURLToPath } from 'url';
 import { launch, tempDir } from './lib.mjs';
 import { englishLeaks } from './i18n-lib.mjs';
 
+// The window this suite's points on the map and on the bars were measured in. CI's runner is 1024x720, where the
+// army bar scrolls and the toasts take a larger share of a smaller map (conquest-panels checks that size).
+const sized = async (launching) => { const ctx = await launching; await ctx.cdp('Emulation.setDeviceMetricsOverride', { width: 1386, height: 779, deviceScaleFactor: 0, mobile: false }); return ctx; };
+
 const APP_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = path.join(APP_DIR, 'verify', 'out');
 const FEATURE = path.join(APP_DIR, 'renderer', 'features', 'conquest');
@@ -614,7 +618,7 @@ async function commandChecks(ctx, army) {
 try {
   // ---------- the 1914 world as France ----------
   {
-    const ctx = await launch({ fixture: 'core', port: 9838, name: 'conquest-game', mode: 'conquest', env });
+    const ctx = await sized(launch({ fixture: 'core', port: 9838, name: 'conquest-game', mode: 'conquest', env }));
     const { js, until } = ctx;
     await until('window.__conquestReady === true', 'the start screen map', 90000);
     await js(`(ide.settings.set('conquest.guideDone', true), true)`);
@@ -1091,7 +1095,7 @@ try {
     ctx.close();
 
     // ---------- Continue ----------
-    const c2 = await launch({ fixture: 'core', port: 9838, name: 'conquest-game-2', mode: 'conquest', env });
+    const c2 = await sized(launch({ fixture: 'core', port: 9838, name: 'conquest-game-2', mode: 'conquest', env }));
     await c2.until('window.__conquestReady === true', 'the start screen', 90000);
     await c2.until(shown('.cq-continue'), 'the Continue button', 15000);
     const label = await text(c2, '.cq-continue');
@@ -1107,7 +1111,7 @@ try {
 
   // ---------- Korean ----------
   {
-    const ctx = await launch({ fixture: 'core', port: 9839, name: 'conquest-game-ko', mode: 'conquest', lang: 'ko-KR', env: { PYIDE_CONQUEST_HOME: path.join(tempDir('conquest-game-ko'), 'Home') } });
+    const ctx = await sized(launch({ fixture: 'core', port: 9839, name: 'conquest-game-ko', mode: 'conquest', lang: 'ko-KR', env: { PYIDE_CONQUEST_HOME: path.join(tempDir('conquest-game-ko'), 'Home') } }));
     await ctx.until('window.__conquestReady === true', 'the start screen in Korean', 90000);
     await ctx.js(`(ide.settings.set('conquest.guideDone', true), true)`);
     await ctx.until(`!!document.querySelector('.cq-major[data-tag="FRA"]')`, 'the majors', 15000);

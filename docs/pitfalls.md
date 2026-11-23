@@ -728,6 +728,8 @@
 
 ## Conquest: 테스트
 
+- **지도와 막대의 자리를 재서 누르는 점검은 창 크기를 스스로 고정합니다(0.3.40).** `conquest-game`은 로컬 창(1386x779)에서 89개가 통과했지만 CI 러너(1024x720)에서 6개가 실패했습니다: 툴팁이 안 뜨고, 군 선택 클릭이 빗나가고, 군 막대가 스크롤되고, 알림이 지도의 12.8%를 덮었습니다. 처음 CI에 올린 날 드러났습니다. 지금은 점검이 `Emulation.setDeviceMetricsOverride`로 1386x779를 고정합니다(`sized`). 새 점검은 올리기 전에 `PYIDE_TEST_VIEWPORT=1024x720`으로 한 번 돌립니다. 1024x720에서 지도 위 조작(전선 그리기, 군 막대, 알림 넓이)은 점검되지 않습니다: 상단 막대와 배지만 `conquest-panels`가 그 크기에서 봅니다.
+- **`.gitignore`의 `*.png`가 게임의 지도 그림(`data/world-1914/ids.png`)을 가립니다(0.3.40).** 작업 폴더에서는 게임이 뜨지만 커밋에서 빠져 CI와 깨끗한 사본에서는 지도가 없습니다. `!renderer/features/conquest/data/**/*.png`로 풀었습니다. 새 앱을 처음 커밋할 때는 `git status --ignored`로 가려진 파일을 봅니다.
 - **전쟁이 어떻게 흘러가는지에 기대는 화면 검사는 균형을 고치면 깨집니다.** `conquest-panels`의 생산 검사가 전쟁 중인 게임에서 돌았는데, 균형 조정 뒤 적이 23일 만에 플레이어의 공장 지역을 모두 차지해서 생산 줄 늘리기가 거절됐습니다(2026-11-20). 경제와 편제처럼 전쟁과 상관없는 검사는 평화 상태의 새 게임(`gen.war: false`)에서 돌립니다.
 - **12판을 동시에 돌리면 하루 계산 시간이 약 세 배로 재집니다.** `CONQUEST_FULL=1`의 속도 검사가 병렬로 도는 판에서 시간을 재서 실패했습니다(2026-11-21). 속도는 가장 긴 판 하나를 혼자 다시 돌려서 잽니다.
 - **12판 분포를 보는 검사는 작은 수정에도 몇 개가 뒤집힙니다.** 균형 2차에서 수정 하나를 되돌리자 44/51이 41/51이 됐고, 뒤집힌 세 검사는 그 수정과 상관이 없었습니다(2026-11-21). 한 번의 점수 차 3 이하는 개선으로 보지 않고, 판마다의 값(서부 칸 수, 교착 개월, 상륙 수)을 함께 봅니다.
@@ -807,6 +809,7 @@
 
 ## 아직 남은 문제: Code
 
+- `compare-files`의 "file picker for one selected file"(트리에서 Ctrl+D)이 5번에 1번쯤 실패합니다(2026-11-23, 커밋 `c55ca74`의 사본에서도 같은 빈도). 기록을 달면 통과해 원인을 잡지 못했습니다. `app-mode`의 "Craft grows as Code shrinks"도 다른 점검을 줄줄이 돌린 직후 한 번 실패하고 혼자서는 통과했습니다.
 - CI의 5번 묶음에서 `terminal-split`의 "Exit quits the app"과 `venv-prompt`의 "the requirements were installed with pip install -r requirements.txt"가 한 번씩 실패했습니다(2026-11-20, Release 0.3.39-beta.1 커밋; 같은 코드가 앞 커밋에서는 통과했고 로컬에서는 51/51, 44/44). 실패한 묶음을 다시 돌릴 때마다 다른 점검이 실패했습니다. 원인을 모릅니다.
 - CI에서 가끔 실패: `updater`의 "a signed manifest of another file, copied under this installer's name, is refused"(2026-11-19, 로컬 93/93 통과), `terminal-busy`의 "idle shell"(0.3.36-beta.1).
 
