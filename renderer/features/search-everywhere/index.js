@@ -171,6 +171,9 @@
     let gen = 0;
     let timer = null;
     let rows = [];
+    // The row the user moved to with the arrows or the mouse. Until then the first row is the active one, also as
+    // slower groups arrive above it: keeping the first row of the first answer left Enter on an action under the
+    // symbols and files that came a moment later.
     let activeKey = null;
     let enterGen = 0; // an Enter waiting for the search of the text typed just before it
 
@@ -200,9 +203,9 @@
       it.run();
     }
 
-    function setActive(row) {
+    function setActive(row, picked = false) {
       for (const r of rows) r.classList.toggle('active', r === row);
-      activeKey = row?._item.key ?? null;
+      if (picked) activeKey = row?._item.key ?? null;
       row?.scrollIntoView({ block: 'nearest' });
     }
 
@@ -229,7 +232,7 @@
       }
       row.dataset.key = it.key;
       row.onmousedown = (e) => { e.preventDefault(); choose(row); };
-      row.onmousemove = () => !row.classList.contains('active') && setActive(row);
+      row.onmousemove = () => !row.classList.contains('active') && setActive(row, true);
       return row;
     }
 
@@ -296,7 +299,7 @@
         e.preventDefault();
         if (!rows.length) return;
         const i = rows.findIndex((r) => r.classList.contains('active'));
-        setActive(rows[(i + (e.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length]);
+        setActive(rows[(i + (e.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length], true);
       } else if (e.key === 'Enter') {
         e.preventDefault();
         // An Enter typed before the debounced search ran applies to the current text, not to the rows still shown.

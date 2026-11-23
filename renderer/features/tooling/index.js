@@ -311,8 +311,8 @@
   ide.registerAction({ id: 'RuffFixAll', title: tr('Fix All Ruff Problems in File'), run: () => fixAll() });
   const pyFile = (e) => !e.dir && /\.pyi?$/i.test(e.name);
   // The hints follow the keymap: the tree reads them each time its menu opens.
-  ide.registerTreeAction({ title: tr('Reformat Code'), keyAction: 'ReformatCode', when: pyFile, run: (e) => (ide.findTab(e.path) ? reformat(ide.findTab(e.path)) : onDisk(e.path, 'tooling:format')) });
-  ide.registerTreeAction({ title: tr('Optimize Imports'), keyAction: 'OptimizeImports', when: pyFile, run: (e) => (ide.findTab(e.path) ? optimizeImports(ide.findTab(e.path)) : onDisk(e.path, 'tooling:optimizeImports')) });
+  ide.registerTreeAction({ group: 'edit', title: tr('Reformat Code'), keyAction: 'ReformatCode', when: pyFile, run: (e) => (ide.findTab(e.path) ? reformat(ide.findTab(e.path)) : onDisk(e.path, 'tooling:format')) });
+  ide.registerTreeAction({ group: 'edit', title: tr('Optimize Imports'), keyAction: 'OptimizeImports', when: pyFile, run: (e) => (ide.findTab(e.path) ? optimizeImports(ide.findTab(e.path)) : onDisk(e.path, 'tooling:optimizeImports')) });
 
   ide.tooling = { reformat, optimizeImports, fixAll, lint, addFormatter: (fn) => formatters.push(fn) };
 })();

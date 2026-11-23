@@ -723,6 +723,7 @@
     id: 'pyide.claude.sendReference', label: tr('Send to Claude Code'), contextMenuGroupId: '9_claude', run: sendReference,
   }));
   ide.registerTreeAction({
+    group: 'open',
     title: tr('Open in Terminal'),
     when: (entry) => entry.dir,
     run: (entry) => { showFor(); createSession({ cwd: entry.path }); },

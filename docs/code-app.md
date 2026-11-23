@@ -50,6 +50,7 @@ Code는 코어 위에 플러그인 약 75개가 올라간 구조입니다. 코�
 - 선택은 `selected`, `alsoSelected`, `anchor`입니다. 여러 행을 다루는 동작은 `operands(entry, 조건)`으로 대상을 얻고, 이동은 `movableEntry`, 삭제는 `deletableEntry`가 조건입니다.
 - 옮기기는 `moveEntries(entries, dir)`가 한 번 묻고 `ide.treeMovers`를 부릅니다. refactor 플러그인이 Python 모듈의 import를 고치는 mover를 넣습니다(`refactor.moveImports`: auto, ask, never).
 - 키 처리는 `treeKey`입니다. 파일을 클릭해 열 때는 `focus: false`라 키보드가 트리에 남습니다.
+- 오른쪽 클릭 메뉴는 `showTreeMenu`가 만듭니다. 플러그인의 줄(`ide.registerTreeAction`)은 `group`으로 묶여(`TREE_GROUPS`: run, find, edit, compare, vcs, open, tools) 묶음 사이에 줄이 들어가고, `group: 'new'`인 줄은 `newTitle`로 "새로 만들기" 안에 들어갑니다. 경로 복사와 탐색기에서 표시는 코어가 open 묶음에 넣습니다. F2와 Shift+F6이 이름 변경입니다.
 - 폴더 하나만 든 폴더는 한 행으로 합칩니다(`compactChains`, `com.example.demo`, 설정 `projectTree.compactFolders`). 행의 entry는 사슬의 마지막 폴더이고 `compact`에 사슬 전체가 있습니다. 세그먼트(`.seg`)를 누르면 그 폴더가 선택되고, `rowIndexOf`는 사슬의 어느 폴더로도 그 행을 찾습니다. 데코레이터가 `iconType`을 주는 폴더(소스 루트, `src/main/java`)는 합치지 않습니다.
 - 테스트: `verify/tree.mjs`, 합친 행은 `verify/java-assist.mjs`. 키보드 동작은 CDP 마우스 클릭 뒤에 확인합니다.
 
@@ -59,7 +60,7 @@ Code는 코어 위에 플러그인 약 75개가 올라간 구조입니다. 코�
 - 긴 이름은 `ide.util.fileLabel`이 확장자를 남기고 줄입니다. 탭은 `--tab-name-max`(220px)에서 멈춥니다.
 - 창 닫기: 메인(`main/windows.js`)이 저장 안 한 파일(`window:setDirty`)과 실행 중인 프로그램(`window:setBusy`)을 알고, 있으면 `window:confirmClose`를 보냅니다. `window:setBusy`는 이름 배열(run 플러그인, Cut 내보내기) 또는 `{source, names}`(터미널: 셸 말고 다른 프로그램이 도는 세션, `pty:busy`)를 받고, 보낸 쪽마다 따로 보관합니다. 렌더러가 대화상자를 띄우고 `window:closeNow`로 닫습니다.
 - 공유된 문서(다른 창이나 협업)의 실행 취소는 자기 편집만 되돌립니다. 원격 편집은 `applyEdits`로 넣고, 모델의 `undo`와 `redo`는 `ownUndo`가 `renderer/core/ot.js`의 기록으로 바꿉니다. 공유 문서에 편집을 넣는 새 코드는 원격이면 기록을 옮기고(`rebase`), 로컬이면 `localEdit`를 지나야 합니다.
-- 테스트: `verify/editors.mjs`, `verify/session.mjs`, `verify/close-running.mjs`. 작은 수정 모음(Ctrl+Tab, Reopen Closed Tab, 상태 표시줄 선택 크기, 트리 삭제 뒤 선택, 대화상자 버튼 중복 실행, 풍선, Run 터미널 테마, Maven 경로, Find in Files 초기화)은 `verify/code-polish.mjs`입니다.
+- 테스트: `verify/editors.mjs`, `verify/session.mjs`, `verify/close-running.mjs`. 작은 수정 모음(Ctrl+Tab, Reopen Closed Tab, 상태 표시줄 선택 크기, 트리 삭제 뒤 선택, 대화상자 버튼 중복 실행, 풍선, Run 터미널 테마, Maven 경로, Find in Files 초기화)은 `verify/code-polish.mjs`입니다. 실제로 써 보며 찾은 것(트리 메뉴의 묶음, F2, 새 파일 이름 창, 어디서나 검색의 첫 줄, 파일에서 찾기의 화살표, 줄 번호의 중단점, 문제 설명 복사)은 `verify/code-comfort.mjs`입니다.
 
 ### 도구 창의 새 창 (`renderer/core/popout.js`)
 

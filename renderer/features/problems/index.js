@@ -90,6 +90,12 @@
         text.dataset.userText = source.dataset.userText = at.dataset.userText = '';
         row.append(sev, text, source, at);
         row._open = row.onclick = () => ide.openFile(p.path, { line: p.line, col: p.col });
+        // The problem as a line of text (where, what, which tool), to paste into a search or a question.
+        row.oncontextmenu = (e) => {
+          e.preventDefault();
+          ide.ui.contextMenu(e.clientX, e.clientY, [{ label: tr('Copy Problem Description'),
+            run: () => ide.api.invoke('clipboard:writeText', `${ide.util.rel(p.path)}:${p.line}:${p.col || 1}: ${p.msg} (${p.source})`) }]);
+        };
         nodes.push(row);
       }
     }

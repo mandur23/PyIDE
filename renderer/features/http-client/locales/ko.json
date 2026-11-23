@@ -39,5 +39,6 @@
   "{ms} ms": "{ms}ms",
   "{name} already exists": "이미 있습니다: {name}",
   "{n} bytes": "{n}바이트",
-  "Run a request from a .http file with ▶.": ".http 파일에서 ▶로 요청을 실행하세요."
+  "Run a request from a .http file with ▶.": ".http 파일에서 ▶로 요청을 실행하세요.",
+  "HTTP Request": "HTTP 요청"
 }

@@ -134,8 +134,8 @@ try {
     const c = await page(9642, CHOOSER);
     await c.until(`!!document.querySelector('.chooser-name')?.textContent && document.visibilityState === 'visible'`, 'chooser drawn');
     const st = await chooserState(c);
-    check(st.cards.length === 3 && st.cards[0].name === `${PRODUCT} Code` && st.cards[1].name === `${PRODUCT} Craft` && st.cards[2].name === `${PRODUCT} Cut`
-      && st.cards.every((x) => x.icon && x.sub), `the chooser shows a Code, a Craft and a Cut card with icons (${S(st.cards)})`);
+    check(st.cards.length === 4 && st.cards[0].name === `${PRODUCT} Code` && st.cards[1].name === `${PRODUCT} Craft` && st.cards[2].name === `${PRODUCT} Cut`
+      && st.cards[3].name === `${PRODUCT} Conquest` && st.cards.every((x) => x.icon && x.sub), `the chooser shows a Code, a Craft, a Cut and a Conquest card with icons (${S(st.cards)})`);
     check(Math.abs(st.w - 860) <= 20 && Math.abs(st.h - 540) <= 20, `the chooser is about 860x540 (${st.w}x${st.h})`);
     check(S(st.api) === S(['close', 'loadSettingsSync', 'localeSync', 'onUpdate', 'pick', 'saveSettingsSync', 'update', 'updateState']) && st.ide === 'undefined', `the chooser page gets only its own calls (${S(st.api)})`);
     check(st.focused === 'chooseCode' && !(await c.js(`document.body.textContent.toLowerCase().includes('remember')`)), 'the Code card has the focus; there is no remember option');
@@ -202,6 +202,7 @@ try {
     check(/9\.9\.9/.test(await c.js(tip)) && (await c.js(`getComputedStyle(document.getElementById('chooserBadge')).display`)) !== 'none' && (await c.js(status)) === '',
       `a new version puts an icon with a badge in the Dock (${await c.js(tip)})`);
     check(await c.js(`document.getElementById('chooserVersion').textContent`) === JSON.parse(readFileSync(path.join(APP_DIR, 'package.json'), 'utf8')).version, 'the menu bar shows this version');
+    await c.key('ArrowRight', 39);
     await c.key('ArrowRight', 39);
     await c.key('ArrowRight', 39);
     await c.key('ArrowRight', 39);

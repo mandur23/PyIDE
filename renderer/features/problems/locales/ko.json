@@ -9,5 +9,6 @@
   "Warnings": "경고",
   "Show {kind}": "{kind} 표시",
   "Hide {kind}": "{kind} 숨기기",
-  "{n} problems": "문제 {n}개"
+  "{n} problems": "문제 {n}개",
+  "Copy Problem Description": "문제 설명 복사"
 }

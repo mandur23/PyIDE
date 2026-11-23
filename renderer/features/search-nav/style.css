@@ -43,6 +43,8 @@
   font: 12.5px/1.6 var(--mono); }
 .sn-prow { display: flex; gap: 12px; padding: 1px 8px; cursor: pointer; white-space: nowrap; }
 .sn-prow:hover { background: var(--gray3); }
+.sn-prow.active, .sn-prow.active:hover { background: var(--blue2); }
+.sn-prow.active .sn-ploc { color: var(--gray9); }
 .sn-prow .sn-text { flex: 1; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
 .sn-ploc { color: var(--gray7); font-family: 'Segoe UI', sans-serif; }
 

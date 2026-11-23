@@ -433,10 +433,19 @@
       findOpts = { caseSensitive: o.caseSensitive, words: o.words, regex: o.regex, useMask: o.useMask, mask: o.mask, replacement: replace ? o.replacement : findOpts.replacement };
       ide.settings.set(FIND_KEY, findOpts);
     };
+    // The row chosen with the arrow keys from any field: Enter opens it (without one, Enter is Open in Find Window).
+    let chosen = -1;
+    const choose = (i) => {
+      const list = [...preview.children];
+      chosen = list.length ? (i + list.length) % list.length : -1;
+      list.forEach((n, k) => n.classList.toggle('active', k === chosen));
+      list[chosen]?.scrollIntoView({ block: 'nearest' });
+    };
     let seq = 0;
     const update = debounce(async () => {
       sync();
       const my = ++seq;
+      chosen = -1;
       if (!o.query) { status.textContent = ''; preview.replaceChildren(); return; }
       const res = await runFind(o, true);
       if (my !== seq || res.superseded) return;
@@ -459,6 +468,11 @@
     mask.oninput = update;
     maskOn.onchange = () => { o.useMask = maskOn.checked; mask.disabled = !o.useMask; (o.useMask ? mask : q).focus(); update(); };
     body.addEventListener('keydown', (e) => {
+      if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !e.altKey && !e.ctrlKey && !e.shiftKey && preview.children.length) {
+        e.preventDefault();
+        choose(chosen < 0 ? (e.key === 'ArrowDown' ? 0 : -1) : chosen + (e.key === 'ArrowDown' ? 1 : -1));
+        return;
+      }
       if (!e.altKey || e.ctrlKey) return;
       const key = { KeyC: 'caseSensitive', KeyW: 'words', KeyX: 'regex' }[e.code];
       if (key) { e.preventDefault(); flip(key); }
@@ -472,7 +486,8 @@
     const buttons = [{ label: tr('Open in Find Window'), primary: true, run: toWindow }];
     // Answering no to Replace All's question leaves this dialog open.
     if (replace) buttons.unshift({ label: tr('Replace All'), run: async () => { sync(); if (!o.query) return false; if ((await replaceAll({ ...o })) === false) return false; } });
-    const dlg = ide.ui.dialog({ title: replace ? tr('Replace in Files') : tr('Find in Files'), body, buttons, width: 780 });
+    const dlg = ide.ui.dialog({ title: replace ? tr('Replace in Files') : tr('Find in Files'), body, buttons, width: 780,
+      onEnter: () => { const row = preview.children[chosen]; if (!row) return false; row.click(); return true; } });
     q.select();
     update();
   }
@@ -1023,8 +1038,8 @@
     if (index.root && index.root === ide.root) loadIndex();
   });
 
-  ide.registerTreeAction({ title: tr('Find in Files…'), keyAction: 'FindInPath', when: (e) => e.dir, run: (e) => openFindDialog(false, e.path) });
-  ide.registerTreeAction({ title: tr('Replace in Files…'), keyAction: 'ReplaceInPath', when: (e) => e.dir, run: (e) => openFindDialog(true, e.path) });
+  ide.registerTreeAction({ group: 'find', title: tr('Find in Files…'), keyAction: 'FindInPath', when: (e) => e.dir, run: (e) => openFindDialog(false, e.path) });
+  ide.registerTreeAction({ group: 'find', title: tr('Replace in Files…'), keyAction: 'ReplaceInPath', when: (e) => e.dir, run: (e) => openFindDialog(true, e.path) });
 
   [
     { id: 'FindInPath', title: tr('Find in Files…'), keys: 'Ctrl+Shift+F', run: () => openFindDialog(false) },

@@ -605,12 +605,14 @@
   };
   const treeConfig = (e) => ({ type: 'pytest', name: tr('pytest in {name}', { name: e.name }), target: samePath(e.path, ide.root) ? '.' : relPosix(e.path) });
   ide.registerTreeAction({
+    group: 'run',
     get title() { return tr("Run 'pytest in {name}'", { name: menuEntry?.name ?? '' }); },
     keyAction: 'RunClass',
     when: hasTests,
     run: (e) => run.runContext(treeConfig(e)),
   });
   ide.registerTreeAction({
+    group: 'run',
     get title() { return tr("Debug 'pytest in {name}'", { name: menuEntry?.name ?? '' }); },
     when: (e) => hasTests(e) && run.canDebug({ type: 'pytest' }),
     run: (e) => run.debugConfig(run.addTemporary(treeConfig(e))),

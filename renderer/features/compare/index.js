@@ -363,10 +363,10 @@
   ide.registerAction({ id: 'CompareClipboardWithSelection', title: tr('Compare with Clipboard'), run: () => compareWithClipboard(ide.editor) });
   ide.registerAction({ id: 'Git.CompareWithBranch', title: tr('Compare with Branch…'), run: () => compareWithBranch(activeFile()) });
 
-  ide.registerTreeAction({ title: tr('Compare Files'), keyAction: 'CompareTwoFiles', when: (e, sel = []) => sel.length === 2 && sel.every((s) => !s.dir),
+  ide.registerTreeAction({ group: 'compare', title: tr('Compare Files'), keyAction: 'CompareTwoFiles', when: (e, sel = []) => sel.length === 2 && sel.every((s) => !s.dir),
     run: (e, sel) => compareFiles(sel[0].path, sel[1].path) });
-  ide.registerTreeAction({ title: tr('Compare With…'), keyAction: 'CompareTwoFiles', when: (e, sel = []) => !e.dir && sel.length <= 1, run: (e) => compareWith(e.path) });
-  ide.registerTreeAction({ title: tr('Git: Compare with Branch…'), when: (e, sel = []) => !e.dir && sel.length <= 1 && inRepo(), run: (e) => compareWithBranch(e.path) });
+  ide.registerTreeAction({ group: 'compare', title: tr('Compare With…'), keyAction: 'CompareTwoFiles', when: (e, sel = []) => !e.dir && sel.length <= 1, run: (e) => compareWith(e.path) });
+  ide.registerTreeAction({ group: 'compare', title: tr('Git: Compare with Branch…'), when: (e, sel = []) => !e.dir && sel.length <= 1 && inRepo(), run: (e) => compareWithBranch(e.path) });
 
   ide.onEditor((ed) => {
     ed.addAction({ id: 'pyide.compareWithClipboard', label: tr('Compare with Clipboard'), contextMenuGroupId: '9_cutcopypaste', contextMenuOrder: 6,

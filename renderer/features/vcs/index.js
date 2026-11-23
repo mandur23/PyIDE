@@ -2404,9 +2404,9 @@
     { id: 'ChangesView.Shelve', title: tr('Shelve Changes…'), run: () => openShelveDialog() },
     { id: 'Vcs.Show.Shelf', title: tr('Show Shelf'), run: showShelf },
   ].forEach(ide.registerAction);
-  ide.registerTreeAction({ title: tr('Git: Show Diff'), when: (e) => !e.dir && byPath.has(key(e.path)), run: (e) => openWorkingDiff(e.path) });
-  ide.registerTreeAction({ title: tr('Git: Show History'), when: (e) => !e.dir && !!repo && !isIgnored(e.path) && !['unversioned', 'added'].includes(byPath.get(key(e.path))?.status), run: (e) => showHistory(e.path) });
-  ide.registerTreeAction({ title: tr('Git: Rollback…'), when: (e) => !e.dir && byPath.get(key(e.path))?.status !== 'unversioned' && byPath.has(key(e.path)), run: (e) => rollbackFiles([byPath.get(key(e.path))]) });
+  ide.registerTreeAction({ group: 'vcs', title: tr('Git: Show Diff'), when: (e) => !e.dir && byPath.has(key(e.path)), run: (e) => openWorkingDiff(e.path) });
+  ide.registerTreeAction({ group: 'vcs', title: tr('Git: Show History'), when: (e) => !e.dir && !!repo && !isIgnored(e.path) && !['unversioned', 'added'].includes(byPath.get(key(e.path))?.status), run: (e) => showHistory(e.path) });
+  ide.registerTreeAction({ group: 'vcs', title: tr('Git: Rollback…'), when: (e) => !e.dir && byPath.get(key(e.path))?.status !== 'unversioned' && byPath.has(key(e.path)), run: (e) => rollbackFiles([byPath.get(key(e.path))]) });
 
   ide.vcs = {
     invoke, notify, logResult, errorText, userText, trn, nFiles, refresh, showConsole, openTextDiff, diffLines,

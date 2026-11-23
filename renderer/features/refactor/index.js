@@ -1090,6 +1090,7 @@
   ].forEach(ide.registerAction);
 
   ide.registerTreeAction({
+    group: 'edit',
     title: tr('Move…'),
     keyAction: 'Move',
     when: (entry) => (entry.dir ? !samePath(entry.path, ide.root) : isPy(entry.path)),

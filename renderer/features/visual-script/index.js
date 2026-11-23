@@ -258,6 +258,7 @@
       start: startJava,
     });
     ide.registerTreeAction({
+      group: 'run',
       title: (e) => tr("Run '{name}'", { name: isJava(e.path) ? nameOf(e.path) : configFor(e.path)?.name || e.name }),
       keyAction: 'RunClass',
       when: (e) => !e.dir && isScript(e.name),

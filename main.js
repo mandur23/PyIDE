@@ -667,15 +667,17 @@ windows.onCloseCancelled(() => { relaunchArgs = null; diagnostics.quitCancelled(
 // Collaboration (main/features/collab.js) adds its guests to the windows' shared documents.
 featureContext.windows = windows;
 
-// The process runs one app mode, 'code' (the IDE), 'craft' (the Minecraft app) or 'cut' (the video editor); running
-// two takes two processes. --mode=<mode> picks it, a file or folder argument means code, and otherwise the start chooser asks.
-const modeArg = /^--mode=(code|craft|cut)$/.exec(process.argv.find((a) => a.startsWith('--mode=')) || '')?.[1] || null;
+// The process runs one app mode, 'code' (the IDE), 'craft' (the Minecraft app), 'cut' (the video editor) or 'conquest'
+// (the 1914 grand-strategy game); running two takes two processes. --mode=<mode> picks it, a file or folder argument
+// means code, and otherwise the start chooser asks.
+const modeArg = /^--mode=(code|craft|cut|conquest)$/.exec(process.argv.find((a) => a.startsWith('--mode=')) || '')?.[1] || null;
 let appMode = 'code';
-// Craft's and Cut's project is always their own folder (PYIDE_CRAFT_HOME, PYIDE_CUT_HOME for tests), so every feature
-// of theirs has its ide.root.
+// Craft's, Cut's and Conquest's project is always their own folder (PYIDE_CRAFT_HOME, PYIDE_CUT_HOME, PYIDE_CONQUEST_HOME
+// for tests), so every feature of theirs has its ide.root.
 const craftHome = () => path.resolve(process.env.PYIDE_CRAFT_HOME || path.join(require('os').homedir(), 'Nano Studio Craft'));
 const cutHome = () => path.resolve(process.env.PYIDE_CUT_HOME || path.join(require('os').homedir(), 'Nano Studio Cut'));
-const appHome = (mode) => (mode === 'craft' ? craftHome() : mode === 'cut' ? cutHome() : null);
+const conquestHome = () => path.resolve(process.env.PYIDE_CONQUEST_HOME || path.join(require('os').homedir(), 'Nano Studio Conquest'));
+const appHome = (mode) => ({ craft: craftHome, cut: cutHome, conquest: conquestHome })[mode]?.() || null;
 
 // Cut is the Rust program (main/cut-launcher.js); this process starts it and quits. PYIDE_CUT_JS=1 (a test hook, for the
 // JavaScript Cut's own suites in a source run) keeps the JavaScript editor in this window instead.

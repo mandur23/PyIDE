@@ -964,6 +964,7 @@
   ide.registerAction({ id: 'editRunConfigurations', title: tr('Edit Configurations…'), run: () => editConfigurations() });
   ide.registerAction({ id: 'Rerun', title: tr('Rerun'), run: () => activeSession && (activeSession.rerun ? activeSession.rerun() : runConfig(activeSession.cfg, { executor: activeSession.executor })) });
   ide.registerTreeAction({
+    group: 'run',
     title: (e) => tr("Run '{name}'", { name: contextConfigForFile(e.path)?.name || e.name }),
     keyAction: 'RunClass',
     when: (e) => !e.dir && /\.pyw?$/i.test(e.name) && contextConfigForFile(e.path)?.type === 'python',

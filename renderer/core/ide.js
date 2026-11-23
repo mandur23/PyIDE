@@ -134,8 +134,9 @@ const ide = (window.ide = {
   // A detached window ("Open in New Window") shows only editors; see editors.js.
   detached: pageParams.has('detached'),
   // The process's app mode (main.js): 'code', the IDE; 'craft', the Minecraft app, where the IDE chrome is hidden and
-  // the Minecraft plugin fills #craftHost (craftReady); or 'cut', the video editor, which fills #cutHost (cutReady).
-  appMode: ['craft', 'cut'].includes(pageParams.get('mode')) ? pageParams.get('mode') : 'code',
+  // the Minecraft plugin fills #craftHost (craftReady); 'cut', the video editor, which fills #cutHost (cutReady); or
+  // 'conquest', the strategy game, which fills #conquestHost (conquestReady).
+  appMode: ['craft', 'cut', 'conquest'].includes(pageParams.get('mode')) ? pageParams.get('mode') : 'code',
   productName: pageParams.get('product') || 'Nano Studio',
   root: null,
   monaco: null,
@@ -149,7 +150,7 @@ const ide = (window.ide = {
 });
 
 if (ide.detached) document.body.classList.add('detached');
-ide.appTitle = `${ide.productName} ${{ craft: 'Craft', cut: 'Cut' }[ide.appMode] || 'Code'}`;
+ide.appTitle = `${ide.productName} ${{ craft: 'Craft', cut: 'Cut', conquest: 'Conquest' }[ide.appMode] || 'Code'}`;
 document.title = ide.appTitle;
 if (ide.appMode !== 'code') document.body.classList.add(`app-${ide.appMode}`);
 // Craft and Cut have one project each, their workspace, which main.js creates and trusts and the page opens at start.
@@ -1060,8 +1061,9 @@ ide.ui.contextMenu = (x, y, items, opts = {}) => {
 };
 ide.ui.menuOpen = menusOpen;
 
-// buttons: [{label, primary?, run?(dialog) -> false keeps it open}]
-ide.ui.dialog = ({ title, body, buttons = [{ label: tr('OK'), primary: true }], width = 520, onClose }) => {
+// buttons: [{label, primary?, run?(dialog) -> false keeps it open}]; onEnter?(event) -> true takes Enter from the
+// primary button
+ide.ui.dialog = ({ title, body, buttons = [{ label: tr('OK'), primary: true }], width = 520, onClose, onEnter }) => {
   const backdrop = el('div', 'dialog-backdrop');
   const box = el('div', 'dialog');
   box.style.width = `${width}px`;
@@ -1112,7 +1114,8 @@ ide.ui.dialog = ({ title, body, buttons = [{ label: tr('OK'), primary: true }], 
     if (e.key === 'Enter' && primary && !e.isComposing && !['TEXTAREA', 'BUTTON', 'A'].includes(e.target.tagName) && !e.target.matches?.('.native-edit-context')) {
       e.preventDefault(); // the keystroke must not also type into the field that gets the keyboard back
       e.stopPropagation();
-      primary.click();
+      // onEnter() -> true: the dialog's content took the key (a row chosen in it), so the primary button is not pressed
+      if (onEnter?.(e) !== true) primary.click();
     }
     if (e.key === 'Tab' && !e.ctrlKey && !e.altKey && !e.target.closest?.('.monaco-editor')) {
       const stops = [...box.querySelectorAll('button, input, select, textarea, a[href], [tabindex]')].filter((n) => n.tabIndex >= 0 && shown(n));
@@ -1838,9 +1841,12 @@ function selectRange(i) {
 }
 
 ide.registerTreeDecorator = (fn) => { treeDecorators.push(fn); };
-// {title: string | (entry, selection) -> string, when?(entry, selection), run(entry, selection)}; entry = {name, path,
-// dir}; selection = the selected entries. A title function names the row (Run 'main').
+// {title: string | (entry, selection) -> string, when?(entry, selection), run(entry, selection), group?, newTitle?};
+// entry = {name, path, dir}; selection = the selected entries. A title function names the row (Run 'main').
+// group: where the row goes in the menu, one of TREE_GROUPS; rows of one group stay together, a line between groups,
+// and a row without one is a tool. 'new' puts it in New › instead, under newTitle (HTTP Request, not New HTTP Request).
 ide.registerTreeAction = (action) => { treeActions.push(action); };
+const TREE_GROUPS = ['run', 'find', 'edit', 'compare', 'vcs', 'open', 'tools'];
 ide.selectedTreeEntry = () => selected;
 // Every selected entry, the focused one first (Ctrl+click adds and removes rows).
 ide.selectedTreeEntries = () => (selected ? [selected, ...alsoSelected] : []);
@@ -2234,11 +2240,16 @@ function badName(typed) {
 }
 async function createEntry(isDir) {
   if (!ide.root) return;
-  const name = await ide.ui.prompt(isDir ? tr('New directory name') : tr('New Python file name'), isDir ? '' : 'main.py');
+  // The prompt says where the file goes when that is not the project folder, and offers main.py only where there is none.
+  const dir = selectedDir();
+  const where = samePath(dir, ide.root) ? null : ide.util.rel(dir);
+  const title = isDir ? (where ? tr('New directory name (in {dir})', { dir: where }) : tr('New directory name'))
+    : where ? tr('New Python file name (in {dir})', { dir: where }) : tr('New Python file name');
+  const name = await ide.ui.prompt(title, isDir || await ide.api.exists(joinPath(dir, 'main.py')) ? '' : 'main.py');
   if (!name) return;
   const refused = badName(name);
   if (refused) return void ide.ui.alert(refused);
-  const target = joinPath(selectedDir(), !isDir && !name.includes('.') ? `${name}.py` : name);
+  const target = joinPath(dir, !isDir && !name.includes('.') ? `${name}.py` : name);
   if (await ide.api.exists(target)) return void ide.ui.alert(tr('{path} already exists', { path: basename(target) }));
   try {
     const text = isDir ? '' : await newFileText(target);
@@ -2414,6 +2425,12 @@ function newItems(entry) {
     if (python) python.keyAction = 'NewPythonFile';
     else sub.unshift({ label: tr('Python File'), keyAction: 'NewPythonFile', run: () => createEntry(false) });
     sub.splice(sub.findIndex((it) => it.label === tr('File')) + 1, 0, { label: tr('Directory'), run: () => createEntry(true) });
+    // the files plugins make from the tree (HTTP Request, Jupyter Notebook)
+    const sel = ide.selectedTreeEntries();
+    const made = treeActions.filter((a) => a.group === 'new' && (!a.when || a.when(entry, sel))).map((a) => ({ label: a.newTitle || a.title, run: () => a.run(entry, sel) }));
+    // above a last block that is not a kind of file (Edit File Templates…)
+    const last = sub.findLastIndex((it) => it.separator);
+    sub.splice(last >= 0 && last === sub.length - 2 ? last : sub.length, 0, ...made);
     return sub;
   };
   return [{ label: tr('New'), submenu }, ...items.filter((it) => !isNew(it))];
@@ -2424,9 +2441,18 @@ function showTreeMenu(entry, x, y) {
   const treeRoot = treeRootOf(entry);
   const own = treeRoot && (treeRoot.menu?.(entry) || []);
   const sel = ide.selectedTreeEntries();
-  const extra = treeRoot ? own : treeActions.filter((a) => !a.when || a.when(entry, sel))
-    .map((a) => ({ label: typeof a.title === 'function' ? a.title(entry, sel) : a.title, hint: a.hint, keyAction: a.keyAction, run: () => a.run(entry, sel) }));
   const fixed = samePath(entry.path, ide.root) || !!entry.fixed;
+  // The project's rows in their groups (Run and Debug together, then Find, Move and Reformat, Compare, Git and Local
+  // History, where the file is, the tools), a line between groups; the order inside a group is the plugins'.
+  const actions = treeRoot ? [] : [
+    ...treeActions.filter((a) => a.group !== 'new' && (!a.when || a.when(entry, sel)))
+      .map((a) => ({ group: a.group, label: typeof a.title === 'function' ? a.title(entry, sel) : a.title, hint: a.hint, keyAction: a.keyAction, run: () => a.run(entry, sel) })),
+    { group: 'open', label: tr('Copy Path'), run: () => ide.api.invoke('clipboard:writeText', entry.path) },
+    ...(samePath(entry.path, ide.root) ? [] : [{ group: 'open', label: tr('Copy Relative Path'), run: () => ide.api.invoke('clipboard:writeText', ide.util.rel(entry.path)) }]),
+    { group: 'open', label: tr('Show in Explorer'), run: () => ide.api.invoke('shell:showInFolder', entry.path) },
+  ];
+  const extra = treeRoot ? own : TREE_GROUPS.map((g) => actions.filter((a) => (TREE_GROUPS.includes(a.group) ? a.group : 'tools') === g))
+    .filter((list) => list.length).flatMap((list, i) => [...(i ? [{ separator: true }] : []), ...list]);
   ide.ui.contextMenu(x, y, [
     ...(treeRoot ? [] : [
       ...newItems(entry),
@@ -2535,6 +2561,8 @@ function treeKey(e) {
       if (j >= 0) selectRow(j);
     },
     Enter: () => row && (row.entry.dir ? toggleDir(row.entry) : ide.openFile(row.entry.path)),
+    // Windows' own key for a new name, beside PyCharm's Shift+F6
+    F2: () => !e.shiftKey && movable(row) && renameEntry(row.entry),
     Delete: () => row && row.depth > 0 && !row.entry.fixed && deleteEntries(operands(row.entry, deletableEntry)),
   };
   if (!keys[e.key]) return;

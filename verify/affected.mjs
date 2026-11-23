@@ -30,6 +30,8 @@ const AREAS = [
   { area: 'documents', match: /(^|\/)(CHANGELOG|FEATURES|NEXT|README|CLAUDE)\.md$|^docs\//, none: true },
   { area: 'Cut (Rust)', match: /^cut-rs\//, rust: true, suites: /^cut-rust-launch$/ },
   { area: 'Cut (JavaScript, the frozen specification)', match: /^(renderer\/features\/cut\/|main\/cut\/)/, suites: /^cut-(?!rust)/ },
+  { area: 'Conquest', match: /^(renderer\/features\/conquest\/|main\/features\/conquest\.js$|tools\/(build-conquest-maps\.mjs$|conquest-data\/))/, suites: /^conquest-/ },
+  { area: 'the start chooser', match: /^renderer\/(chooser\.html$|core\/chooser\.(js|css)$)/, suites: /^(app-mode|conquest-app)$/ },
   { area: 'Craft', match: /^(renderer\/features\/minecraft\/|main\/minecraft\/|main\/features\/minecraft\.js$|tools\/nano-bridge\/)/, suites: CRAFT },
   { area: 'sharing', match: /^(main\/features\/port-sharing\.js$|renderer\/features\/port-sharing\/|main\/bore)/, suites: /^(port-sharing|bore-client$|private-share$|automation$)/ },
   { area: 'updates and the release', match: /^(scripts\/|main\/(updater|release-key)|renderer\/features\/updater\/|package(-lock)?\.json$|\.github\/)/, suites: /^(updater|release-harness|report-update|plugin-install-asar)$/ },

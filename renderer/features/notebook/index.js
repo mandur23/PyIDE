@@ -1644,7 +1644,7 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
     ide.openFile(target);
   }
   ide.registerAction({ id: 'NewJupyterNotebook', title: tr('New Jupyter Notebook'), run: () => newNotebook() });
-  ide.registerTreeAction({ title: tr('New Jupyter Notebook'), run: (e) => newNotebook(e.dir ? e.path : dirname(e.path)) });
+  ide.registerTreeAction({ group: 'new', newTitle: tr('Jupyter Notebook'), title: tr('New Jupyter Notebook'), run: (e) => newNotebook(e.dir ? e.path : dirname(e.path)) });
 
   // ipykernel in the project interpreter, listed with the other Python tools in the Install Manager.
   let kernelItem = null;

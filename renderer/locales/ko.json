@@ -281,6 +281,7 @@
   "Python and web development": "Python·웹 개발",
   "Play Minecraft and run servers": "마인크래프트 플레이·서버",
   "Edit videos": "영상 편집",
+  "Lead a nation through the Great War": "1차 세계 대전의 나라 이끌기",
   "What would you like to open?": "무엇을 열까요?",
   "Choose an app from the Dock": "Dock에서 앱을 고르세요",
   "Downloading Nano Studio {version}… {percent}%": "Nano Studio {version} 다운로드 중… {percent}%",
@@ -325,5 +326,7 @@
   "Windows did not start {path}: {error}": "Windows에서 이 프로그램을 시작하지 못했습니다: {path} ({error})",
   "It ended right after starting, with exit code {code}.": "시작하자마자 끝났습니다. 종료 코드: {code}",
   "Nano Studio Cut is still open, so Nano Studio was not updated.": "Nano Studio Cut 창이 열려 있어서 업데이트하지 않았습니다.",
-  "Save your work in Cut and close it, then update again.": "Cut 창에서 작업을 저장하고 닫은 뒤 다시 업데이트하세요."
+  "Save your work in Cut and close it, then update again.": "Cut 창에서 작업을 저장하고 닫은 뒤 다시 업데이트하세요.",
+  "New Python file name (in {dir})": "새 Python 파일 이름({dir} 폴더)",
+  "New directory name (in {dir})": "새 디렉터리 이름({dir} 폴더)"
 }

@@ -494,7 +494,7 @@
     await ide.openFile(target, { line: 3, col: 1 });
   }
   ide.registerAction({ id: 'NewHttpRequest', title: tr('New HTTP Request'), run: () => newRequestFile() });
-  ide.registerTreeAction({ title: tr('New HTTP Request'), run: (e) => newRequestFile(e.dir ? e.path : dirname(e.path)) });
+  ide.registerTreeAction({ group: 'new', newTitle: tr('HTTP Request'), title: tr('New HTTP Request'), run: (e) => newRequestFile(e.dir ? e.path : dirname(e.path)) });
 
   // ---------- frameworks: generate a request for a route ----------
   async function generateRequest(route) {

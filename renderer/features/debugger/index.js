@@ -267,6 +267,25 @@
       clearHover();
       toggleBp(path, e.target.position.lineNumber);
     });
+    // A click on the line number too, as in PyCharm: the dot's own column is 22 px wide. A drag over the numbers still
+    // selects lines; the click's own selection of the line is put back to what it was.
+    let before = null; // the selection the last change replaced, and when
+    let numberDown = null;
+    ed.onDidChangeCursorSelection((e) => { before = { old: e.oldSelections?.length ? e.oldSelections : null, at: performance.now() }; });
+    ed.onMouseDown((e) => {
+      const ev = e.event;
+      numberDown = e.target.type === MouseTargetType.GUTTER_LINE_NUMBERS && ev.leftButton && !ev.shiftKey && !ev.ctrlKey && !ev.altKey && !ev.metaKey && e.target.position
+        ? { line: e.target.position.lineNumber, restore: before && performance.now() - before.at < 100 ? before.old : null } : null;
+    });
+    ed.onMouseUp((e) => {
+      const down = numberDown;
+      numberDown = null;
+      if (!down || e.target.type !== MouseTargetType.GUTTER_LINE_NUMBERS || e.target.position?.lineNumber !== down.line) return;
+      const path = pathOf(ed);
+      if (!path) return;
+      toggleBp(path, down.line);
+      if (down.restore) ed.setSelections(down.restore);
+    });
     ed.onContextMenu((e) => {
       if (e.target.type !== MouseTargetType.GUTTER_GLYPH_MARGIN || !e.target.position) return;
       const path = pathOf(ed);
@@ -1994,7 +2013,7 @@
   // Registered after every feature has loaded so it takes precedence over run's Ctrl+F2, but only while debugging.
   ide.on('ready', () => ide.registerAction({ id: 'StopDebug', title: tr('Stop Debugging'), keys: 'Ctrl+F2', when: () => !!sess, run: stopDebug }));
   // A file a configuration type claims has that type's own Debug entry (Debug 'pytest in …').
-  ide.registerTreeAction({ title: (e) => tr("Debug '{name}'", { name: ide.run?.contextConfigForFile?.(e.path)?.name || e.name.replace(/\.py$/i, '') }), when: (e) => !e.dir && e.name.endsWith('.py') && !claimingType(e.path), run: (e) => debugFile(e.path) });
+  ide.registerTreeAction({ group: 'run', title: (e) => tr("Debug '{name}'", { name: ide.run?.contextConfigForFile?.(e.path)?.name || e.name.replace(/\.py$/i, '') }), when: (e) => !e.dir && e.name.endsWith('.py') && !claimingType(e.path), run: (e) => debugFile(e.path) });
 
   // PyCharm's Settings › Build, Execution, Deployment › Python Debugger. Off, the Python processes a debugged program
   // starts run without the debugger (debugpy --configure-subProcess False; an attached process's are let go).

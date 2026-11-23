@@ -423,8 +423,8 @@
       },
     });
   });
-  ide.registerTreeAction({ title: tr('Local History: Show History'), run: (e) => showHistory(e.path, e.dir) });
-  ide.registerTreeAction({ title: tr('Local History: Put Label…'), run: putLabel });
+  ide.registerTreeAction({ group: 'vcs', title: tr('Local History: Show History'), run: (e) => showHistory(e.path, e.dir) });
+  ide.registerTreeAction({ group: 'vcs', title: tr('Local History: Put Label…'), run: putLabel });
   [
     { id: 'LocalHistory.ShowHistory', title: tr('Local History: Show History'), run: () => {
       const p = fileOfTab(ide.activeTab());

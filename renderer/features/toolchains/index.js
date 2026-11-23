@@ -820,12 +820,14 @@ int main() {
       return items;
     });
     ide.registerTreeAction({
+      group: 'run',
       title: (e) => tr("Run '{name}'", { name: (/\.java$/i.test(e.name) ? javaType : cppType).forFile(e.path)?.name || e.name }),
       keyAction: 'RunClass',
       when: (e) => !e.dir && (/\.java$/i.test(e.name) || C_SOURCE.test(e.name)),
       run: (e) => run().runContext((/\.java$/i.test(e.name) ? javaType : cppType).forFile(e.path)),
     });
     ide.registerTreeAction({
+      group: 'run',
       title: (e) => tr("Debug '{name}'", { name: javaType.forFile(e.path)?.name || e.name }),
       when: (e) => !e.dir && /\.java$/i.test(e.name) && !!ide.debugger?.debugJvm,
       run: (e) => run().debugConfig(run().addTemporary(javaType.forFile(e.path))),
