@@ -195,14 +195,5 @@
  { "name": "test-env", "file": "verify/test-env.mjs", "timeout": 5, "seconds": 1 },
  { "name": "ipc-guard", "file": "verify/ipc-guard.mjs", "timeout": 5, "seconds": 1 },
  { "name": "json-stores", "file": "verify/json-stores.mjs", "timeout": 5, "seconds": 1 },
- { "name": "window-close-unresponsive", "file": "verify/window-close-unresponsive.mjs", "timeout": 10, "seconds": 28 },
- { "name": "conquest-engine", "file": "verify/conquest-engine.mjs", "timeout": 5, "seconds": 6 },
- { "name": "conquest-maps", "file": "verify/conquest-maps.mjs", "timeout": 5, "seconds": 15 },
- { "name": "conquest-app", "file": "verify/conquest-app.mjs", "timeout": 15, "seconds": 90 },
- { "name": "conquest-ai", "file": "verify/conquest-ai.mjs", "timeout": 10, "seconds": 60 },
- { "name": "conquest-diplo", "file": "verify/conquest-diplo.mjs", "timeout": 10, "seconds": 50 },
- { "name": "conquest-1914", "file": "verify/conquest-1914.mjs", "timeout": 10, "seconds": 60 },
- { "name": "conquest-game", "file": "verify/conquest-game.mjs", "timeout": 20, "seconds": 150 },
- { "name": "conquest-panels", "file": "verify/conquest-panels.mjs", "timeout": 20, "seconds": 200 },
- { "name": "conquest-diplo-ui", "file": "verify/conquest-diplo-ui.mjs", "timeout": 20, "seconds": 150 }
+ { "name": "window-close-unresponsive", "file": "verify/window-close-unresponsive.mjs", "timeout": 10, "seconds": 28 }
 ]

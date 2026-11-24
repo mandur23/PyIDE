@@ -1,6 +1,6 @@
-// The start chooser (main/windows.js): which app this process runs, Code (the IDE), Craft (the Minecraft app), Cut
-// (the video editor) or Conquest (the 1914 grand-strategy game), picked from a Dock.
-// Picking an icon answers main, which opens the main window in that mode; Esc or the close button quits.
+// The start chooser (main/windows.js): which app this process runs, Code (the IDE), Craft (the Minecraft app) or Cut
+// (the video editor), picked
+// from a Dock. Picking an icon answers main, which opens the main window in that mode; Esc or the close button quits.
 // Main checks for updates meanwhile (main/features/updater.js), and a new version gets an icon of its own in the Dock:
 // a click downloads it, the next one installs it.
 (() => {
@@ -18,7 +18,6 @@
     code: { name: `${product} Code`, sub: tr('Python and web development') },
     craft: { name: `${product} Craft`, sub: tr('Play Minecraft and run servers') },
     cut: { name: `${product} Cut`, sub: tr('Edit videos') },
-    conquest: { name: `${product} Conquest`, sub: tr('Lead a nation through the Great War') },
   };
   let picked = false;
   const hoverFocus = (button) => { button.onmouseenter = () => button.focus(); };
@@ -101,5 +100,5 @@
     }
   });
   // The app used last comes first.
-  $({ craft: 'chooseCraft', cut: 'chooseCut', conquest: 'chooseConquest' }[window.__initialSettings?.['app.lastMode']] || 'chooseCode').focus();
+  $({ craft: 'chooseCraft', cut: 'chooseCut' }[window.__initialSettings?.['app.lastMode']] || 'chooseCode').focus();
 })();

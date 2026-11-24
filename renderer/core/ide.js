@@ -134,9 +134,8 @@ const ide = (window.ide = {
   // A detached window ("Open in New Window") shows only editors; see editors.js.
   detached: pageParams.has('detached'),
   // The process's app mode (main.js): 'code', the IDE; 'craft', the Minecraft app, where the IDE chrome is hidden and
-  // the Minecraft plugin fills #craftHost (craftReady); 'cut', the video editor, which fills #cutHost (cutReady); or
-  // 'conquest', the strategy game, which fills #conquestHost (conquestReady).
-  appMode: ['craft', 'cut', 'conquest'].includes(pageParams.get('mode')) ? pageParams.get('mode') : 'code',
+  // the Minecraft plugin fills #craftHost (craftReady); or 'cut', the video editor, which fills #cutHost (cutReady).
+  appMode: ['craft', 'cut'].includes(pageParams.get('mode')) ? pageParams.get('mode') : 'code',
   productName: pageParams.get('product') || 'Nano Studio',
   root: null,
   monaco: null,
@@ -150,7 +149,7 @@ const ide = (window.ide = {
 });
 
 if (ide.detached) document.body.classList.add('detached');
-ide.appTitle = `${ide.productName} ${{ craft: 'Craft', cut: 'Cut', conquest: 'Conquest' }[ide.appMode] || 'Code'}`;
+ide.appTitle = `${ide.productName} ${{ craft: 'Craft', cut: 'Cut' }[ide.appMode] || 'Code'}`;
 document.title = ide.appTitle;
 if (ide.appMode !== 'code') document.body.classList.add(`app-${ide.appMode}`);
 // Craft and Cut have one project each, their workspace, which main.js creates and trusts and the page opens at start.

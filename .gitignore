@@ -2,7 +2,6 @@
 /vendor/
 verify/out/
 *.png
-!renderer/features/conquest/data/**/*.png
 .ruff_cache/
 __pycache__/
 /dist/

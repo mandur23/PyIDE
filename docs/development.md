@@ -1,16 +1,15 @@
-# 개발 가이드 (Code, Craft, Cut, Conquest 공통)
+# 개발 가이드 (Code, Craft, Cut 공통)
 
-Nano Studio를 고칠 때 먼저 읽는 문서입니다. 구조, 기능을 만드는 방법, 코딩 규칙, 테스트, 커밋과 릴리스 순서를 다룹니다. 앱별 내용은 [code-app.md](code-app.md), [craft-app.md](craft-app.md), [cut-app.md](cut-app.md), [conquest-app.md](conquest-app.md), 겪은 문제와 규칙은 [pitfalls.md](pitfalls.md), 기능과 API의 상세 명세는 [FEATURES.md](../FEATURES.md)에 있습니다.
+Nano Studio를 고칠 때 먼저 읽는 문서입니다. 구조, 기능을 만드는 방법, 코딩 규칙, 테스트, 커밋과 릴리스 순서를 다룹니다. 앱별 내용은 [code-app.md](code-app.md), [craft-app.md](craft-app.md), [cut-app.md](cut-app.md), 겪은 문제와 규칙은 [pitfalls.md](pitfalls.md), 기능과 API의 상세 명세는 [FEATURES.md](../FEATURES.md)에 있습니다.
 
 ## 1. 한눈에 보기
 
 - Windows 전용 Electron 45 앱입니다. 편집기는 Monaco입니다.
-- 설치본 하나에 앱이 네 개 있습니다. 프로세스마다 모드가 하나입니다.
+- 설치본 하나에 앱이 세 개 있습니다. 프로세스마다 모드가 하나입니다.
   - `code`: Nano Studio Code. PyCharm 스타일 Python IDE입니다.
   - `craft`: Nano Studio Craft. 공식 Minecraft Launcher로 플레이하고 서버를 여는 앱입니다.
   - `cut`: Nano Studio Cut. 영상 편집기입니다. 설치본의 Cut은 Electron 창이 아니라 Rust 프로그램 `cut-rs`(`nano-studio-cut.exe`)이고, `main/cut-launcher.js`가 띄운 뒤 Electron은 끝납니다. `renderer/features/cut`의 JavaScript Cut(WebCodecs, WebGPU, Web Audio, FFmpeg 없음)은 그 명세로 저장소에만 있습니다. 자세한 것은 [cut-app.md](cut-app.md) 1절입니다.
-  - `conquest`: Nano Studio Conquest. 1914년 세계를 무대로 한 대전략 게임입니다. 지도는 WebGL2, 시뮬레이션과 AI는 web worker입니다. 자세한 것은 [conquest-app.md](conquest-app.md)입니다.
-  - `--mode=code|craft|cut|conquest`로 고르고, `.ncut` 파일 인자는 cut, 다른 경로 인자는 code입니다. 둘 다 없으면 시작 화면(`renderer/chooser.html`)이 뜹니다.
+  - `--mode=code|craft|cut`로 고르고, `.ncut` 파일 인자는 cut, 다른 경로 인자는 code입니다. 둘 다 없으면 시작 화면(`renderer/chooser.html`)이 뜹니다.
 - 프로세스는 셋입니다.
   - 메인: `main.js`와 `main/`. 파일, 프로세스, 네트워크, 창을 맡습니다.
   - 프리로드: `preload.js`. IDE 페이지(`renderer/index.html`)에만 `window.api`를 줍니다.
@@ -26,7 +25,6 @@ Nano Studio를 고칠 때 먼저 읽는 문서입니다. 구조, 기능을 만�
 | `main/features/<기능>.js` | 기능의 메인 모듈. `register(ctx)`로 IPC를 등록합니다 |
 | `main/trust.js`, `main/security.js`, `main/program-env.js` | 안전 모드, 창 탐색과 권한 차단, 자식 프로세스 환경 |
 | `main/minecraft/`, `main/bore-*.js` | Craft의 서버, 런처, 플레이어, 비공개 공유 |
-| `main/features/conquest.js` | Conquest의 저장 파일, worker 소스 글, 자료 파일, LLM 외교 문장 |
 | `main/cut-launcher.js` | Rust Cut(`nano-studio-cut.exe`)을 찾고, 환경 변수를 주어 띄우고, 실패를 알림 |
 | `main/features/cut.js`, `main/cut/` | JavaScript Cut(명세, 설치본에 없음)의 파일 읽기와 쓰기, 자동 저장과 복구, 캐시, 글꼴 |
 | `cut-rs/` | Rust Cut의 Cargo 작업 공간(`crates/cut-app`이 창, 나머지 크레이트가 형식, 모델, 디코딩, 엔진, 소리, 내보내기, AI 사이드카). 현황은 `cut-rs/NEXT.md` |
@@ -34,19 +32,18 @@ Nano Studio를 고칠 때 먼저 읽는 문서입니다. 구조, 기능을 만�
 | `renderer/core/editors.js` | 편집기 탭, 그룹 분할, `ide.openFile`, 창 닫기 대화상자 |
 | `renderer/features/<기능>/` | 플러그인: `plugin.json`, `index.js`, `style.css`, `locales/ko.json` |
 | `renderer/features/cut/` | JavaScript Cut 편집기 전체(형식, 모델, 엔진, 내보내기, 화면). Rust Cut의 명세이고 설치본에 들어가지 않습니다. 지도는 [cut-app.md](cut-app.md) |
-| `renderer/features/conquest/` | Conquest 전체: `sim/`(시뮬레이션과 AI, DOM 없는 순수 모듈), `view/`(WebGL2 지도), `ui/`(화면), `data/`(규칙과 1914 세계). 지도는 [conquest-app.md](conquest-app.md) |
 | `renderer/locales/ko.json` | 코어와 공용 문구의 한국어 |
 | `verify/` | 테스트(`<이름>.mjs`), 공용 도구 `lib.mjs`, 고정 프로젝트 `fixtures/` |
 | `scripts/release.mjs` | 릴리스 전 과정 |
-| `tools/` | 아이콘 생성기, NanoBridge 플러그인 소스, Conquest의 지도 만들기(`build-conquest-maps.mjs`와 `conquest-data/`) |
-| `docs/` | 이 문서들과 Craft, Cut, Conquest 설계 문서 |
+| `tools/` | 아이콘 생성기, NanoBridge 플러그인 소스 |
+| `docs/` | 이 문서들과 Craft, Cut 설계 문서 |
 
 ## 3. 기능(플러그인) 만들기
 
 기능 `foo`는 다음 파일로 이루어집니다. 자세한 규칙은 FEATURES.md의 "Layout of a feature named `foo`"와 "Plugins"에 있습니다.
 
 - `renderer/features/foo/plugin.json`: `{id, name, version, vendor, description, main?, depends?, modes?, required?, requiredIn?}`.
-  - `modes`의 기본값은 `["code"]`입니다. Craft에도 필요하면 `["code", "craft"]`, Craft 전용이면 `["craft"]`, Cut 전용이면 `["cut"]`, Conquest 전용이면 `["conquest"]`를 씁니다.
+  - `modes`의 기본값은 `["code"]`입니다. Craft에도 필요하면 `["code", "craft"]`, Craft 전용이면 `["craft"]`, Cut 전용이면 `["cut"]`을 씁니다.
   - `required`는 모든 모드에서 로드됩니다. 한 모드에서만 끌 수 없게 하려면 `requiredIn`을 씁니다.
   - `main`에 적은 파일은 `main/features/`에서 찾습니다. 꺼진 플러그인은 렌더러와 메인 모듈 모두 로드되지 않습니다.
 - `renderer/features/foo/index.js`: IIFE로 감싸고 전역 `ide`를 씁니다. 모든 플러그인 스크립트가 차례로 실행되고, `depends`가 먼저 로드됩니다.
@@ -60,7 +57,7 @@ Nano Studio를 고칠 때 먼저 읽는 문서입니다. 구조, 기능을 만�
 - 액션: `ide.registerAction({id, title, keys, run, when, context})`. 키는 PyCharm 기본 키맵을 따르고 다른 기능의 키를 빼앗지 않습니다. 화면에 단축키를 쓸 때는 `ide.keymap.label(id)`를 읽습니다.
 - 툴 윈도우: `ide.registerToolWindow({id, title, icon, side, order, mount})`. 아이콘은 `ide.icon(name)`의 이름입니다.
 - 대화상자와 목록: `ide.ui.dialog`, `ide.ui.pick`, `ide.ui.contextMenu`, `ide.ui.confirm`, `ide.ui.listKeys`.
-- 설정: `ide.settings.get/set`, 설정 페이지는 `ide.settingsPages`에 넣습니다. Craft, Cut, Conquest에도 보이려면 `craft: true`입니다.
+- 설정: `ide.settings.get/set`, 설정 페이지는 `ide.settingsPages`에 넣습니다. Craft와 Cut에도 보이려면 `craft: true`입니다.
 - 이벤트: `ide.on('projectOpened' | 'fileSaved' | 'settingsChanged' | ...)`. 해제 함수를 돌려줍니다.
 - 프로세스: 메인의 `ctx.startProcess`가 돌려준 id를 `ide.proc.attach(id, {data, exit})`에 넘깁니다.
 
@@ -103,8 +100,7 @@ Cut의 기능은 AI도 쓸 수 있어야 합니다. 키보드 동작, 자동화 
 - 한국어는 플러그인의 `locales/ko.json`에 넣습니다. 여러 앱이 함께 쓰는 문구는 `renderer/locales/ko.json`에 넣습니다. 사전은 모드별로 합쳐지므로 Code 전용 플러그인의 문구는 Craft에 없습니다.
 - 사용자 데이터(코드, 파일 이름, 경로, 출력)는 번역하지 않습니다. 용어는 PyCharm 한국어 팩을 따릅니다.
 - Craft 문구는 -요 말투입니다. 이름 뒤에 조사를 붙이지 않습니다.
-- Cut과 Conquest 문구는 IDE처럼 -합니다 말투입니다.
-- 바꾼 뒤 `node verify/i18n-static.mjs`가 누락 0개여야 합니다. 이 검사는 플러그인의 맨 위 폴더만 읽어서, Conquest의 `ui/`와 `view/` 문구는 `verify/conquest-game.mjs`가 검사합니다.
+- 바꾼 뒤 `node verify/i18n-static.mjs`가 누락 0개여야 합니다.
 
 ## 6. 테스트
 
@@ -117,8 +113,7 @@ Cut의 기능은 AI도 쓸 수 있어야 합니다. 키보드 동작, 자동화 
   ```
 
 - 결과는 로그 끝의 `N/M passed`와 `FAIL` 줄로 봅니다. 통과 수가 비어 있으면 테스트가 돌지 않은 것입니다.
-- 일반 Node 테스트(`*-core.mjs`, `redact.mjs`, `conquest-engine.mjs`, `conquest-ai.mjs`, `conquest-diplo.mjs`, `conquest-maps.mjs`, `conquest-1914.mjs`, 벤치마크 `conquest-bench.mjs`, `conquest-ai-bench.mjs` 등)는 `node verify/<이름>.mjs`로 바로 돌립니다.
-- 두 세션이나 두 에이전트가 같은 PC에서 일하면 숨겨진 데스크톱도 하나를 같이 씁니다. 앱 테스트가 겹치면 서로의 창을 덮으므로, 잠금 같은 약속으로 한 번에 하나만 돌립니다. 일반 Node 테스트는 겹쳐도 됩니다(벤치마크는 빼고).
+- 일반 Node 테스트(`*-core.mjs`, `redact.mjs` 등)는 `node verify/<이름>.mjs`로 바로 돌립니다.
 - CI 러너와 비슷하게 돌리려면 `PYIDE_TEST_VIEWPORT=1024x720 PYIDE_TEST_CPU=2`를 줍니다.
 
 ### 작성
