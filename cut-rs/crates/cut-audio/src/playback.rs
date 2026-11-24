@@ -149,6 +149,14 @@ pub struct Playback {
     worker: Option<JoinHandle<()>>,
     _stream: cpal::Stream,
     rate: u32,
+    /// The name of the device the stream was opened on.
+    device: String,
+}
+
+/// The name of the default output device now (`None`: there is none). A player whose [`Playback::device`] is another
+/// one plays to a device the person no longer listens to.
+pub fn default_device() -> Option<String> {
+    cpal::default_host().default_output_device().map(|d| d.name().unwrap_or_default())
 }
 
 impl Playback {
@@ -158,6 +166,7 @@ impl Playback {
         let host = cpal::default_host();
         let device = host.default_output_device().ok_or(PlaybackError::NoDevice)?;
         let config = pick_config(&device)?;
+        let name = device.name().unwrap_or_default();
         let rate = config.sample_rate.0;
         let channels = usize::from(config.channels);
         let shared = Arc::new(Shared {
@@ -204,7 +213,12 @@ impl Playback {
             .name("cut-audio mixer".into())
             .spawn(move || work(&ws, rx, Mixer::new(rate, get_audio)))
             .map_err(|e| PlaybackError::Device(e.to_string()))?;
-        Ok(Self { shared, tx, worker: Some(worker), _stream: stream, rate })
+        Ok(Self { shared, tx, worker: Some(worker), _stream: stream, rate, device: name })
+    }
+
+    /// The name of the output device this player plays to.
+    pub fn device(&self) -> &str {
+        &self.device
     }
 
     /// The device's (and the mixer's) sample rate.

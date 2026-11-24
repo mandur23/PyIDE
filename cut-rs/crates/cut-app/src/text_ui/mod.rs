@@ -10,6 +10,7 @@
 
 pub mod editor;
 pub mod fonts;
+pub mod graphic;
 pub mod panel;
 pub mod presets;
 

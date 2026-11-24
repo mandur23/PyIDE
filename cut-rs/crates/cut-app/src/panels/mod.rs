@@ -91,6 +91,7 @@ pub fn layout(s: &mut Shell, ui: &mut egui::Ui) {
             Frame::new().fill(pal.gray[2]).inner_margin(Margin::symmetric(8, 4)).stroke(Stroke::new(1.0, pal.gray[1])),
         )
         .show(ui, |ui| topbar::show(s, ui));
+    crate::control::panel::banner(s, ui);
     egui::Panel::bottom("status")
         .show_separator_line(false)
         .frame(Frame::new().fill(pal.gray[2]).inner_margin(Margin::symmetric(8, 2)))

@@ -147,6 +147,19 @@ outside the project (files, programs, the network) is in reach of a tool.
 - `run_action` checks what the action needs before it runs (`NEEDS` in `control-actions.js`) and answers what changed:
   the undo step's name, the selection, the playhead, In/Out, the tool, the Source monitor, the view. An action that
   changed nothing is refused with what the editor said (its toast, heard through `Cut.ui.listen`).
+- The native editor differs from the schema text in four places, each on purpose (2026-11-24, found by making a motion
+  graphic through the tools; `tests/control_made.rs`). The table itself cannot say so: it is the JavaScript's, letter
+  for letter. (1) `set_keyframes` refuses two keyframes on one frame of the sequence ("keyframes[2].time 6.61 s is on
+  the same frame as keyframes[1] (6.6 s): …") instead of keeping the later one; a jump is an `ease: "hold"` keyframe
+  and the next value one frame later. (2) `add_transition` without `align` is centred only on a cut between two
+  clips; at a clip's free start it starts there and at a free end it ends there, as Apply Transition on the timeline
+  does, and the answer names an alignment that is not `center`. (3) `add_text`, `add_graphic` and `add_color_matte`
+  take an `at` after the sequence's end, up to an hour past it. (4) A color matte's undo step is "Add Color Matte".
+- Things the descriptions do not say: an ellipse's outline starts at 12 o'clock and runs clockwise (`trimStart`,
+  `trimEnd`); the Glow effect's `threshold` is measured on linear light, so a mid-bright colour (#d97747 is 0.28)
+  does not glow at 35 %; `list_effects` has no kind for transitions (its answer lists them apart, under
+  `transitions`, beside the effects of the kind asked for).
+
 
 ## 5. The tools
 

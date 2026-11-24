@@ -512,7 +512,7 @@ fn color_matte_safe_margins_remove_unused_and_track_volume() {
     let c = h.state().app.sequence().unwrap().clip(id).unwrap().clone();
     assert_eq!(
         (c.start, h.state().app.history.position(), label(&h)),
-        (secs(1.0), steps + 1, "Add Graphic".to_owned()),
+        (secs(1.0), steps + 1, "Add Color Matte".to_owned()),
         "{c:?}"
     );
     assert!(serde_json::to_string(&c.source).unwrap().contains("#2f6fdb"), "a Color Matte in blue: {:?}", c.source);

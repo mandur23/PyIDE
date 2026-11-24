@@ -24,7 +24,11 @@ impl Settings {
     /// The settings of a workspace; empty when the file is missing or is not a JSON object.
     pub fn load(home: &Path) -> Self {
         let file = home.join(".cut-rs").join("settings.json");
-        let values = match fs::read(&file).ok().and_then(|b| serde_json::from_slice(&b).ok()) {
+        // A byte order mark is skipped: Windows PowerShell's `Set-Content -Encoding utf8` and some editors write
+        // one, and the whole file read as empty then (every setting back at its default, without a word).
+        let read = fs::read(&file).ok();
+        let bytes = read.as_deref().map(|b| b.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(b));
+        let values = match bytes.and_then(|b| serde_json::from_slice(b).ok()) {
             Some(Value::Object(m)) => m,
             _ => Map::new(),
         };

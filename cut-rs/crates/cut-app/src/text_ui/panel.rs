@@ -37,6 +37,8 @@ pub struct PanelState {
     style: Option<String>,
     /// The name being typed for Save… (`ide.ui.prompt`).
     naming: Option<String>,
+    /// The same panel for a graphic clip's layers.
+    pub graphic: super::graphic::State,
 }
 
 fn path(layer: &str, field: &str) -> String {
@@ -125,13 +127,16 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     if !ctx.input(|i| i.pointer.any_down()) && !egui::Popup::is_any_open(&ctx) {
         s.features.text.panel.gesture.end(&mut s.app);
+        s.features.text.panel.graphic.end(&mut s.app);
     }
 }
 
 fn body(s: &mut Shell, ui: &mut egui::Ui) {
     let clip = super::text_clip(&s.app).cloned();
+    // a motion graphic's layers are edited here too (text_ui/graphic.rs)
+    let graphic = if clip.is_none() { super::graphic::graphic_clip(&s.app).cloned() } else { None };
     ui.horizontal(|ui| {
-        let title = clip.as_ref().map_or_else(
+        let title = clip.as_ref().or(graphic.as_ref()).map_or_else(
             || tr("Text").into_owned(),
             |c| if c.name.is_empty() { tr("Text").into_owned() } else { c.name.clone() },
         );
@@ -143,10 +148,15 @@ fn body(s: &mut Shell, ui: &mut egui::Ui) {
             }
         });
     });
+    if let Some(g) = graphic {
+        s.features.text.panel.layer = None;
+        super::graphic::body(s, ui, &g);
+        return;
+    }
     let Some(c) = clip else {
         s.features.text.panel.layer = None;
         ui.label(
-            RichText::new(tr("Select a text clip, or click the program monitor with the Type tool (T)."))
+            RichText::new(tr("Select a text or graphic clip, or click the program monitor with the Type tool (T)."))
                 .color(s.palette.gray[8]),
         );
         return;

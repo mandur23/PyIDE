@@ -572,6 +572,8 @@ pub fn set_keyframes(c: &mut Cx, a: &Json) -> R<Out> {
     };
     let (fr, end) = (c.f(), clip.end());
     let mut list = Vec::new();
+    // the frame of each keyframe so far and the time it was given as
+    let mut frames: Vec<(i64, f64)> = Vec::new();
     for (i, k) in arg(a, "keyframes").and_then(Json::as_array).into_iter().flatten().enumerate() {
         let time = f(k, "time").unwrap_or(0.0);
         let t = c.ticks(time);
@@ -583,6 +585,18 @@ pub fn set_keyframes(c: &mut Cx, a: &Json) -> R<Out> {
                 c.sec(end as f64)
             ));
         }
+        // A frame holds one keyframe: of two on the same frame the command keeps the later one, and the animation
+        // loses a value without a word (a loop's jump back, written 6.6 s and 6.61 s at 30 fps, drew nothing).
+        let frame = round((t - clip.start).max(0) as f64 / fr as f64) as i64;
+        if let Some(j) = frames.iter().position(|x| x.0 == frame) {
+            return refuse(format!(
+                "keyframes[{i}].time {} s is on the same frame as keyframes[{j}] ({} s): a frame is {} s here and holds one keyframe. Move one of them at least a frame away, or give the earlier one ease hold and put the jump on the next frame.",
+                js_num(time),
+                js_num(frames[j].1),
+                js_num(r3(fr as f64 / cut_time::TICKS as f64))
+            ));
+        }
+        frames.push((frame, time));
         let ease = s(k, "ease").unwrap_or("linear");
         list.push(json!({ "t": (t - clip.start).max(0), "v": value(k.get("value").unwrap_or(&Json::Null), i)?, "ease": ease }));
     }

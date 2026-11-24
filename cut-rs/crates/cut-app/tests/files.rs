@@ -411,6 +411,8 @@ fn files_settings_and_recent() {
     assert_eq!(Recent::of(&odd).paths(), [PathBuf::from("C:\\a.ncut")]);
     Recent::of(&odd).store(&mut odd);
     assert_eq!(odd.get("theme"), Some(&json!("dark")));
+    fs::write(back.file(), "\u{feff}{\"theme\":\"light\"}").unwrap();
+    assert_eq!(Settings::load(&w).get("theme"), Some(&json!("light")), "a byte order mark is skipped");
     fs::write(back.file(), "[broken").unwrap();
     assert!(Settings::load(&w).get("theme").is_none(), "a broken file reads as empty");
 }

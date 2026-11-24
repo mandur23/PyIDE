@@ -487,7 +487,7 @@ pub fn add_color_matte(c: &mut Cx, a: &Json) -> R<Out> {
         None => None,
     };
     let name = s(a, "name").filter(|x| !x.is_empty()).unwrap_or("Color Matte").to_owned();
-    let (id, track) = c.atomic("Add Graphic", |c| {
+    let (id, track) = c.atomic("Add Color Matte", |c| {
         let track = free_video_track(c, track.as_deref(), at, d)?;
         let opts = json!({ "track": track, "at": at, "duration": d, "name": name, "source": { "generator": "solid", "color": color } });
         Ok((c.run(&C::add_generated(c.seq_id().as_str(), opts))?["id"].clone(), track))

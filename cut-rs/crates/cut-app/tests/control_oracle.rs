@@ -221,6 +221,21 @@ fn compare(name: &str, setup: Json, calls: Vec<(&str, Json)>, ok: Option<bool>) 
     let script: Vec<Json> = calls.iter().map(|(n, a)| json!([n, a])).collect();
     let mut js = ask(&[json!(["run", { "project": project, "setup": setup, "calls": script }])]).remove(0);
     let mut rust = run_rust(&project, &setup, &calls);
+    // The native History names a colour matte's step for what it is; the JavaScript says "Add Graphic" for every
+    // made clip that is not a text (tests/control_made.rs checks the native name).
+    for step in rust["app"]["steps"].as_array_mut().into_iter().flatten() {
+        if step == "Add Color Matte" {
+            *step = json!("Add Graphic");
+        }
+    }
+    // A transition asked for without an alignment lies inside the clip at a clip's free end, and the native answer
+    // says so (`align: start|end`); the JavaScript centres it there and says nothing (tests/control_made.rs).
+    for (i, (name, args)) in calls.iter().enumerate() {
+        let value = rust["results"].get_mut(i).and_then(|r| r.get_mut("value")).and_then(Json::as_object_mut);
+        if let Some(v) = value.filter(|_| name == "add_transition" && args.get("align").is_none()) {
+            v.remove("align");
+        }
+    }
     unordered(&mut js);
     unordered(&mut rust);
     let mut bad = Vec::new();

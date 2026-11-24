@@ -52,12 +52,21 @@ pub fn add_transition(c: &mut Cx, a: &Json) -> R<Out> {
     for (k, v) in arg(a, "params").and_then(Json::as_object).into_iter().flatten() {
         params.insert(k.clone(), param_value(def, k, v, &format!("params.{k}"), None)?);
     }
-    let mut opts = json!({ "track": t.id.as_str(), "at": edge, "type": ty, "align": s(a, "align").unwrap_or("center"), "params": params });
+    // Without an alignment asked for: centred on a cut between two clips; at a clip's free end inside the clip, as the
+    // timeline's own Apply Transition places it. Centred there, half of it lay outside the clip and a fade stopped
+    // half way (the last frame of a 0.8 s fade out was still at 36 % of its brightness).
+    let align = s(a, "align").unwrap_or_else(|| crate::edit::actions::align_at(c.seq(), t.id, edge));
+    let mut opts = json!({ "track": t.id.as_str(), "at": edge, "type": ty, "align": align, "params": params });
     if let Some(d) = f(a, "duration") {
         opts["duration"] = json!(c.ticks(d));
     }
     let r = c.run(&C::add_transition(c.seq_id().as_str(), opts))?;
-    Ok(json!({ "edit": { "at": edge }, "transition": r["id"] }).into())
+    let mut out = json!({ "edit": { "at": edge }, "transition": r["id"] });
+    // said only when it is not the schema's default, so the caller knows where the transition lies
+    if align != "center" {
+        out["align"] = json!(align);
+    }
+    Ok(out.into())
 }
 
 pub fn remove_transition(c: &mut Cx, a: &Json) -> R<Out> {
@@ -143,9 +152,24 @@ pub fn free_video_track(c: &mut Cx, track: Option<&str>, at: i64, d: i64) -> R<S
     }
 }
 
+/// How far after the sequence's end a made clip may start (seconds).
+const PAST_END: f64 = 3600.0;
+
 /// The start and length of a new still, title or graphic (`at` snapped, `duration` in frames or the project's).
 pub fn still_span(c: &Cx, a: &Json) -> R<(i64, i64)> {
-    let at = cut_time::snap(c.time_in(f(a, "at").unwrap_or(0.0), "at", false)?, c.fps(), false);
+    // A made clip needs no material at its place, so it may go after the sequence's end as a clip dragged on the
+    // timeline may (a title at 5 s of an empty sequence was refused as "outside the sequence (0 to 0 s)"); not
+    // further than an hour past it, which is a mistaken time and not a plan.
+    let at_s = f(a, "at").unwrap_or(0.0);
+    let end = c.duration() as f64 / cut_time::TICKS as f64;
+    if at_s > end + PAST_END {
+        return refuse(format!(
+            "at {} s is more than an hour after the sequence's end ({} s); a new clip goes inside the sequence or within an hour after it.",
+            js_num(at_s),
+            js_num(r3(end))
+        ));
+    }
+    let at = cut_time::snap(c.time_in(at_s, "at", true)?, c.fps(), false);
     let fr = c.f();
     let still = c.project().settings.get("stillDuration").and_then(Json::as_f64).unwrap_or(0.0) as i64;
     let d = match f(a, "duration") {

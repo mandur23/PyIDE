@@ -23,6 +23,12 @@ const KNOWN: &[(&str, &str, &str)] = &[
     ("text", "Voice isolation is not available.", NO_STATUS),
     ("text", "Apply to allow it; then this shows how to connect.", APPLY),
     ("text", "Apply to stop allowing it; external AIs are then refused.", APPLY),
+    (
+        "text",
+        "Select a text clip, or click the program monitor with the Type tool (T).",
+        "the native Text panel also edits a graphic clip's layers (text_ui/graphic.rs), so its hint names both: \
+         \"Select a text or graphic clip, …\"",
+    ),
     // ---- screens not built ----
     (
         "text",

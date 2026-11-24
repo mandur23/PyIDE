@@ -591,3 +591,87 @@ fn the_timeline_bar_is_on_its_tab_row_when_the_row_has_the_room() {
     drop(h);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A graphic clip of two layers at 0 s for 4 s: a rectangle named "box" under a text "Hello". -> the clip.
+fn graphic_clip(hist: &mut History) -> Id {
+    let seq = seq_id(hist);
+    let v1 = hist.project().sequences[0].tracks.iter().find(|t| t.kind == cut_model::TrackKind::Video).unwrap().id;
+    let r = apply(
+        hist,
+        json!({ "type": "addGenerated", "seqId": seq, "opts": { "track": v1.as_str(), "at": 0, "duration": secs(4.0),
+            "name": "Card", "source": { "generator": "graphic", "layers": [
+                { "id": "box", "kind": "rect", "name": "box", "size": [400, 200], "fill": "#224466" },
+                { "id": "hello", "kind": "text", "text": "Hello", "fontSize": 80 },
+            ] } } }),
+    );
+    Id::new(r["id"].as_str().unwrap())
+}
+
+fn layer_of(h: &H, clip: Id, layer: &str) -> Json {
+    let seq = h.state().app.sequence().unwrap();
+    match &seq.clip(clip).unwrap().source {
+        cut_model::Source::Generator { layers: Some(l), .. } => l.iter().find(|x| x["id"] == layer).cloned().unwrap(),
+        _ => panic!("the clip is not a graphic"),
+    }
+}
+
+#[test]
+fn a_graphic_clips_layers_are_listed_and_changed_in_the_text_panel() {
+    let dir = scratch("graphic-panel");
+    let mut clip = None;
+    let mut h = open(&dir, |hist| clip = Some(graphic_clip(hist)));
+    let clip = clip.unwrap();
+    h.state_mut().app.select([clip], false, false);
+    h.state_mut().features.workspace.open_panel("text");
+    for _ in 0..4 {
+        h.step();
+    }
+    // the layers, the top one first, and the top one's fields
+    h.get_by_label("2 layers");
+    let text_row = h.get_by_label("Text  Hello").rect();
+    let box_row = h.get_by_label("Rectangle  box").rect();
+    assert!(text_row.center().y < box_row.center().y, "the top layer is listed first ({text_row:?}, {box_row:?})");
+    assert!(h.query_by_label("Tracking").is_some() && h.query_by_label("Radius").is_none(), "the text layer's fields");
+    // the other layer's fields after a click on its row
+    click(&mut h, box_row.center(), Modifiers::NONE);
+    h.step();
+    assert!(h.query_by_label("Radius").is_some() && h.query_by_label("Tracking").is_none(), "the rectangle's fields");
+    // its box hides it: one step of the history, and Undo shows it again
+    let steps = steps(&h).len();
+    let boxes: Vec<Rect> = h.get_all_by_role(Role::CheckBox).map(|n| n.rect()).collect();
+    let row = h.get_by_label("Rectangle  box").rect();
+    let eye = boxes.iter().find(|b| (b.center().y - row.center().y).abs() < 6.0 && b.right() <= row.left() + 2.0);
+    let eye = *eye.unwrap_or_else(|| panic!("the visibility box of the row at {row:?} among {boxes:?}"));
+    click(&mut h, eye.center(), Modifiers::NONE);
+    h.step();
+    h.step();
+    assert_eq!(layer_of(&h, clip, "box")["visible"], false, "the layer is hidden");
+    let after = self::steps(&h);
+    assert_eq!(after.len(), steps + 1, "one step: {after:?}");
+    assert_eq!(after.last().map(String::as_str), Some("Edit Graphic"));
+    let ctx = h.ctx.clone();
+    h.state_mut().run_action("undo", &ctx);
+    h.step();
+    assert_ne!(layer_of(&h, clip, "box")["visible"], false, "Undo shows it again");
+    // the text layer's words are typed in its field
+    let text_row = h.get_by_label("Text  Hello").rect();
+    click(&mut h, text_row.center(), Modifiers::NONE);
+    h.step();
+    let field = h.get_by_role(Role::MultilineTextInput).rect();
+    click(&mut h, field.center(), Modifiers::NONE);
+    h.step();
+    h.event(egui::Event::Key {
+        key: egui::Key::End,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::CTRL,
+    });
+    h.step();
+    h.event(egui::Event::Text(" there".into()));
+    h.step();
+    h.step();
+    assert_eq!(layer_of(&h, clip, "hello")["text"], "Hello there", "what is typed is the layer's text");
+    drop(h);
+    let _ = std::fs::remove_dir_all(&dir);
+}

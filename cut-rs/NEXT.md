@@ -76,6 +76,13 @@ Left:
 - Opening a project with offline media opens Relink Media at once, as the JavaScript does; a scripted run skips it with `CUT_DIALOG` (a JSON file without a `relink` key, or `"relink": null`, closes it as Cancel does); in-process tests close it themselves (`tests/direct.rs`, `tests/engine.rs`).
 - The rename field and the clip menu cannot be pictured in the real app through `CUT_ACTIONS` (`direct.rename`, `direct.menu` work in the harness); the guess is that the window started behind others has no keyboard focus, which closes both.
 - Video clips have no fade handles (the JavaScript has them for audio only); keyframe removal on a line is the keyframe's menu (as the JavaScript).
+## A motion graphic made through the control API, and what it turned up (2026-11-24)
+Built: a graphic clip's layers in the Text panel (`cut-app/src/text_ui/graphic.rs`: the list top first with a visibility box, the chosen layer's fields by section, controls made from `cut_model::graphic::FIELDS`, a keyframed field written at the playhead, one undo step a gesture); the external AI banner as a row under the top bar (`control::panel::banner`, a client named once with its connections); the sound's device opened again at a play when it must be (`transport::must_reopen`, `Player::recover`: another default device, a stream error, a run whose sound stood still, no device at the start); `set_keyframes` refusing two keyframes on one frame; `add_transition` aligned inside a clip at its free end; made clips after the sequence's end; "Add Color Matte" in the History; a settings file with a byte order mark read.
+Proven: `tests/control_made.rs` (the tools as an AI calls them, the banner's names, the device decision, and a real output device opened again after a marked stall), `tests/pointer.rs` (the panel by pointer and keys: the list's order, another layer's fields, hiding in one step and Undo, typing a text layer), the panel file's own test (every model field has a section), pictures of the real window on the 27 s graphic (Korean, dark and light, 13 connections).
+Left:
+- No real device change was made (the system's sound settings are the owner's): unplugging while playing ends that run on the wall clock, and the sound returns at the next play.
+- The panel edits fields; it does not add, remove or reorder layers, and a gradient or a dash pattern is shown as set and can be removed, not edited (`set_graphic` does those).
+
 
 ## Round three (2026-11-13): the editor's own features, built
 Each is the JavaScript's, its `verify/cut-*.mjs` cases ported to `cut-app/tests/auto.rs` and `tests/leftovers.rs` (the export gate to `cut-export/tests/export.rs`); pictures in `scratchpad/look-leftovers` (`app-*.png` the real app, the others the headless window).

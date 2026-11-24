@@ -91,8 +91,28 @@ enum Clock {
 
 /// The transport of the editor: the mix played from the playhead, its clock the picture's.
 pub struct Player {
+    library: Library,
     sound: Option<Playback>,
     run: Option<(f64, Clock)>,
+    /// What the sound was last given, for a device opened again.
+    project: Option<(Arc<Project>, Id)>,
+    gain: Option<f32>,
+    /// The sound's clock stood still in the last run: its device no longer calls.
+    stalled: bool,
+    /// How often the output device was opened again.
+    reopened: u32,
+}
+
+/// Whether the output device has to be opened again before the sound can play: there is no player (no device when
+/// the app started), its stream reported an error (the device was unplugged, disabled or its format changed), its
+/// clock stood still, or another device is the default now (headphones plugged in, a Bluetooth device connected).
+/// Without this the first of these left every later playback silent until the app was started again.
+pub fn must_reopen(opened: Option<&str>, default: Option<&str>, error: bool, stalled: bool) -> bool {
+    match (opened, default) {
+        (None, d) => d.is_some(),
+        (Some(_), None) => error || stalled,
+        (Some(o), Some(d)) => error || stalled || o != d,
+    }
 }
 
 /// The mixer's sources: every file opened through one [`Library`], read on demand.
@@ -107,15 +127,56 @@ impl Player {
     /// The player on the default output device; without one (or when it cannot open) the clock is the wall's.
     /// `CUT_OUTPUT_GAIN` sets the last multiplier (0: silent).
     pub fn new(library: Library) -> (Self, Option<String>) {
-        let (sound, error) = match Playback::new(file_audio(library)) {
+        let (sound, error) = match Playback::new(file_audio(library.clone())) {
             Ok(p) => (Some(p), None),
             Err(e) => (None, Some(e.to_string())),
         };
-        if let (Some(p), Some(g)) = (&sound, std::env::var("CUT_OUTPUT_GAIN").ok().and_then(|v| v.parse::<f32>().ok()))
-        {
+        let gain = std::env::var("CUT_OUTPUT_GAIN").ok().and_then(|v| v.parse::<f32>().ok());
+        if let (Some(p), Some(g)) = (&sound, gain) {
             p.set_output_gain(g);
         }
-        (Self { sound, run: None }, error)
+        (Self { library, sound, run: None, project: None, gain, stalled: false, reopened: 0 }, error)
+    }
+
+    /// How often the output device was opened again since the start.
+    pub fn reopened(&self) -> u32 {
+        self.reopened
+    }
+
+    /// The device the sound plays to (`None`: there is no sound).
+    pub fn device(&self) -> Option<&str> {
+        self.sound.as_ref().map(Playback::device)
+    }
+
+    /// Tests: as if the sound's clock had stood still in the last run.
+    pub fn mark_stalled(&mut self) {
+        self.stalled = true;
+    }
+
+    /// Opens the output device again when [`must_reopen`] says so, and gives the new player what the old one had:
+    /// the project, the sequence and the output gain. Opening takes a few hundred milliseconds, once.
+    fn recover(&mut self) {
+        let default = cut_audio::playback::default_device();
+        let (opened, error) = match &self.sound {
+            Some(p) => (Some(p.device().to_owned()), p.error().is_some()),
+            None => (None, false),
+        };
+        if !must_reopen(opened.as_deref(), default.as_deref(), error, self.stalled) {
+            return;
+        }
+        self.stalled = false;
+        // the old stream and its mixing thread end before the device is opened again
+        self.sound = None;
+        if let Ok(p) = Playback::new(file_audio(self.library.clone())) {
+            if let Some(g) = self.gain {
+                p.set_output_gain(g);
+            }
+            if let Some((project, seq)) = &self.project {
+                p.set_project(project.clone(), *seq);
+            }
+            self.sound = Some(p);
+            self.reopened += 1;
+        }
     }
 
     fn stop_sound(&mut self) {
@@ -133,6 +194,9 @@ impl Transport for Player {
             return;
         }
         // Only normal speed follows the sound, as the JavaScript's preview: other rates are silent on the wall clock.
+        if rate == 1.0 {
+            self.recover();
+        }
         let clock = match &self.sound {
             Some(p) if rate == 1.0 => {
                 p.start(from, 1.0);
@@ -177,6 +241,8 @@ impl Transport for Player {
                 if let Some(p) = &self.sound {
                     p.stop();
                 }
+                // the device stopped calling: it is opened again before the next play
+                self.stalled = true;
                 let mut w = WallClock::default();
                 w.play(v, *rate);
                 *clock = Clock::Wall(w);
@@ -187,8 +253,9 @@ impl Transport for Player {
 
     fn set_project(&mut self, project: Arc<Project>, seq: Id) {
         if let Some(p) = &self.sound {
-            p.set_project(project, seq);
+            p.set_project(project.clone(), seq);
         }
+        self.project = Some((project, seq));
     }
 
     fn meters(&self) -> Option<Meters> {
@@ -203,6 +270,7 @@ impl Transport for Player {
         if let Some(p) = &self.sound {
             p.set_output_gain(gain);
         }
+        self.gain = Some(gain);
     }
 
     fn clock(&self) -> &'static str {

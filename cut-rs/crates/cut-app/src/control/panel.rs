@@ -149,6 +149,7 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     confirm_carried(s);
     let on = allowed(s);
     let asks = s.features.control.panel.asks.clone();
+    // (the banner of a connected AI is a row of the window's layout: [`banner`])
     let mut stand_in = super::Control::new(None);
     stand_in.panel.asks = asks.clone();
     let mut control = std::mem::replace(&mut s.features.control, stand_in);
@@ -158,25 +159,55 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     if control.busy() {
         ctx.request_repaint_after(std::time::Duration::from_millis(50));
     }
-    let connected = if on { control.connected() } else { Vec::new() };
     s.features.control = control;
     questions(ctx, &asks);
-    if !connected.is_empty() {
-        let names: Vec<String> = connected.into_iter().map(|c| c.name).collect();
-        egui::Area::new(egui::Id::unique("cut-control-banner")).anchor(egui::Align2::CENTER_TOP, [0.0, 34.0]).show(
-            ctx,
-            |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("●").color(egui::Color32::from_rgb(80, 200, 120)));
-                        ui.label(trf("An external AI ({name}) is editing in Cut.", &[("name", &names.join(", "))]));
-                        if ui.button(tr("Disconnect")).clicked() {
-                            disconnect(s);
-                        }
+}
+
+/// The connected AIs' names for the banner: each name once, in the order they connected, with how many connections
+/// share it ("Claude Code ×3"). A client that connects again for every call was named once per connection.
+pub fn banner_names(names: &[String]) -> String {
+    let mut seen: Vec<(&str, usize)> = Vec::new();
+    for n in names {
+        match seen.iter_mut().find(|x| x.0 == n.as_str()) {
+            Some(x) => x.1 += 1,
+            None => seen.push((n.as_str(), 1)),
+        }
+    }
+    let part = |(n, k): &(&str, usize)| if *k > 1 { format!("{n} ×{k}") } else { (*n).to_owned() };
+    seen.iter().map(part).collect::<Vec<_>>().join(", ")
+}
+
+/// The banner while an external AI is connected: a row of its own under the top bar, with Disconnect at its right
+/// and the names cut to the room that is left. It was an area floating over the top bar: it covered the workspace
+/// tabs, and with many connections it grew wider than the window and Disconnect left the screen.
+pub fn banner(s: &mut Shell, ui: &mut egui::Ui) {
+    if !allowed(s) {
+        return;
+    }
+    let names: Vec<String> = s.features.control.connected().into_iter().map(|c| c.name).collect();
+    if names.is_empty() {
+        return;
+    }
+    let pal = s.palette.clone();
+    let mut stop = false;
+    egui::Panel::top("cut-control-banner")
+        .show_separator_line(false)
+        .frame(egui::Frame::new().fill(pal.gray[3]).inner_margin(egui::Margin::symmetric(10, 3)))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("●").color(egui::Color32::from_rgb(80, 200, 120)));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    stop = ui.button(tr("Disconnect")).clicked();
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        let text =
+                            trf("An external AI ({name}) is editing in Cut.", &[("name", &banner_names(&names))]);
+                        ui.add(egui::Label::new(text).truncate());
                     });
                 });
-            },
-        );
+            });
+        });
+    if stop {
+        disconnect(s);
     }
 }
 

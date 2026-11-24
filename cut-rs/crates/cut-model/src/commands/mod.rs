@@ -587,10 +587,11 @@ pub fn label(cmd: &Json) -> String {
             }
         }
         "addGenerated" => {
-            if o.get("source").and_then(|s| s.get("generator")).and_then(Json::as_str) == Some("text") {
-                "Add Text"
-            } else {
-                "Add Graphic"
+            match o.get("source").and_then(|s| s.get("generator")).and_then(Json::as_str) {
+                Some("text") => "Add Text",
+                // a colour matte is not a graphic: the History panel said "Add Graphic" for it
+                Some("solid") => "Add Color Matte",
+                _ => "Add Graphic",
             }
         }
         "setClip" => {
