@@ -298,6 +298,7 @@
 
 - **Craft 문구는 "~해요" 말투입니다.** 새 문장을 "~합니다"로 쓰면 같은 화면에 두 말투가 섞입니다(0.3.34에서 64문장을 고쳤습니다). 테스트가 한국어 문장을 정규식으로 찾는 곳(`verify/minecraft-launcher.mjs`)도 같이 고쳐야 합니다.
 - **서버 카드의 버튼을 더 보기 메뉴로 옮기면 테스트의 `.mc-…` 선택자가 사라집니다.** 카드에 없는 동작은 `lib.mjs`의 `craftMore(card, 'mc-rp')`로 누르고 `craftHas`로 있는지 봅니다.
+- **클래스 접두사와 id는 Craft 전체가 한 문서에서 씁니다.** "내 모드"를 `mcm-`으로 쓰고 버전 칸을 `#mcmVersion`으로 했더니 Market이 같은 접두사와 같은 id(`mcm-version`, `#mcmVersion`)를 이미 쓰고 있어서, 새 모드 대화상자의 버전 목록 대신 Market의 입력칸이 잡혔습니다(2026-11-24, 테스트가 `options`가 없다고 멈춰서 알았습니다). 새 화면의 접두사는 `grep -ohE "\bmc[a-z]{1,4}-" renderer/features/minecraft`로 쓰는 것을 먼저 봅니다. 지금 쓰는 것: `mc-`, `mcc-`(플레이), `mcs-`(화면), `mcm-`(Market), `mcset-`, `mcpl-`, `mcbk-`, `mcw-`(내 모드·플러그인).
 
 ## Code: Docker와 포트
 
@@ -306,6 +307,12 @@
 ## Craft: 서버, 런처, Market
 
 - **카드마다 부르는 IPC는 "답을 못 받음"을 오류로 던지지 않습니다.** `minecraft:buildCheck`가 Paper에 그 버전의 빌드가 없을 때 예외를 던지자, 렌더러가 잡아도 메인의 "Error occurred in handler"가 진단 목록에 쌓여(목록을 읽을 때마다 20건) `craft-polish`의 "IDE 내부 오류 없음"이 실패했습니다. 예상되는 실패(오프라인, 그 버전 없음)는 핸들러가 잡아 `{supported: false, unknown}`으로 돌려줍니다.
+- **템플릿의 이름을 바꿀 때 사용자가 고른 이름 안에 템플릿의 이름이 들어 있을 수 있습니다.** 패키지를 `com.example.examplemod.two`로 주면 패키지 폴더를 옮긴 뒤 "ID가 들어간 이름 바꾸기"가 그 폴더의 `examplemod`를 또 바꿔서 `com/example/examplemod_two/two`가 됐고, `package` 줄과 폴더가 어긋났습니다(0.3.6까지 있던 코드도 같았습니다). 글자는 파일마다 한 번에(긴 이름부터 하나의 정규식으로) 바꾸고, 이름으로 바꾸는 단계는 `src/<세트>/java` 아래의 폴더를 건드리지 않습니다(`main/minecraft/modmaker.js`의 `renameMod`).
+- **빌드 도구가 도는 Java와 모드를 컴파일하는 Java는 다릅니다.** Fabric 예제 모드의 1.20.1 브랜치는 `options.release = 17`이지만 Gradle 9.8.2와 Loom 1.19를 쓰고, Loom 1.19는 Java 25용으로 빌드되어 있습니다(1.11~1.17은 21). 처음에는 마인크래프트의 Java(17)를, 다음에는 기억으로 21을 `JAVA_HOME`으로 주려 했는데 둘 다 실제로는 빌드가 시작도 못 합니다. 도구가 요구하는 버전은 기억이 아니라 그 도구의 저장소(`build.gradle`의 `release`)에서 읽고, 규칙은 프로젝트 파일(`loom_version`, `JavaLanguageVersion.of`, Gradle 래퍼 버전)에서 계산합니다(`buildJava`).
+- **Gradle을 띄운 cmd.exe만 끝내면 Gradle은 남습니다.** `gradlew.bat`은 cmd.exe가 Java를 띄우고, 그 Java가 빌드용 Java를 또 띄웁니다. 취소와 앱 종료는 `taskkill /pid <cmd> /T /F`로 트리를 끝내고, 종료 때는 `spawnSync`로 끝나기를 기다립니다. 빌드는 `--no-daemon`으로 돌립니다(데몬은 몇 시간 남아 JDK와 모드 폴더를 잡아서 휴지통으로 옮기기가 실패합니다).
+- **Java는 `.properties`를 ISO-8859-1로 읽습니다.** Forge와 NeoForge의 모드 이름은 `gradle.properties`의 `mod_name`에서 `mods.toml`로 들어가므로, 한글 이름을 그대로 쓰면 게임의 모드 목록에서 깨집니다. `.properties`에 쓰는 값은 `\uXXXX`로 적습니다.
+- **플러그인은 Gradle 프로젝트가 아닙니다.** PaperMC는 `paper-api`만 쓰는 플러그인의 공식 Gradle 템플릿을 내지 않습니다(조직 저장소에는 서버 내부까지 푸는 `paperweight-test-plugin`뿐입니다, 2026-11-24). Gradle 래퍼는 바이너리라 만들어 넣을 수도 없습니다. 그래서 0.2.22 때처럼 내 서버가 푼 API jar로 `javac`를 직접 돌립니다. 대가는 두 가지입니다. 서버를 한 번 시작해야 빌드할 수 있고(Paper는 `libraries/`를 첫 시작 때 풉니다), Code가 프로젝트를 알도록 Eclipse 파일(`.project`, `.classpath`)을 써 줘야 합니다. Code의 일반 Java 프로젝트는 `src`를 소스 루트로, `lib/**/*.jar`만 라이브러리로 봅니다(`main/features/java-lsp.js`).
+- **하나의 목록에 두 종류가 들어가면 id만으로는 가리킬 수 없습니다.** 모드는 `mods/<id>`(소문자), 플러그인은 `plugins/<Name>`(클래스 이름)이라 같은 글자가 둘 다에 있을 수 있습니다. 화면의 진행 중 표시는 `kind:id`로 잡고, IPC에는 `{id}` 또는 `{plugin}`으로 넘깁니다. 카드 선택자도 `data-kind`를 같이 씁니다.
 
 - **"가끔 실패"의 원인은 넷 중 셋이 테스트가 한 시점만 본 것이었습니다(2026-11-20).** `minecraft-health-core`는 상태가 6번째 줄에서 바뀌는데 8줄이 다 온 판정을 기다리지 않았고, `minecraft-players-core`는 기록이 쓰이기를 30 ms만 기다렸고, `updater`는 Electron이 1분 안에 뜨지 못한 것을 "거절되지 않음"으로 읽었습니다(이제 한 번 더 돌리고, 거절이 없으면 대신 온 것을 적습니다). 기다릴 조건을 "처음 그 상태가 된 때"가 아니라 "확인하려는 값이 다 찬 때"로 씁니다. `sleep(n)` 뒤에 읽는 대신 `waitFor(조건)`을 씁니다.
 
@@ -434,6 +441,12 @@
 - **`verify/minecraft.mjs`의 survival 서버는 드롭 단계 뒤로 다시 시작할 수 없습니다.** 드롭한 `extra-plugin.jar`를 대역 서버가 읽다가 죽습니다. 그 뒤 단계에서는 modded 서버를 씁니다.
 - **`minecraft:start`와 `minecraft:launch`는 이제 async입니다.** Node 테스트는 await합니다.
 - **크래시 판정 테스트의 대역은 정지 때 `Stopping the server`를 찍지 않습니다.** 찍으면 stdin 감지를 빼도 통과합니다(`verify/fixtures/craft-health/stand-in-server.cjs`).
+- **알림 목록에는 끝난 알림도 남습니다.** 같은 제목의 진행 알림이 빌드마다 하나씩 생기므로, 테스트가 `list().find(제목)`으로 취소를 누르면 이미 끝난 첫 빌드의 작업을 취소해서 아무 일도 일어나지 않습니다. 진행 중인 것은 `findLast`로 잡습니다(`verify/craft-modmaker.mjs`).
+- **아이콘이 있는 버튼과 왼쪽 목록 항목의 `textContent`에는 아이콘 자리의 공백이 붙습니다.** 글자는 `:scope > span:last-child`에서 읽습니다. 실행 탭은 `ide.run.sessions()`의 `title`로 찾습니다(`name`이 아닙니다).
+- **IPC 핸들러를 직접 부르는 Node 테스트에서 동기 핸들러의 거절은 `.catch`에 오지 않습니다.** `modmaker:createPlugin`은 async가 아니라서 `call(...).catch(...)`의 `call`에서 바로 던졌고, 스위트가 그 자리에서 죽었습니다. 거절을 보는 호출은 `try { await call(...) } catch`로 감쌉니다.
+- **앞 단계의 알림 풍선이 아래쪽 서버 카드의 더 보기 버튼을 덮습니다.** 실제 클릭으로 누르면 메뉴가 열리지 않습니다. 카드의 더 보기 동작은 `craftMore(card, cls)`로 누릅니다(위 "화면과 문구"의 규칙이 새 스위트에도 그대로 해당됐습니다).
+- **스위트를 고치는 중에 그 스위트가 든 계획을 뒤에서 돌리면 중간 상태가 실패로 남습니다.** `affected.mjs --run`이 도는 20분 동안 `craft-modmaker.mjs`를 고치다가 문법 오류 상태에서 1초 만에 실패로 기록됐습니다. 계획을 돌리는 동안 고친 스위트는 끝난 뒤 따로 다시 돌립니다.
+- **어떤 프로세스가 남았는지는 명령줄의 폴더 이름으로 찾을 수 없습니다.** 실제 Gradle 빌드의 취소를 볼 때 "명령줄에 모드 폴더가 든 java.exe"를 세었더니 빌드 중에도 0개였습니다. Gradle 데몬의 명령줄에는 프로젝트 폴더가 없습니다(작업 폴더일 뿐입니다). 시작 시각 이후에 생긴 java.exe 가운데 명령줄에 `GradleDaemon`이나 `gradle`이 든 것을 셉니다. 그리고 두 번째 빌드는 몇 초에 끝나므로 취소는 새 프로젝트의 첫 빌드에서 "Configure project"가 나온 직후에 누릅니다.
 
 ## Cut: 형식과 프로젝트
 
@@ -751,6 +764,10 @@
 - diagrams: 0.3.16 커밋의 CI에서 Circle 클래스 상자의 클릭과 더블클릭이 모두 빗나갔습니다(선택 안 됨, 파일 안 열림). 바로 앞 CI와 로컬 5회는 통과했습니다. 원인을 모릅니다. 이제 테스트가 상자 중앙이 `elementFromPoint`로 그 상자를 가리킬 때까지 기다리고, 끝내 가려지면 `note:` 줄에 덮은 요소를 남깁니다. 다시 실패하면 그 줄부터 봅니다.
 
 ## 아직 남은 문제: Craft
+
+- 내 모드의 실제 빌드는 Fabric 26.3 하나만 확인했습니다(2026-11-24, 사용자 승인, 임시 Craft 폴더). 앱이 실제 예제 모드를 받아 이름을 바꿨고(템플릿 이름이 남은 파일 없음), 이 PC의 JDK 25와 Gradle 9.8.2로 25초에 `real_check-1.0.0.jar`를 만들었고(Gradle 캐시가 이미 있었습니다), 컴파일 오류의 한글(`없는변수`)이 실행 탭에서 깨지지 않았고, 설정 단계에서 누른 취소가 Gradle의 래퍼 Java와 일회용 데몬을 둘 다 끝냈고 그 뒤 빌드가 됐습니다. 아직 못 본 것: Forge와 NeoForge의 실제 템플릿과 빌드(Forge의 MDK zip은 내용도 읽지 못했고 이름은 0.2.22 때 것을 씁니다), Gradle 캐시가 없는 PC의 첫 빌드, JDK를 실제로 내려받는 경로(대역 Adoptium으로만 확인), 빌드한 모드를 게임이 실제로 읽는 것.
+- 내 모드의 추가는 실행 중인 서버에 새 jar를 넣는 것은 그대로 하고("다시 시작하면 적용"), 이미 있는 jar를 바꾸는 것은 Java가 파일을 잡고 있어 실패로 알려 줍니다. 이 실패는 직접 만든 대역이 아니라 실제 서버로는 보지 못했습니다.
+- 플러그인 만들기(2026-11-24)는 스텁 API(Bukkit 클래스 9개)와 실제 JDK로 컴파일까지 확인했습니다. 실제 Paper 서버가 푼 `libraries/`(jar 수백 개)를 클래스패스로 준 빌드, 그 플러그인을 실제 서버가 읽는 것, Code의 Java 언어 서버가 플러그인 폴더의 `.classpath`를 읽어 자동 완성을 주는 것은 확인하지 못했습니다. Velocity 플러그인은 파일을 쓰는 것까지만 확인했습니다(빌드는 실제 Velocity jar가 있어야 합니다).
 
 - `craft-polish`가 CI에서 한 번 "ide-balloon info covers … .mcset-save"로 멈췄습니다(2026-11-23, Release 0.3.40-beta.1 커밋; 앞 커밋의 CI와 로컬 32/32는 통과, 실패한 묶음을 다시 돌려 통과). 어떤 알림이 저장 버튼을 가렸는지는 확인하지 못했습니다.
 - CI에서 가끔 실패하는 타이밍 테스트(로컬에서는 통과, 실패한 묶음만 `gh run rerun <id> --failed`로 다시 돌립니다): `minecraft-health-core`의 과부하 판정(8줄 중 6줄만 센 시점에 판정), `minecraft-players-core`의 "after it was read into the records"(2026-11-19~20에 한 번씩).

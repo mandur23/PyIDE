@@ -584,3 +584,23 @@ img.mcpl-pick-icon { background: none; }
   .mcbk-item-text { flex-basis: 100%; }
 }
 .mcc-meta .mcc-memory { width: auto; flex: none; padding: 0 2px; font-size: 11px; height: auto; min-height: 0; border-radius: 10px; }
+/* My Mods (modmaker.js): the cards are Play's; Build stands apart from what is done with a built mod. */
+.mcc-actions .mcw-build { margin-right: auto; flex-shrink: 0; }
+.mcw-state.building { background: color-mix(in srgb, var(--blue6) 22%, transparent); color: color-mix(in srgb, var(--blue6) 45%, var(--gray11)); }
+.mcw-id, .mcw-jar { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.mcw-add-file { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.mcw-add-file-name { font-weight: 600; overflow-wrap: anywhere; }
+.mcw-places { display: flex; flex-direction: column; max-height: 320px; overflow: auto; border: 1px solid var(--gray3); border-radius: 6px; }
+.mcw-place { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-bottom: 1px solid var(--gray3); min-width: 0; }
+.mcw-place:last-child { border-bottom: 0; }
+label.mcw-place { cursor: pointer; }
+label.mcw-place:hover { background: var(--gray2); }
+.mcw-place-icon { flex-shrink: 0; opacity: 0.75; }
+.mcw-place-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 60px; }
+.mcw-place-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; flex: 1; min-width: 0; font-size: 12px; }
+.mcw-place-why { flex-basis: 100%; }
+.mcw-mine-add { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; white-space: nowrap; flex-shrink: 0; }
+.mcw-add-none { padding: 14px 12px; font-size: 13px; }
+.mcc-art.plugin { --a: #3f7fd9; --b: #23497f; }
+.mcc-art.plugin.velocity { --a: #19a7a0; --b: #0d5f5b; }
+.mcw-against, .mcw-start-first { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }

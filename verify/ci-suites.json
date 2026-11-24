@@ -142,6 +142,7 @@
  { "name": "craft-schedule", "file": "verify/craft-schedule.mjs", "timeout": 10, "seconds": 45 },
  { "name": "craft-server-build", "file": "verify/craft-server-build.mjs", "timeout": 10, "seconds": 25 },
  { "name": "craft-mods", "file": "verify/craft-mods.mjs", "timeout": 10, "seconds": 30 },
+ { "name": "craft-modmaker", "file": "verify/craft-modmaker.mjs", "timeout": 10, "seconds": 30 },
  { "name": "ui-feedback", "file": "verify/ui-feedback.mjs", "timeout": 5, "seconds": 12 },
  { "name": "automation", "file": "verify/automation.mjs", "timeout": 10, "seconds": 45 },
  { "name": "run-automation", "file": "verify/run-automation.mjs", "timeout": 10, "seconds": 37 },

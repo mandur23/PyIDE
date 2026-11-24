@@ -15,6 +15,9 @@ const BASE = {
   adoptium: 'https://api.adoptium.net/v3',
   modrinth: 'https://api.modrinth.com/v2',
   mojangApi: 'https://api.mojang.com',
+  // The example mod each loader's project publishes, which a new mod starts from (modTemplate).
+  fabricMdk: 'https://github.com/FabricMC/fabric-example-mod',
+  neoforgeMdk: 'https://github.com/NeoForgeMDKs',
 };
 // Only text values replace a base URL, without a trailing slash (the paths below add their own).
 const base = () => {
@@ -245,14 +248,46 @@ const KINDS = {
   },
 };
 
-// The Temurin JRE for a Java major version from Adoptium: {url, sha256, size, name}.
-async function temurin(major) {
-  const list = await getJson(`${base().adoptium}/assets/latest/${major}/hotspot?architecture=x64&image_type=jre&os=windows&vendor=eclipse`);
+// A new mod's template: the example mod the loader's own project publishes for one Minecraft version, as the zips to
+// try in order -> {urls: [{url, mc}], loaderVersion?, newest?()}. `mc` is the Minecraft version a zip was written for.
+// - Fabric keeps a branch of its example mod per Minecraft version.
+// - Forge publishes an MDK beside each installer; loaderVersion is the build it is for (recommended, else latest).
+// - NeoForge keeps a repository per Minecraft version, some weeks after the version comes out: a newer version starts
+//   from the nearest older one of the same year (26.3 from 26.2, then 26.1), which the mod's creation then points at
+//   this version with newest(), the NeoForge build for it. Versions before 1.20.4 have the NeoGradle template only.
+const MOD_LOADERS = { fabric: 'Fabric', forge: 'Forge', neoforge: 'NeoForge' };
+async function modTemplate(loader, mc) {
+  if (!MOD_LOADERS[loader]) throw fail(`Mods are made for Fabric, Forge or NeoForge, not ${loader}`);
+  if (!RELEASE.test(mc || '')) throw fail(`${mc} is not a Minecraft release version`);
+  if (loader === 'fabric') return { urls: [{ url: `${base().fabricMdk}/archive/refs/heads/${mc}.zip`, mc }] };
+  if (loader === 'forge') {
+    const promos = (await getJson(base().forgePromos)).promos || {};
+    const loaderVersion = promos[`${mc}-recommended`] || promos[`${mc}-latest`];
+    if (!loaderVersion) throw fail(`Forge has no build for ${mc}`);
+    return { urls: [{ url: `${base().forge}/${mc}-${loaderVersion}/forge-${mc}-${loaderVersion}-mdk.zip`, mc }], loaderVersion };
+  }
+  const [major, minor] = mc.split('.').map(Number);
+  const older = major >= 26 ? Array.from({ length: Math.max(0, minor - 1) }, (_v, i) => `${major}.${minor - 1 - i}`) : [];
+  const zip = (v, plugin) => ({ url: `${base().neoforgeMdk}/MDK-${v}-${plugin}/archive/refs/heads/main.zip`, mc: v });
+  return {
+    urls: [zip(mc, 'ModDevGradle'), zip(mc, 'NeoGradle'), ...older.map((v) => zip(v, 'ModDevGradle'))],
+    async newest() {
+      const all = (await KINDS.neoforge.allVersions()).filter((v) => neoforgeMc(v) === mc);
+      return all.filter((v) => !/-/.test(v)).sort(byVersion)[0] || all.sort(byVersion)[0] || null;
+    },
+  };
+}
+
+// Temurin for a Java major version from Adoptium: {url, sha256, size, name}. A JRE runs a server; a mod's Gradle build
+// needs the JDK.
+async function temurin(major, jdk = false) {
+  const list = await getJson(`${base().adoptium}/assets/latest/${major}/hotspot?architecture=x64&image_type=${jdk ? 'jdk' : 'jre'}&os=windows&vendor=eclipse`);
   const pkg = list.map((a) => a.binary?.package).find((p) => p?.link?.endsWith('.zip'));
-  if (!pkg) throw new Error(`Adoptium has no Java ${major} JRE for Windows`);
+  if (!pkg) throw new Error(`Adoptium has no Java ${major} ${jdk ? 'JDK' : 'JRE'} for Windows`);
   return { url: pkg.link, sha256: pkg.checksum, size: pkg.size, name: pkg.name };
 }
 
 const modrinthApi = () => base().modrinth;
 
-module.exports = { KINDS, RELEASE, base, standIn, packFile, PACK_HOSTS, javaFor, mojangVersion, temurin, neoforgeMc, byVersion, HEADERS, getText, getJson, modrinthApi, mojangProfile };
+module.exports = { KINDS, RELEASE, base, standIn, packFile, PACK_HOSTS, javaFor, mojangVersion, temurin, neoforgeMc, byVersion, HEADERS, getText, getJson, modrinthApi, mojangProfile,
+  MOD_LOADERS, modTemplate };

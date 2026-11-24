@@ -29,6 +29,7 @@ const { createBackups, registerIpc: registerBackupIpc } = require('../minecraft/
 const { createHealthMonitor, markStops, GC_LOG_ARG } = require('../minecraft/health-monitor');
 const { createSchedule } = require('../minecraft/schedule');
 const { createMods } = require('../minecraft/mods');
+const { createModMaker } = require('../minecraft/modmaker');
 const { complete } = require('../ai/claude');
 const { privateShare } = require('./port-sharing');
 const { app, safeStorage } = require('electron');
@@ -134,22 +135,41 @@ async function findJava(major) {
   }
   return null;
 }
-// One download a version at a time: two servers starting at once would share its archive and staging folder.
-const javaJobs = new Map(); // major -> Promise<home>
-function ensureJava(major, { log }) {
-  if (!javaJobs.has(major)) javaJobs.set(major, installJava(major, { log }).finally(() => javaJobs.delete(major)));
-  else log(`Waiting for Java ${major}, which is being downloaded already…\n`);
-  return javaJobs.get(major);
+// A JDK (javac) for a mod's Gradle build: this computer's of exactly `major`, a Temurin JDK downloaded before, then the
+// same for each newer Java up to `upTo` (a build that names no toolchain takes a newer JDK).
+async function findJdk(major, upTo = major) {
+  if (process.env.PYIDE_MC_JAVA) return process.env.PYIDE_MC_JAVA;
+  const javac = (home) => isFile(path.join(home, 'bin', 'javac.exe'));
+  const found = (await createToolchains().detect('jdk')).filter((t) => javac(t.home));
+  const own = (m) => {
+    const dir = path.join(javaRoot(), `temurin-${m}-jdk`);
+    return (fs.existsSync(dir) ? fs.readdirSync(dir).map((n) => path.join(dir, n)).find(javac) : null) || null;
+  };
+  for (let m = major; m <= Math.max(major, upTo); m++) {
+    const home = found.find((t) => majorOf(t.version) === m)?.home || own(m);
+    if (home) return home;
+  }
+  return null;
 }
-async function installJava(major, { log }) {
-  const found = await findJava(major);
+// One download a version at a time: two servers starting at once would share its archive and staging folder.
+// jdk: a JDK for a build (findJdk), not the JRE a server runs on.
+const javaJobs = new Map(); // major (jdk-<major> for a JDK) -> Promise<home>
+function ensureJava(major, { log, jdk = false, upTo }) {
+  const key = jdk ? `jdk-${major}` : major;
+  if (!javaJobs.has(key)) javaJobs.set(key, installJava(major, { log, jdk, upTo }).finally(() => javaJobs.delete(key)));
+  else log(`Waiting for Java ${major}, which is being downloaded already…\n`);
+  return javaJobs.get(key);
+}
+async function installJava(major, { log, jdk = false, upTo }) {
+  const found = await (jdk ? findJdk(major, upTo) : findJava(major));
   if (found) return found;
-  const t = await temurin(major).catch((err) => { throw fail(`Java ${major} is not installed, and Adoptium could not be asked for it: ${err.message}`); });
-  log(`Java ${major} is not installed; downloading Temurin JRE ${major} from Adoptium.\n`);
+  const kind = jdk ? 'jdk' : 'jre';
+  const t = await temurin(major, jdk).catch((err) => { throw fail(`Java ${major} is not installed, and Adoptium could not be asked for it: ${err.message}`); });
+  log(`Java ${major} is not installed; downloading Temurin ${kind.toUpperCase()} ${major} from Adoptium.\n`);
   fs.mkdirSync(javaRoot(), { recursive: true });
   const archive = path.join(javaRoot(), t.name);
   await fetchFile(t.url, archive, { sha256: t.sha256, size: t.size }, log);
-  const dir = path.join(javaRoot(), `temurin-${major}-jre`);
+  const dir = path.join(javaRoot(), `temurin-${major}-${kind}`);
   const staging = `${dir}.extract`;
   fs.rmSync(staging, { recursive: true, force: true });
   fs.mkdirSync(staging, { recursive: true });
@@ -157,7 +177,7 @@ async function installJava(major, { log }) {
   fs.rmSync(dir, { recursive: true, force: true });
   fs.renameSync(staging, dir);
   fs.rmSync(archive, { force: true });
-  return findJava(major);
+  return jdk ? findJdk(major) : findJava(major);
 }
 
 // ---------- servers ----------
@@ -707,6 +727,14 @@ const keyring = {
 };
 const craft = createLauncher({ fetchFile, ensureJava, javaFor, run, retried, keyring });
 
+// The mods the user makes (main/minecraft/modmaker.js): made from the loader's example mod, built with Gradle, added to
+// the servers and instances of their loader. Code, where a mod is edited, is this program started again.
+const modMaker = createModMaker({
+  fetchFile, javaFor, servers, instances: (root) => craft.instances(root), serverRunning: (dir) => isRunning(dir),
+  ensureJdk: (major, { log, upTo }) => ensureJava(major, { log, jdk: true, upTo }),
+  codeArgv: () => [process.execPath, ...(app.isPackaged ? [] : [app.getAppPath()])],
+});
+
 const imports = (root) => createImports({ root, servers: () => servers(root), create, unfinished, javaFor, javaOfJar, fetchFile,
   writeServer: (dir, desc) => writeJson(path.join(dir, SERVER), desc), readServer: (dir) => readJson(path.join(dir, SERVER)) });
 
@@ -1006,6 +1034,19 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics, getWindow
   // An instance's mods into Korean, as minecraft:langStatus and minecraft:translateMods do a server's.
   ipcMain.handle('launcher:langStatus', (_e, root, name) => { guard(root); return craft.koreanStatus(root, name); });
   ipcMain.handle('launcher:translateMods', (_e, root, name, job) => { guard(root); return cancellable(job, (log) => craft.translateKorean(root, name, { translate: askClaude, log, signal: log.signal, progress: progressTo(job) })); });
+  // My Mods (main/minecraft/modmaker.js). A build runs until it ends or minecraft:cancel names its job.
+  ipcMain.handle('modmaker:list', (_e, root) => (root ? modMaker.list(root) : []));
+  ipcMain.handle('modmaker:versions', (_e, loader) => (['fabric', 'forge', 'neoforge'].includes(loader) ? KINDS[loader].versions() : []));
+  ipcMain.handle('modmaker:create', (_e, root, opts, job) => { guard(root); return cancellable(job, (log) => modMaker.create(root, opts, log)); });
+  // A plugin is written from here (no download), for one of the project's Paper, Purpur or Velocity servers.
+  ipcMain.handle('modmaker:pluginServers', (_e, root) => (root ? modMaker.pluginServers(root) : []));
+  ipcMain.handle('modmaker:createPlugin', (_e, root, opts) => { guard(root); return modMaker.createPlugin(root, opts); });
+  // ref: a mod id or {id}, or {plugin: name}.
+  ipcMain.handle('modmaker:build', (_e, root, ref, job) => { guard(root); return cancellable(job, (log) => modMaker.build(root, ref, log)); });
+  ipcMain.handle('modmaker:targets', (_e, root, source) => { guard(root); return modMaker.targets(root, source); });
+  ipcMain.handle('modmaker:addTo', (_e, root, source, wanted) => { guard(root); return modMaker.addTo(root, source, wanted); });
+  ipcMain.handle('modmaker:openInCode', (_e, root, ref) => { guard(root); return modMaker.openInCode(root, ref); });
+  app.on('will-quit', modMaker.stop);
   ipcMain.handle('launcher:joinCode', (_e, server) => craft.joinCode(server));
   ipcMain.handle('launcher:parseJoinCode', (_e, text) => craft.parseJoinCode(text));
   // The join code of this server's private share, on request: ports:state never carries its key, and the window holds the

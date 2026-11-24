@@ -1,11 +1,11 @@
 // The Minecraft screen, the whole of Nano Studio Craft in #craftHost: a list on the left, like New Project's types,
 // choosing between Play (the instances, craft.js), Servers to Join (craft.js), My Servers (the list in index.js, cards
-// side by side) and the Market; below them Settings and About, since Craft has no main menu. What can be made is on each
-// page's head.
+// side by side), My Mods and Plugins (what the user makes, modmaker.js) and the Market; below them Settings and About, since
+// Craft has no main menu. What can be made is on each page's head.
 (() => {
   const { el } = ide.util;
   const mc = ide.minecraft;
-  const PAGES = () => [['play', 'runRun', tr('Play Minecraft')], ['join', 'gamepad', tr('Servers to Join')], ['servers', 'desktop', tr('My Servers')], ['market', 'cart', tr('Market')]];
+  const PAGES = () => [['play', 'runRun', tr('Play Minecraft')], ['join', 'gamepad', tr('Servers to Join')], ['servers', 'desktop', tr('My Servers')], ['mods', 'code', tr('My Mods and Plugins')], ['market', 'cart', tr('Market')]];
   let view = null;
   let page = 'play';
 
@@ -17,6 +17,7 @@
     for (const [id] of PAGES()) view.pages[id].classList.toggle('hidden', page !== id);
     if (page === 'market') mc.market.shown();
     else if (page === 'play' || page === 'join') mc.craft.refresh();
+    else if (page === 'mods') mc.modmaker.refresh();
   }
 
   function item(cls, icon, label, onClick) {
@@ -52,13 +53,14 @@
     const market = el('div', 'mcs-market-box');
     const marketPage = el('div', 'mcc-page mcs-market');
     marketPage.append(mc.craft.head(tr('Market'), tr('Modpacks, mods, plugins and resource packs from Modrinth, installed into your servers and instances.')), market);
-    const pages = { play: el('div', 'mcs-play'), join: el('div', 'mcs-join'), servers: serversPage(servers), market: marketPage };
+    const pages = { play: el('div', 'mcs-play'), join: el('div', 'mcs-join'), servers: serversPage(servers), mods: el('div', 'mcs-mods'), market: marketPage };
     const body = el('div', 'mcs-body');
     body.append(...Object.values(pages));
     host.append(nav, body);
     mc.showServersIn(servers);
     mc.market.mount(market);
     mc.craft.mount(pages.play, pages.join);
+    mc.modmaker.mount(pages.mods);
     return { nav, pages };
   }
   // A page like Play and Servers to Join, its head above the server list (index.js).

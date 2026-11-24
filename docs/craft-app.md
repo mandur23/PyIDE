@@ -22,7 +22,7 @@ npm start -- --mode=craft
 
 - `body.app-craft`가 켜지고 CSS가 IDE의 툴바, 스트라이프, 프로젝트 패널, 편집기 영역을 숨깁니다. `#craftHost`가 창을 채우고, 아래에 Run 툴 윈도우가 접혀 있습니다.
 - 작업 폴더가 열리면 `ide.emit('craftReady', {host})`가 오고, minecraft 플러그인이 화면을 붙입니다.
-- 왼쪽 목록: 플레이, 서버 참여, 내 서버, Market. 그 아래 새 인스턴스, 새 서버, 모드팩으로 서버 만들기, 설정, 정보.
+- 왼쪽 목록: 플레이, 서버 참여, 내 서버, 내 모드·플러그인, Market. 그 아래 설정, 정보. 만들 수 있는 것(새 인스턴스, 새 서버, 모드팩으로 서버 만들기, 새 모드, 새 플러그인)은 각 페이지 머리글에 있습니다.
 - 편집기 탭(서버 설정, 플레이어 탭, 파일)을 열면 `body.mc-craft-tab`이 켜져 탭이 앱 전체를 덮습니다. 탭 안의 버튼이 탭 밖 화면으로 보내면 탭을 먼저 닫습니다.
 - 설정 창에는 `craft: true`인 페이지만 나옵니다. `ide.debugger` 같은 Code 전용 API는 없습니다. `ide.openProject`와 `ide.closeProject`는 거부됩니다.
 - 문구는 모두 한국어 -요 말투입니다. 메인의 영어 로그는 Run 탭에 두고 화면에는 한국어 단계를 보여 줍니다.
@@ -44,6 +44,7 @@ npm start -- --mode=craft
 | `health.js` | 카드의 비정상 종료·응답 없음·과부하 표시, 자동 재시작, 설정 탭의 "비정상 종료와 과부하" |
 | `schedule.js` | 예약된 단계의 실행(알림, 재시작, 정지, 명령), 설정 탭의 "예약" |
 | `mods.js` | 설정 탭의 "모드"·"플러그인": 목록과 스위치, 문제와 고치는 버튼, 시작할 때의 알림 |
+| `modmaker.js` | "내 모드·플러그인" 페이지: 새 모드, 새 플러그인, 빌드, 서버·인스턴스에 추가, 모드 파일 추가, Code에서 편집. 클래스 접두사는 `mcw-`입니다(`mcm-`은 Market의 것) |
 | `style.css`, `locales/ko.json` | 모양과 한국어 |
 
 ### 메인
@@ -68,6 +69,7 @@ npm start -- --mode=craft
 | `main/minecraft/backups.js` | 월드 백업과 되돌리기, 보관 규칙, 일정. 다른 메인 코드는 `require('../features/minecraft').backups`의 API를 씁니다(파일 머리 주석) |
 | `main/minecraft/schedule.js` | 예약 작업의 규칙과 시계(재시작, 정지, 명령) |
 | `main/minecraft/mods.js` | 모드·플러그인 jar의 메타데이터 읽기, 켜고 끄기, 의존·충돌 확인 |
+| `main/minecraft/modmaker.js` | 내 모드·플러그인: 로더의 예제 모드 받아 이름 바꾸기, Gradle 빌드와 취소, 플러그인 쓰기와 javac 빌드, 빌드한 jar를 서버·인스턴스에 넣기, Code로 열기 |
 | `main/minecraft/private-join.js` | 친구 쪽 비공개 참여 프로세스 |
 | `main/minecraft/players/` | 플레이어 세션, 로그 해석, 기록 저장, 동작 명령, NBT, 아이템, NanoBridge |
 | `main/bore-gate.js`, `main/bore-client.js` | 비공개 공유 터널의 프로토콜과 bore 클라이언트 |
@@ -105,6 +107,21 @@ npm start -- --mode=craft
 - **틀린 경고보다 놓치는 쪽을 택합니다.** 읽지 못한 버전이나 범위는 맞는 것으로 칩니다. 권장(recommends, softdepend, optional)은 문제가 아닙니다.
 - 끄기는 `<이름>.jar.disabled`로 이름 바꾸기입니다. Market의 기록(`market[id].files`)도 같이 바꿔서 Market이 그 프로젝트를 계속 알고 제거할 수 있습니다. 실행 중인 서버의 jar는 Java가 잡고 있어 거절합니다.
 - 테스트는 직접 만든 jar로 합니다(`verify/craft-mods.mjs`). 실제 모드를 내려받지 않습니다.
+
+### 내 모드·플러그인 (`main/minecraft/modmaker.js`, 렌더러 `modmaker.js`)
+
+- 모드는 `<작업 폴더>/mods/<모드 ID>`이고 `pyide-mod.json`(`id`, `name`, `loader`, `mc`, `pkg`, `cls`, `java`, `created`)이 설명합니다. 서버에 묶이지 않습니다. 로더와 마인크래프트 버전이 맞는 서버와 인스턴스 어디에나 넣습니다.
+- 새 모드는 로더가 공식으로 내는 예제 모드를 받아 이름만 바꿉니다(`sources.js`의 `modTemplate`). Fabric은 `fabric-example-mod`의 버전별 브랜치, Forge는 권장 빌드의 MDK zip, NeoForge는 `NeoForgeMDKs`의 버전별 저장소입니다. NeoForge에 그 버전 저장소가 아직 없으면 같은 해의 가까운 이전 버전 것을 받아 `gradle.properties`만 그 버전으로 바꾸고, 빌드를 손봐야 할 수 있다고 로그에 적습니다.
+- 이름 바꾸기(`renameMod`)는 파일마다 한 번에, 긴 이름부터 바꿉니다. 사용자의 패키지나 이름에 템플릿의 이름이 들어 있어도 두 번 바뀌지 않습니다. 패키지 폴더는 ID가 들어간 이름이어도 다시 바꾸지 않습니다. 한글 이름은 `.properties` 파일에는 `\uXXXX`로 씁니다(Java가 ISO-8859-1로 읽습니다).
+- 빌드는 모드 자신의 `gradlew.bat build`입니다(`--no-daemon`: 데몬이 남으면 몇 시간 동안 JDK와 모드 폴더를 잡습니다). JDK는 빌드 파일이 말하는 Java 버전의 것을 `JAVA_HOME`으로 줍니다(`buildJava`). Gradle 9는 Java 17 이상에서만 돕니다. Fabric의 Loom은 모드보다 새 Java로 빌드되어 있습니다(Loom의 `build.gradle`, 2026-11-24에 읽음: 1.18 이상은 Java 25, 1.11~1.17은 21). Fabric 예제 모드는 모든 브랜치가 최신 Gradle과 Loom을 쓰므로 1.20.1 모드도 JDK 25에서 Java 17용(`--release`)으로 컴파일합니다. `gradle.properties`의 `loom_version`으로 정합니다. 맞는 JDK가 없으면 Adoptium의 Temurin JDK를 받습니다(서버의 JRE와 같은 자리, `temurin-<버전>-jdk`).
+- 취소는 프로세스 트리를 끝냅니다(`taskkill /T`). cmd.exe만 끝내면 Gradle의 Java가 남아 모드 폴더를 잡습니다. 앱이 끝날 때도 같습니다.
+- 추가(`addTo`)는 빌드한 jar를 고른 곳의 `mods`에 복사합니다. 같은 모드 ID의 jar(파일 이름이 달라도, 꺼져 있어도)는 지우고 넣습니다. 파일을 Java가 잡고 있으면 그곳만 실패로 돌려주고 나머지는 계속합니다. Fabric 모드는 Quilt 인스턴스에도 넣을 수 있습니다. 다른 곳에서 만든 jar(`{file}`)도 같은 길로 넣습니다.
+- 편집은 Nano Studio Code에서 합니다. "Code에서 편집"이 이 프로그램을 `--mode=code <모드 폴더>`로 한 번 더 띄웁니다. Craft에는 Java 언어 서버가 없습니다.
+- 게임은 여기서 실행하지 않습니다(`runClient` 없음). 시험은 인스턴스에 추가하고 그 인스턴스를 실행해서 합니다.
+- **플러그인**은 `<작업 폴더>/plugins/<이름>`이고 `pyide-plugin.json`(`name`, `api`, `pkg`, `server`, `mc`, `created`)이 설명합니다. 템플릿도 Gradle도 없습니다(Paper는 공식 Gradle 템플릿을 내지 않습니다). 새 플러그인은 내 Paper·Purpur·Velocity 서버 하나를 골라 주 클래스와 `plugin.yml`(Velocity는 `velocity-plugin.json`)을 직접 씁니다. 빌드는 그 서버의 API(Paper가 첫 시작 때 `libraries/`와 `versions/`에 푸는 jar, Velocity는 `server.jar`)와 플러그인의 `libs/`를 클래스패스로 `javac --release <서버의 Java>`를 돌리고 `jar`로 `build/libs/<이름>.jar`를 만듭니다. 서버를 한 번도 시작하지 않았으면 빌드를 거절하고 그렇게 말합니다. 고른 서버가 없어지면 같은 API의 다른 서버로 빌드합니다.
+- 플러그인 폴더에 `.project`, `.classpath`, `.settings`를 씁니다. Code의 Java 언어 서버가 이 Eclipse 파일로 서버의 API를 압니다(Code의 일반 Java 프로젝트는 `src`를 소스 루트로 보므로, 이 파일이 없으면 `src/main/java`의 패키지가 어긋납니다). 바뀌지 않는 파일은 다시 쓰지 않습니다.
+- 플러그인의 추가는 API가 같은 서버의 `plugins`로 갑니다(Paper 플러그인은 Paper와 Purpur, Velocity 플러그인은 Velocity). 같은 이름의 플러그인 jar는 바꿉니다.
+- 테스트는 직접 만든 템플릿 zip과 Node로 쓴 `gradlew.bat`으로 합니다(`verify/craft-modmaker.mjs`). 실제 템플릿과 Gradle은 받지 않습니다. 플러그인은 러너의 실제 JDK로 스텁 API에 컴파일합니다.
 
 ### 메모리 추천과 서버 빌드 업데이트
 
@@ -161,7 +178,8 @@ npm start -- --mode=craft
 | `PYIDE_MC_LAUNCHER` | 공식 런처(인자를 기록하는 node 스크립트) |
 | `PYIDE_MC_STORE` | Microsoft Store 런처 |
 | `PYIDE_MC_LAUNCHER_IMAGE`, `PYIDE_MC_GAME_IMAGE` | 런처와 게임이 열려 있는지 볼 프로세스 이름 |
-| `PYIDE_MC_JAVA` | 서버를 돌릴 Java |
+| `PYIDE_MC_JAVA` | 서버를 돌릴 Java, 모드를 빌드할 JDK |
+| `PYIDE_MC_CODE` | "Code에서 편집"이 띄우는 Nano Studio Code(띄우는 대신 인자를 적을 파일) |
 | `PYIDE_MC_DNS` | DNS(`hosts.js`의 이름 풀기). JSON 객체에 없는 이름은 찾지 못한 것으로 봅니다 |
 | `PYIDE_CLAUDE_PATH` | 번역의 Claude Code CLI(물은 것을 기록하고 정해진 한국어로 답하는 node 스크립트) |
 
@@ -188,6 +206,7 @@ npm start -- --mode=craft
 | `verify/minecraft-backups-core.mjs` | 일반 Node. ZIP64(65,535개, 4 GB 넘김), 매니페스트, 보관 규칙, 손상된 백업 거부, 중간에 실패한 교체, save-off/save-on 순서(답 없음, 채팅 위조, 취소, 정지), 300 MB 묶는 동안의 이벤트 루프 |
 | `verify/minecraft-backups.mjs` | 백업 탭(한국어): 멈춘 서버와 실행 중인 서버의 지금 백업, 실행 중인 서버의 되돌리기, 월드만 되돌리기, Market 업데이트 전 자동 백업과 건너뛰기, 두 테마와 900 px |
 | `verify/craft-polish.mjs` | 새 서버 이름과 버전 목록, Market 재검색, 카드의 시작 중·중지 중, 콘솔 기록, 설정 탭의 레벨 칸과 검색, 저장 실패 때 안티 엑스레이 되돌리기 |
+| `verify/craft-modmaker.mjs` | 일반 Node와 한국어 창. 세 로더의 템플릿 이름 바꾸기, 빌드에 쓸 Java, 템플릿 주소, 새 모드 대화상자의 거절 문구, 빌드(대역 Gradle)와 실패·취소(프로세스 트리), 서버·인스턴스에 추가와 이전 빌드 교체, 서버 메뉴와 인스턴스 모드 창에서 추가, 다른 곳의 모드 파일, Code에서 편집, 플러그인(만들기, 실제 javac 빌드, 서버를 아직 시작하지 않은 경우, 컴파일 오류, 서버에 추가), 두 테마 |
 | `verify/popout-craft.mjs` | 한국어 창. 서버 콘솔이 있는 실행 창을 새 창으로 열기, 그 창에서 명령 입력과 단축키, 기본 창으로 되돌리기와 창 닫기, 재시작 뒤 복원, 도구 창 전부 열고 되돌리기 |
 
 `MC_LAUNCHER_LIVE=1`(실제 로더 설치), `verify/minecraft-live.mjs`, `verify/port-sharing-live.mjs`, `verify/port-sharing-bore-live.mjs`는 실제 네트워크를 쓰므로 CI에 없고, 사용자의 승인 없이 돌리지 않습니다.
@@ -202,5 +221,7 @@ npm start -- --mode=craft
 - 테스트에서 실제 Minecraft Launcher나 게임을 실행하지 않습니다. `javaw.exe`를 컴퓨터 조작으로 다루지 않습니다.
 - 어떤 계정에도 로그인하지 않습니다.
 - 실제 모드팩 서버를 만들지 않습니다.
+- 테스트에서 실제 모드 템플릿, Gradle, JDK를 내려받지 않습니다. 실제 빌드 확인은 사용자의 승인을 받고 합니다.
+- 모드의 개발용 게임(`runClient`)을 실행하지 않습니다. 게임은 공식 런처로만 엽니다.
 - bore.pub에 접속하거나 live 테스트를 돌리지 않습니다. 공개 터널이 열리므로 사용자의 승인이 필요합니다.
 - 대역으로 확인한 것과 실제로 확인한 것을 구분해서 보고합니다.

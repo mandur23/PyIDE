@@ -12,8 +12,10 @@
 //   and names it in server.properties, so every player's game downloads it when they join.
 // - Market (market.js): Modrinth's modpacks, mods, plugins and resource packs, installed into a server in one click.
 // - Players (players.js): who is on a server, their inventories, a log of what they did, and actions on them.
+// - My Mods (modmaker.js): mods the user makes from the loaders' example mods, built with Gradle and added to servers
+//   and instances.
 // - The Minecraft screen (screen.js) is the whole window: the instances to play and servers to join (craft.js), the
-//   servers and the Market.
+//   servers, the user's mods and the Market.
 (() => {
   const { el, basename, dirname } = ide.util;
   const run = ide.run;
@@ -847,6 +849,8 @@
     add('mc-settings', tr('Settings…'), () => serverSettings(srv), { card: true, group: 1, icon: 'settings', title: srv.mods ? tr('Server settings, and Korean for its mods') : tr('Server settings') });
     if (!srv.proxy) add('mc-backups', tr('Backups'), () => ide.minecraft.backups.open(srv), { card: true, group: 1, icon: 'history', title: tr('Back up the world, or put an earlier one back') });
     if (srv.mods || srv.plugins) add('mc-server-market', tr('Market'), () => ide.minecraft.market.open({ type: srv.mods ? 'mod' : 'plugin', server: srv }), { group: 2, icon: 'cart', title: tr('Install mods or plugins from Modrinth') });
+    if (srv.plugins) add('mc-my-plugin', tr('Add My Plugin…'), () => ide.minecraft.modmaker.addInto({ type: 'server', name: srv.name, title: srv.name, plugins: srv.plugins, mc: srv.mc }), { group: 2, icon: 'plugin', title: tr('A plugin you made in My Mods and Plugins, or a plugin file') });
+    if (srv.mods) add('mc-my-mod', tr('Add My Mod…'), () => ide.minecraft.modmaker.addInto({ type: 'server', name: srv.name, title: srv.name, loader: srv.kind, mc: srv.mc }), { group: 2, icon: 'code', title: tr('A mod you made in My Mods and Plugins, or a mod file') });
     if (srv.mods) add('mc-pack', tr('Client Pack'), () => clientPack(srv), { group: 2, icon: 'package', title: tr('The mods players need, as a .mrpack to import once') });
     // A modpack's own client pack has its client-only mods, which AutoModpack would not send.
     if (srv.mods && !srv.autoSync && !srv.modpack) add('mc-autosync', tr('Auto Sync'), () => autoSync(srv), { group: 2, title: tr('Players get the server\'s mods when they join (AutoModpack)') });
@@ -1129,7 +1133,7 @@
     showServersIn(container) { acceptDrops(container); host = container; refresh(); } };
 
   const here = document.currentScript.src.replace(/[^/]*$/, '');
-  for (const file of ['market.js', 'craft.js', 'screen.js', 'server-settings.js', 'players.js', 'health.js', 'backups.js', 'schedule.js', 'mods.js']) {
+  for (const file of ['market.js', 'craft.js', 'modmaker.js', 'screen.js', 'server-settings.js', 'players.js', 'health.js', 'backups.js', 'schedule.js', 'mods.js']) {
     const script = el('script');
     script.src = `${here}${file}`;
     script.async = false;

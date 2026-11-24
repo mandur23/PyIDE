@@ -445,6 +445,7 @@
       title: tr('Mods of {name}', { name: inst.title || inst.name }), body, width: 600,
       onClose: refresh,
       buttons: [
+        { label: tr('Add My Mod…'), run: () => { mc.modmaker.addInto({ type: 'instance', name: inst.name, title: inst.title || inst.name, loader: inst.loader, mc: inst.mc }); return true; } },
         { label: tr('Open Mods Folder'), run: () => { ide.api.invoke('shell:openPath', `${inst.dir}\\mods`); return false; } },
         { label: tr('Close'), primary: true },
       ],

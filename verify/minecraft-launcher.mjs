@@ -463,8 +463,8 @@ try {
     making: [...document.querySelectorAll('.mcs-action')].map((a) => a.textContent), market: document.querySelector('.mcs-market').classList.contains('hidden') })`);
   await js(`(document.querySelector('.mcs-page[data-page="join"]').click(), true)`);
   await t.until(`document.querySelectorAll('.mcs-join .mcc-joined').length === 2`, 'Servers to Join cards', 10000);
-  check(S(screen.pages) === S(['play', 'join', 'servers', 'market']) && screen.first === 'Market' && screen.market && !screen.making.some((x) => /Plugin|Mod\b/.test(x)),
-    `the Minecraft screen has Play, Servers to Join, My Servers and the Market, and nothing for writing plugins or mods (${S(screen)})`);
+  check(S(screen.pages) === S(['play', 'join', 'servers', 'mods', 'market']) && screen.first === 'Market' && screen.market && !screen.making.some((x) => /Plugin|Mod\b/.test(x)),
+    `the Minecraft screen has Play, Servers to Join, My Servers, My Mods and Plugins and the Market, and what is made is on each page's head, not under the list (${S(screen)})`);
   await shot('launcher-ipc.png');
   check(t.consoleErrors.length === 0, `no renderer exceptions${t.consoleErrors.length ? ` ${S(t.consoleErrors)}` : ''}`);
   const codeWindow = await launch({ fixture: 'core', name: 'minecraft-launcher-code', port: 9894 });
@@ -564,8 +564,8 @@ async function craftUi(first) {
     await until(`!!document.querySelector('#craftHost .mcs-nav') && document.querySelector('.mcs-page.selected')?.dataset.page === 'play' && !!document.querySelector('.mcs-play .mcc-empty')`, 'craft app', 15000);
     const shell = await js(`({ pages: [...document.querySelectorAll('#craftHost .mcs-page')].map((p) => [p.dataset.page, p.textContent.trim()]), actions: [...document.querySelectorAll('#craftHost .mcs-action:not(.hidden)')].map((p) => p.textContent.trim()), heads: [...document.querySelectorAll('#craftHost .mcc-tools button')].map((p) => p.textContent.trim()),
       banner: !!document.querySelector('.mcc-banner'), editor: getComputedStyle(document.getElementById('editorArea')).display })`);
-    check(S(shell.pages) === S([['play', '플레이'], ['join', '서버 참여'], ['servers', '내 서버'], ['market', '마켓']]) && !shell.actions.some((a) => /플러그인|모드…/.test(a)) && !shell.actions.includes('새 인스턴스…') && !!shell.heads.includes('새 인스턴스…')
-      && !shell.banner && shell.editor === 'none', `craft mounts the Minecraft screen as the app, in Korean, on Play, without plugin or mod making and with no launcher banner (${S(shell)})`);
+    check(S(shell.pages) === S([['play', '플레이'], ['join', '서버 참여'], ['servers', '내 서버'], ['mods', '내 모드·플러그인'], ['market', '마켓']]) && !shell.actions.some((a) => /플러그인|모드…/.test(a)) && !shell.actions.includes('새 인스턴스…') && !!shell.heads.includes('새 인스턴스…')
+      && !shell.banner && shell.editor === 'none', `craft mounts the Minecraft screen as the app, in Korean, on Play, with nothing made from under the list and with no launcher banner (${S(shell)})`);
 
     // ---------- New Instance, Play ----------
     await js(`(document.querySelector('.mcc-new').click(), true)`);
