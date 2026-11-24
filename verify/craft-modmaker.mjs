@@ -24,7 +24,7 @@ import http from 'http';
 import Module, { createRequire } from 'module';
 import { tmpdir } from 'os';
 import path from 'path';
-import { craftMore, launch } from './lib.mjs';
+import { closeBalloonsOver, craftMore, launch } from './lib.mjs';
 
 const S = JSON.stringify;
 const require = createRequire(import.meta.url);
@@ -290,7 +290,10 @@ const codeLog = path.join(work, 'code-launch.json');
 const env = { PYIDE_CRAFT_HOME: project, PYIDE_INSTALL_ROOT: path.join(work, 'install-root'), PYIDE_MC_LAUNCHER: 'off', PYIDE_MC_JAVA: java, PYIDE_MC_CODE: codeLog, PYIDE_MC_SOURCES: S(sources) };
 
 const t = await launch({ name: 'craft-modmaker', port: 9780, mode: 'craft', lang: 'ko-KR', projectDir: project, env });
-const { js, until, check, shot, click, type, sleep } = t;
+const { js, until, check, shot, type, sleep } = t;
+// The balloons of the steps before pile up at the lower right, over what a 1024x720 window (CI's) has there: the ones
+// over an element are closed with their x before it is pressed.
+const click = async (selector) => { await closeBalloonsOver(t, `document.querySelector(${S(selector)})`); await t.click(selector); };
 const PAGE = `document.querySelector('.mcw-page')`;
 const card = (id) => `${PAGE}.querySelector('.mcw-card[data-id="${id}"]')`;
 const cardView = (id) => js(`(() => { const c = ${card(id)}; return c && { name: c.querySelector('.mcc-name').textContent, chips: [...c.querySelectorAll('.mcc-chip')].map((x) => x.textContent), facts: [...c.querySelectorAll('.mcc-facts > span')].map((x) => x.textContent),
@@ -412,9 +415,7 @@ try {
   await until(`!!document.querySelector('.mc-server[data-name="newer"] .mc-more')`, 'the server cards', 8000);
   check((await js(`document.querySelector('.mc-server[data-name="newer"]').dataset.more`)).split(' ').includes('mc-my-mod') && !(await js(`document.querySelector('.mc-server[data-name="papery"]').dataset.more`)).split(' ').includes('mc-my-mod'),
     'a server that runs mods has Add My Mod in its menu, a Paper server has not');
-  await click('.mc-server[data-name="newer"] .mc-more');
-  await until(`!!document.querySelector('.mc-actions-menu .menu-item[data-act="mc-my-mod"]')`, 'the menu', 5000);
-  await click('.mc-actions-menu .menu-item[data-act="mc-my-mod"]');
+  await js(craftMore(`document.querySelector('.mc-server[data-name="newer"]')`, 'mc-my-mod'));
   await until(`${DIALOG}?.querySelectorAll('.mcw-mine').length === 1`, 'my mods for the server', 8000);
   const mine = await js(`[${DIALOG}.querySelector('.dialog-title').textContent, [...${DIALOG}.querySelectorAll('.mcw-mine')].map((r) => [r.dataset.id, r.querySelector('.mcw-place-name').textContent, r.querySelector('.mcc-chip').className.includes('bad'), r.querySelector('.mcw-mine-add').disabled])]`);
   check(S(mine) === S(['newer에 내 모드 추가', [['sky_tools', 'Sky Tools!', true, false]]]), `it lists the user's mods of the server's loader, marking another Minecraft version (${S(mine)})`);
