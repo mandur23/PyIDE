@@ -233,7 +233,10 @@ try {
   // ---------- Maven project ----------
   await a.js(`ide.saveAll()`);
   await a.js(`(window.__javaStates = [], new MutationObserver(() => __javaStates.push(document.querySelector('#javaLspStatus').textContent)).observe(document.querySelector('#javaLspStatus'), { childList: true, characterData: true, subtree: true }), true)`);
-  await a.js(`ide.openProject(${q(maven)})`);
+  // The item said "Java: ready" (the plain project's server) for the half second the plugin took to pick a JDK for the
+  // Maven project, and the wait below then took that for the Maven project's: no progress seen, no completion.
+  const carried = await a.js(`ide.openProject(${q(maven)}).then(() => document.querySelector('#javaLspStatus').dataset.state)`);
+  check(carried !== 'ready', `once another project is open the status item no longer says ready for the one before (${carried})`);
   await a.until(`ide.root?.toLowerCase() === ${q(maven.toLowerCase())}`, 'Maven project opened');
   await a.until(READY, 'JDT LS ready (Maven project)', 300000);
   const states = await a.js('window.__javaStates');

@@ -69,6 +69,7 @@
     let gen = 0;
     let incremental = false; // the server takes edits (TextDocumentSyncKind.Incremental), not only the whole text
     let serverKey = null;
+    let serverRoot = null; // the project of serverKey
     let startSeq = 0; // the latest start; an earlier one still in flight was superseded
     let planSeq = 0; // the latest spec.start() asked
     let readyWaiters = [];
@@ -116,6 +117,10 @@
     async function ensureServer(force) {
       const root = ide.root;
       if (!root) return;
+      // Another project is open: the server of the one before goes now, with its 'ready'. A spec that takes a while to
+      // answer (Java lists the JDKs first, half a second) left the item at 'ready' meanwhile, and a request made then
+      // went to the old project's server.
+      if (serverKey !== null && serverRoot !== root) { stopServer(); setStatus('off'); }
       // The latest call decides: an earlier one still asking (the project opening) knows less than one after it (a
       // Java file opened meanwhile), and takes over its restart. A spec that answers at once (Pyright) shows
       // 'starting' in the same task, as before.
@@ -143,6 +148,7 @@
       if (!force && key === serverKey) return;
       if (key !== serverKey) crashes = [];
       serverKey = key;
+      serverRoot = root;
       clearTimeout(restartTimer);
       const my = ++startSeq;
       resetState();
