@@ -75,6 +75,7 @@ Code는 코어 위에 플러그인 약 75개가 올라간 구조입니다. 코�
 - 실행 구성 타입은 `ide.run.registerType`으로 등록합니다. 타입이 없는 저장된 구성(플러그인이 꺼졌거나 다른 모드의 타입)도 처리해야 합니다.
 - run 플러그인의 `reportBusy()`가 실행 중인 세션 이름을 메인에 알립니다. 새 실행 방식을 만들면 세션이 `busy`에 잡히는지 확인합니다.
 - Python 디버그는 `vendor/`의 debugpy, Java는 JDWP입니다. 디버그 포트는 다른 로컬 계정이 먼저 접속할 수 있다는 문제가 남아 있습니다.
+- Java 디버그 세션은 `ide.debugger.jvmRequest('redefineClasses', {classes: [{name, file}]})`로 실행 중인 클래스의 메서드 본문을 바꿉니다(HotSwap). 메인의 `debug:request`가 바꾼 뒤 중단점을 다시 겁니다. 쓰는 곳은 `craft-mods`의 테스트 클라이언트입니다.
 - 현재 파일 실행(Shift+F10, 현재 파일 선택)은 그 파일의 임시 구성(`addTemporary(cfg, {select: false})`, 최대 5개)으로 실행합니다. 끝난 Run 탭은 5개까지 남습니다(`MAX_FINISHED`).
 - 인터프리터 목록(`py:interpreters`)은 프로젝트 venv, `interpreters.extra`, `py -3`, `python` 다음에 `py -0p`와 표준 설치 폴더(`pythonRoots`)의 Python을 더합니다. 테스트에서 Python이 없는 컴퓨터를 만들려면 PATH와 함께 `PYIDE_PYTHON_ROOTS=;`를 줍니다.
 - 테스트: `verify/run-automation.mjs`, `verify/debugger.mjs`, `verify/spring-boot.mjs`, `verify/flow-coding.mjs`, `verify/run-ux.mjs`, `verify/interpreter-ux.mjs`, `verify/terminal-busy.mjs`.
@@ -194,6 +195,7 @@ Code는 코어 위에 플러그인 약 75개가 올라간 구조입니다. 코�
 | `toolchains` | Java and C/C++ | `main/features/toolchains.js` | `verify/toolchains.mjs` |
 | `spring-boot` | Spring Boot | `main/features/spring-initializr.js` | `verify/spring-boot.mjs` |
 | `spring-config` | Spring Boot Configuration Files | `main/features/spring-config.js` | `verify/spring-config.mjs` |
+| `craft-mods` | Minecraft Mods and Plugins (Craft에서 만든 모드·플러그인 폴더의 안내, 빌드, 게임에서 시험) | `main/features/craft-mods.js` | `verify/code-mods.mjs` |
 | `dotenv` | .env Files | - | `verify/dotenv.mjs` |
 | `frameworks` | Django, Flask and FastAPI | `main/features/frameworks.js` | `verify/frameworks.mjs` |
 | `installer` (Craft에도) | Install Manager | `main/features/installer.js` | `verify/installer-python.mjs`, `verify/installer.mjs` |

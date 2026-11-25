@@ -18,6 +18,8 @@ const BASE = {
   // The example mod each loader's project publishes, which a new mod starts from (modTemplate).
   fabricMdk: 'https://github.com/FabricMC/fabric-example-mod',
   neoforgeMdk: 'https://github.com/NeoForgeMDKs',
+  // Fabric's own Maven repository, where Fabric API is published under the version a mod's gradle.properties names.
+  fabricMaven: 'https://maven.fabricmc.net',
 };
 // Only text values replace a base URL, without a trailing slash (the paths below add their own).
 const base = () => {
@@ -288,6 +290,8 @@ async function temurin(major, jdk = false) {
 }
 
 const modrinthApi = () => base().modrinth;
+// Fabric API's jar of one version ("0.141.3+26.1"), the file a mods folder takes.
+const fabricApiJar = (version) => `${base().fabricMaven}/net/fabricmc/fabric-api/fabric-api/${encodeURIComponent(version)}/fabric-api-${encodeURIComponent(version)}.jar`;
 
 module.exports = { KINDS, RELEASE, base, standIn, packFile, PACK_HOSTS, javaFor, mojangVersion, temurin, neoforgeMc, byVersion, HEADERS, getText, getJson, modrinthApi, mojangProfile,
-  MOD_LOADERS, modTemplate };
+  MOD_LOADERS, modTemplate, fabricApiJar };

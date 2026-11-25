@@ -55,6 +55,10 @@ const LEARNED = [
     '2026-11-19: ide.ui.dragResize is every splitter\'s drag; a cover over the handle took the double click of terminal-split'],
   [/^main\/installer\/toolchains\.js$/, { suites: /^(toolchains|java-check|language-support|language-servers)$/ },
     '2026-11-19: the Java the language server runs on is read from here'],
+  [/^(main\/minecraft\/(modmaker|launcher|mods|sources|game-window)\.js|main\/features\/minecraft\.js)$/, { suites: /^code-mods$/ },
+    '2026-11-25: Code builds and tries a Craft mod through these (main/features/craft-mods.js requires Craft\'s main module); no Craft suite opens a Code window'],
+  [/^(main\/features\/debug(-jvm)?\.js|main\/security\.js|renderer\/features\/debugger\/index\.js)$/, { suites: /^code-mods$/ },
+    '2026-11-25: the test client\'s HotSwap is the debugger\'s redefineClasses, and the Game View\'s picture is security.js\'s allowWindowCapture; only code-mods uses either'],
 ];
 
 // Words too common to find a file's checks by.

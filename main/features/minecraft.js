@@ -734,6 +734,10 @@ const modMaker = createModMaker({
   ensureJdk: (major, { log, upTo }) => ensureJava(major, { log, jdk: true, upTo }),
   codeArgv: () => [process.execPath, ...(app.isPackaged ? [] : [app.getAppPath()])],
 });
+// Code, where a mod is edited, builds and tries it with these (main/features/craft-mods.js). A server's running state
+// is this process's own: a server Craft runs is told there by the file it holds.
+exports.modMaker = modMaker;
+exports.launcher = craft;
 
 const imports = (root) => createImports({ root, servers: () => servers(root), create, unfinished, javaFor, javaOfJar, fetchFile,
   writeServer: (dir, desc) => writeJson(path.join(dir, SERVER), desc), readServer: (dir) => readJson(path.join(dir, SERVER)) });

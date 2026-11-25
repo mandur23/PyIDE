@@ -389,15 +389,18 @@ try {
       return { api: typeof ide.minecraft,
         scripts: [...document.scripts].map((n) => n.src).filter((u) => /features\\/minecraft\\//.test(u)),
         styles: [...document.styleSheets].map((n) => n.href || '').filter((u) => /features\\/minecraft\\//.test(u)),
-        actions: ide.actions.filter((a) => /minecraft|game view|hotswap/i.test(\`\${a.id} \${a.title}\`)).map((a) => a.id),
-        toolWindows: [...ide.toolWindows.keys()].filter((id) => /minecraft/i.test(id)),
-        stripes: [...document.querySelectorAll('#stripe *, #stripeRight *')].filter(said).length,
+        actions: ide.actions.filter((a) => /minecraft|game view|hotswap/i.test(\`\${a.id} \${a.title}\`) && (!a.when || a.when())).map((a) => a.id),
+        guide: ide.actions.filter((a) => a.id.startsWith('CraftMods.')).map((a) => [a.id, !!(a.when && a.when())]),
+        toolWindows: [...ide.toolWindows.values()].filter((w) => /minecraft/i.test(w.id) && w.available()).map((w) => w.id),
+        stripes: [...document.querySelectorAll('#stripe *, #stripeRight *')].filter((n) => said(n) && !n.closest('.hidden')).length,
         projectTypes: (ide.projectTypes || []).filter((p) => /minecraft/i.test(\`\${p.id} \${p.name()}\`)).map((p) => p.id),
         runTypes: [...ide.run.types.keys()].filter((id) => /minecraft/i.test(id)) };
     })()`);
     check(code.api === 'undefined' && !code.scripts.length && !code.styles.length, `code loads no Minecraft source file (${S(code)})`);
-    check(!code.actions.length, `code has no Minecraft action (${S(code.actions)})`);
-    check(!code.toolWindows.length && !code.stripes, `code has no Minecraft tool window or stripe button (${S(code)})`);
+    // craft-mods is Code's own: the guide of a mod or a plugin made in Craft. For any other project its actions cannot
+    // run, and its tool window is neither listed nor on the stripe.
+    check(!code.actions.length && code.guide.length > 0 && code.guide.every(([, on]) => !on), `code has no Minecraft action that a project which is no mod can run (${S([code.actions, code.guide])})`);
+    check(!code.toolWindows.length && !code.stripes, `code shows no Minecraft tool window or stripe button for a project that is no mod (${S(code)})`);
     check(!code.projectTypes.length, `New Project has no Minecraft type (${S(code.projectTypes)})`);
     check(!code.runTypes.length, `code has no Minecraft run configuration type (${S(code.runTypes)})`);
     await t.click('#mainMenuBtn');

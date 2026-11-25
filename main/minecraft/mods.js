@@ -436,4 +436,4 @@ function createMods({ readServer, writeServer, running = () => false, kinds = {}
   return { list, toggle };
 }
 
-module.exports = { createMods, describe, check, parseVersion, compare, fabricMatches, mavenMatches, parseToml, parseYamlTop, paperDependencies, familyOf };
+module.exports = { createMods, describe, check, BUILT_IN, parseVersion, compare, fabricMatches, mavenMatches, parseToml, parseYamlTop, paperDependencies, familyOf };

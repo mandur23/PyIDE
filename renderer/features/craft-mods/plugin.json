@@ -1,0 +1,14 @@
+{
+  "id": "craft-mods",
+  "name": "Minecraft Mods and Plugins",
+  "version": "1.0.0",
+  "vendor": "Nano Studio",
+  "description": "For a mod or a plugin made in Nano Studio Craft and opened in Code: a guide to where its code starts, its build, and trying it in Minecraft through the official launcher or on one of your servers.",
+  "modes": ["code"],
+  "depends": [
+    "run"
+  ],
+  "main": [
+    "craft-mods.js"
+  ]
+}

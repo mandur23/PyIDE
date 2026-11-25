@@ -118,6 +118,14 @@ npm start -- --mode=craft
 - 추가(`addTo`)는 빌드한 jar를 고른 곳의 `mods`에 복사합니다. 같은 모드 ID의 jar(파일 이름이 달라도, 꺼져 있어도)는 지우고 넣습니다. 파일을 Java가 잡고 있으면 그곳만 실패로 돌려주고 나머지는 계속합니다. Fabric 모드는 Quilt 인스턴스에도 넣을 수 있습니다. 다른 곳에서 만든 jar(`{file}`)도 같은 길로 넣습니다.
 - 편집은 Nano Studio Code에서 합니다. "Code에서 편집"이 이 프로그램을 `--mode=code <모드 폴더>`로 한 번 더 띄웁니다. Craft에는 Java 언어 서버가 없습니다.
 - 게임은 여기서 실행하지 않습니다(`runClient` 없음). 시험은 인스턴스에 추가하고 그 인스턴스를 실행해서 합니다.
+- **Code 쪽(`main/features/craft-mods.js`, `renderer/features/craft-mods/`, Code 전용 플러그인).** "Code에서 편집"으로 연 폴더가 `<작업 폴더>/mods/<id>`나 `<작업 폴더>/plugins/<이름>`이면 Code의 오른쪽에 "마인크래프트" 도구 창이 뜹니다. 코드가 시작되는 파일과 알아 둘 파일을 설명과 함께 보여 주고(주 클래스는 저절로 열립니다), 빌드와 "게임에서 시험"(빌드, 인스턴스에 추가, 공식 런처 열기를 한 번에), "빌드해서 넣기"(서버)를 합니다. 작업 폴더는 그 폴더의 두 단계 위로 정합니다.
+  - Code 프로세스는 `main/features/minecraft.js`를 모드 폴더를 처음 물을 때 `require`만 하고 `register`는 부르지 않습니다. 그 파일이 `modMaker`와 `launcher`를 내보냅니다. 서버가 실행 중인지는 Craft 프로세스만 알기 때문에 Code에서는 jar를 바꿀 수 없는 것(`inUse`)으로 압니다.
+  - Fabric 예제 모드는 Fabric API를 요구하는데 새 인스턴스에는 없고 Market은 서버에만 설치합니다. 그래서 "게임에서 시험"은 넣은 뒤 모드가 요구하는 것 중 인스턴스에 없는 것을 jar의 메타데이터로 찾고(`missingIn`), Fabric API면 모드의 `gradle.properties`가 말하는 버전을 Fabric의 Maven 저장소(`sources.js`의 `fabricMaven`)에서 받아 넣습니다. 받은 파일이 `fabric-api`가 아니면 버립니다. 그래도 없는 모드는 이름을 알립니다.
+  - 맞는 인스턴스(같은 로더, 같은 마인크래프트 버전)가 없으면 "시험용 인스턴스 만들기"가 `launcher.create`로 만듭니다.
+  - Code에서 Craft를 띄우지 않습니다. 이 프로그램에는 단일 인스턴스 잠금이 없어서 두 번째 Craft가 같은 서버 폴더를 다루게 됩니다.
+  - **테스트 클라이언트, HotSwap, 게임 화면(2026-11-25에 되살림, `renderer/features/craft-mods/game.js`).** 0.2.25부터 0.3.7 전까지 Code에 있던 기능입니다. "테스트 클라이언트"가 모드의 `gradlew runClient`를 Code의 Java 디버거로 실행합니다. init 스크립트(`modmaker.js`의 `INIT_SCRIPT`)가 `runClient`라는 JavaExec 작업에 JDWP 에이전트를 달고 `pyideClasspath`로 소스 세트의 클래스패스를 `build/pyide/classpath.json`에 씁니다. 켜 둔 동안 저장한 `.java`는 그 클래스패스로 컴파일해 디버거의 RedefineClasses로 게임에 넣고(메서드 안의 코드만: 그 밖의 변경은 이유와 함께 "다시 시작"을 안내), `assets/`와 `data/` 파일은 리소스 출력에 복사합니다. 게임 창은 디버그 포트를 가진 JVM으로 찾아 Code 옆에 두거나(기본), 창의 화면을 도구 창 안에 비춥니다(`main/minecraft/game-window.js`, `main/security.js`의 `allowWindowCapture`).
+    - 이것은 모드의 개발용 게임입니다. Gradle이 스스로 마인크래프트를 받아 준비하고, 공식 런처를 거치지 않습니다. Craft 자신은 여전히 게임을 직접 켜지 않습니다.
+    - Gradle은 `--no-daemon`으로 돕니다(빌드와 같은 이유). 설정 캐시는 끕니다(지난 실행의 디버그 포트가 남습니다).
 - **플러그인**은 `<작업 폴더>/plugins/<이름>`이고 `pyide-plugin.json`(`name`, `api`, `pkg`, `server`, `mc`, `created`)이 설명합니다. 템플릿도 Gradle도 없습니다(Paper는 공식 Gradle 템플릿을 내지 않습니다). 새 플러그인은 내 Paper·Purpur·Velocity 서버 하나를 골라 주 클래스와 `plugin.yml`(Velocity는 `velocity-plugin.json`)을 직접 씁니다. 빌드는 그 서버의 API(Paper가 첫 시작 때 `libraries/`와 `versions/`에 푸는 jar, Velocity는 `server.jar`)와 플러그인의 `libs/`를 클래스패스로 `javac --release <서버의 Java>`를 돌리고 `jar`로 `build/libs/<이름>.jar`를 만듭니다. 서버를 한 번도 시작하지 않았으면 빌드를 거절하고 그렇게 말합니다. 고른 서버가 없어지면 같은 API의 다른 서버로 빌드합니다.
 - 플러그인 폴더에 `.project`, `.classpath`, `.settings`를 씁니다. Code의 Java 언어 서버가 이 Eclipse 파일로 서버의 API를 압니다(Code의 일반 Java 프로젝트는 `src`를 소스 루트로 보므로, 이 파일이 없으면 `src/main/java`의 패키지가 어긋납니다). 바뀌지 않는 파일은 다시 쓰지 않습니다.
 - 플러그인의 추가는 API가 같은 서버의 `plugins`로 갑니다(Paper 플러그인은 Paper와 Purpur, Velocity 플러그인은 Velocity). 같은 이름의 플러그인 jar는 바꿉니다.
@@ -207,6 +215,7 @@ npm start -- --mode=craft
 | `verify/minecraft-backups.mjs` | 백업 탭(한국어): 멈춘 서버와 실행 중인 서버의 지금 백업, 실행 중인 서버의 되돌리기, 월드만 되돌리기, Market 업데이트 전 자동 백업과 건너뛰기, 두 테마와 900 px |
 | `verify/craft-polish.mjs` | 새 서버 이름과 버전 목록, Market 재검색, 카드의 시작 중·중지 중, 콘솔 기록, 설정 탭의 레벨 칸과 검색, 저장 실패 때 안티 엑스레이 되돌리기 |
 | `verify/craft-modmaker.mjs` | 일반 Node와 한국어 창. 세 로더의 템플릿 이름 바꾸기, 빌드에 쓸 Java, 템플릿 주소, 새 모드 대화상자의 거절 문구, 빌드(대역 Gradle)와 실패·취소(프로세스 트리), 서버·인스턴스에 추가와 이전 빌드 교체, 서버 메뉴와 인스턴스 모드 창에서 추가, 다른 곳의 모드 파일, Code에서 편집, 플러그인(만들기, 실제 javac 빌드, 서버를 아직 시작하지 않은 경우, 컴파일 오류, 서버에 추가), 두 테마 |
+| `verify/code-mods.mjs` | 한국어 Code 창. Craft가 만든 폴더만 모드로 보는지, 도구 창의 안내(파일과 설명, 단계), 주 클래스가 저절로 열리는지, 빌드(대역 Gradle), 게임에서 시험(인스턴스에 추가, Fabric API 받기와 검사, 런처 프로필), 없는 모드 알림, 서버에 넣기, 실패와 취소, 시험용 인스턴스 만들기, 플러그인 폴더, 다른 프로젝트에서 숨김, 두 테마, 테스트 클라이언트(대역 Gradle이 JDWP로 띄우는 Java 창), HotSwap(반영, 다시 시작이 필요한 변경, 컴파일 오류), 게임 창을 Code 옆에 두기, 리소스 복사, Code 안에 비추기(숨겨진 데스크톱에서는 화면이 바로 끊겨 픽셀 검사는 SKIP), 다시 시작과 끝내기 |
 | `verify/popout-craft.mjs` | 한국어 창. 서버 콘솔이 있는 실행 창을 새 창으로 열기, 그 창에서 명령 입력과 단축키, 기본 창으로 되돌리기와 창 닫기, 재시작 뒤 복원, 도구 창 전부 열고 되돌리기 |
 
 `MC_LAUNCHER_LIVE=1`(실제 로더 설치), `verify/minecraft-live.mjs`, `verify/port-sharing-live.mjs`, `verify/port-sharing-bore-live.mjs`는 실제 네트워크를 쓰므로 CI에 없고, 사용자의 승인 없이 돌리지 않습니다.
@@ -222,6 +231,6 @@ npm start -- --mode=craft
 - 어떤 계정에도 로그인하지 않습니다.
 - 실제 모드팩 서버를 만들지 않습니다.
 - 테스트에서 실제 모드 템플릿, Gradle, JDK를 내려받지 않습니다. 실제 빌드 확인은 사용자의 승인을 받고 합니다.
-- 모드의 개발용 게임(`runClient`)을 실행하지 않습니다. 게임은 공식 런처로만 엽니다.
+- Craft는 게임을 직접 켜지 않고 공식 런처로만 엽니다. 예외는 Code의 "테스트 클라이언트" 하나입니다(모드의 개발용 게임 `runClient`, 2026-11-25에 사용자가 되살리기로 정함). 테스트는 그 실제 게임을 실행하지 않고 대역 창을 씁니다.
 - bore.pub에 접속하거나 live 테스트를 돌리지 않습니다. 공개 터널이 열리므로 사용자의 승인이 필요합니다.
 - 대역으로 확인한 것과 실제로 확인한 것을 구분해서 보고합니다.

@@ -164,5 +164,6 @@
   "'{text}' is not supported in evaluation": "'{text}' 구문은 평가에서 지원하지 않습니다",
   "Breakpoint condition '{condition}' could not be evaluated: {error}": "'{condition}' 중단점 조건을 평가할 수 없습니다: {error}",
   "Java expression, e.g. i == 3": "Java 표현식 (예: i == 3)",
-  "Input": "입력"
+  "Input": "입력",
+  "No Java debug session": "Java 디버그 세션이 없습니다"
 }

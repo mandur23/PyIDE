@@ -20,6 +20,8 @@ const shareOf = (p) => {
 };
 const allowShare = (p) => { const s = shareOf(p); if (s) shares.add(s); };
 const shareAllowed = (p) => shares.has(shareOf(p));
+let captureUntil = 0;
+const allowWindowCapture = () => { captureUntil = Date.now() + 10000; };
 function blockedFileUrl(url) {
   let u;
   try { u = new URL(url); } catch { return false; }
@@ -65,14 +67,19 @@ function install({ appDir }) {
 
   // Camera, microphone, location, notifications, devices and external protocol handlers are never granted. The IDE page
   // itself may read the clipboard (Monaco's Paste); framed content may only write it.
+  // A window's picture (the Minecraft test client's, for the Game View) is allowed to the IDE page for a few seconds
+  // after main names that window for it (allowWindowCapture): a desktop capture asks for display-capture, video only,
+  // from the page itself.
   const ALWAYS = new Set(['clipboard-sanitized-write', 'fullscreen']);
   const allowed = (permission, url) => ALWAYS.has(permission) || (permission === 'clipboard-read' && isIdePage(url));
+  const capturing = (permission, details) => permission === 'display-capture' && captureUntil > Date.now() && isIdePage(details?.requestingUrl)
+    && details.isMainFrame === true && Array.isArray(details.mediaTypes) && details.mediaTypes.length === 1 && details.mediaTypes[0] === 'video';
   app.whenReady().then(() => {
     const s = session.defaultSession;
-    s.setPermissionRequestHandler((_wc, permission, callback, details) => callback(allowed(permission, details?.requestingUrl)));
+    s.setPermissionRequestHandler((_wc, permission, callback, details) => callback(allowed(permission, details?.requestingUrl) || capturing(permission, details)));
     s.setPermissionCheckHandler((_wc, permission, requestingOrigin, details) => allowed(permission, details?.requestingUrl || requestingOrigin));
     s.webRequest.onBeforeRequest({ urls: ['file://*/*'] }, (details, callback) => callback({ cancel: blockedFileUrl(details.url) }));
   });
 }
 
-module.exports = { install, isWeb, allowShare, shareAllowed, setPopouts };
+module.exports = { install, isWeb, allowShare, shareAllowed, setPopouts, allowWindowCapture };

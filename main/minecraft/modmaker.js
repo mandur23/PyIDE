@@ -24,8 +24,9 @@ const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const programEnv = require('../program-env');
-const { MOD_LOADERS, modTemplate } = require('./sources');
+const { MOD_LOADERS, modTemplate, fabricApiJar } = require('./sources');
 const { readEntry, unpackZip } = require('./zipfile');
+const { describe: describeJar, BUILT_IN } = require('./mods');
 
 const MOD = 'pyide-mod.json';
 const MOD_ID = /^[a-z][a-z0-9_]{1,63}$/;
@@ -37,6 +38,7 @@ const KEYWORDS = new Set(('abstract assert boolean break byte case catch char cl
   + 'finally float for goto if implements import instanceof int interface long native new package private protected public return short '
   + 'static strictfp super switch synchronized this throw throws transient try void volatile while true false null').split(' '));
 const TEMPLATE_LIMIT = 50 * 1024 * 1024;
+const FABRIC_API_LIMIT = 20 * 1024 * 1024;
 // The loader a server (KINDS[kind].mods) or an instance must have to load a mod made for each loader.
 const SERVER_LOADERS = { fabric: ['fabric-loader'], forge: ['forge'], neoforge: ['neoforge'] };
 const INSTANCE_LOADERS = { fabric: ['fabric', 'quilt'], forge: ['forge'], neoforge: ['neoforge'] };
@@ -323,6 +325,50 @@ function runTree(cmd, args, opts, log) {
 }
 runTree.running = new Set(); // the process ids of the builds that have not ended
 
+// Gradle's own output and javac's messages come as UTF-8, whatever this Windows' code page is.
+const GRADLE_UTF8 = '-Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8';
+
+// The test client: an init script makes runClient's JVM wait for the debugger on the port given (Fabric's Loom,
+// ForgeGradle and NeoForge's ModDevGradle all run the game as a JavaExec task of that name), and pyideClasspath writes
+// each source set's sources, class path and output, which HotSwap compiles a saved file against.
+const HOTSWAP_DIR = 'build/pyide';
+const INIT_SCRIPT = `// Written by Nano Studio for the test client.
+allprojects {
+  def port = findProperty('pyide.debugPort')
+  if (port) {
+    tasks.withType(JavaExec).matching { it.name == 'runClient' }.configureEach {
+      jvmArgs "-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:\${port}"
+    }
+  }
+  def out = findProperty('pyide.classpathFile')
+  if (out) {
+    tasks.register('pyideClasspath') {
+      doLast {
+        def sets = project.extensions.findByName('sourceSets')
+        def data = (sets == null ? [] : sets.findAll { it.name != 'test' }).collect { s ->
+          [name: s.name, sources: s.java.srcDirs*.absolutePath, classpath: s.compileClasspath.files*.absolutePath,
+           output: s.java.destinationDirectory.get().asFile.absolutePath,
+           resources: s.resources.srcDirs*.absolutePath, resourcesOutput: s.output.resourcesDir?.absolutePath]
+        }
+        new File(project.rootDir, out).text = groovy.json.JsonOutput.toJson(data)
+      }
+    }
+  }
+}
+`;
+// The game shown beside the IDE (or in its Game View) keeps running while the user types in the editor: Minecraft
+// opens its pause menu when its window loses focus unless options.txt in the run folder says otherwise.
+function keepPlayingUnfocused(dir) {
+  const file = path.join(dir, 'run', 'options.txt');
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+    if (/^pauseOnLostFocus:false\s*$/m.test(text)) return;
+    fs.writeFileSync(file, /^pauseOnLostFocus:/m.test(text) ? text.replace(/^pauseOnLostFocus:.*$/m, () => 'pauseOnLostFocus:false')
+      : `${text}${text && !text.endsWith('\n') ? '\n' : ''}pauseOnLostFocus:false\n`);
+  } catch { /* the game pauses as it would anyway */ }
+}
+
 // fetchFile(url, dest, opts, log); ensureJdk(java, {log, upTo}) -> a JDK's home; javaFor(mc) -> Minecraft's Java;
 // servers(root) and instances(root) -> what a mod can be added to; serverRunning(dir); codeArgv -> the program and
 // arguments that start Nano Studio (Code is that with --mode=code and a folder).
@@ -533,9 +579,7 @@ function createModMaker({ fetchFile, ensureJdk, javaFor, servers, instances, ser
       if (!home || !isFile(path.join(home, 'bin', 'javac.exe'))) throw fail(`A JDK of Java ${java} was not found`, 'noJdk');
       log(`gradlew build with Java ${java} (${home})\nThe first build downloads Gradle and Minecraft, which takes several minutes.\n`);
       const before = builtJar(mod.dir)?.time || 0;
-      // Gradle's own output and javac's messages come as UTF-8, whatever this Windows' code page is.
-      const utf8 = '-Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8';
-      const env = { ...programEnv(), JAVA_HOME: home, GRADLE_OPTS: [process.env.GRADLE_OPTS, utf8].filter(Boolean).join(' ') };
+      const env = { ...programEnv(), JAVA_HOME: home, GRADLE_OPTS: [process.env.GRADLE_OPTS, GRADLE_UTF8].filter(Boolean).join(' ') };
       // .\ because cmd finds a program in the current folder only that way when NoDefaultCurrentDirectoryInExePath is
       // set. No daemon: one would stay for hours, holding the JDK and the mod's folder.
       const code = await runTree(process.env.ComSpec || 'cmd.exe', ['/d', '/c', '.\\gradlew.bat', '--console=plain', '--no-daemon', 'build'], { cwd: mod.dir, env }, log);
@@ -615,6 +659,143 @@ function createModMaker({ fetchFile, ensureJdk, javaFor, servers, instances, ser
     });
   }
 
+  // ---------- the test client: the game from the mod's own Gradle, under the debugger ----------
+  // The JDK a mod's Gradle runs on and the Java its code is compiled for (Minecraft's, noted when the mod was made).
+  async function jdkOf(mod, log) {
+    const made = Number(readJson(path.join(mod.dir, MOD))?.java) || 0;
+    const { java, upTo } = buildJava(mod.dir, mod.loader, made);
+    const home = await ensureJdk(java, { log, upTo });
+    if (!home || !isFile(path.join(home, 'bin', 'javac.exe'))) throw fail(`A JDK of Java ${java} was not found`, 'noJdk');
+    return { home, release: made || java };
+  }
+  // What starts `gradlew runClient` with the game's JVM waiting for the debugger on debugPort -> {cmd, args, cwd, env,
+  // sourceRoots}. The init script also writes the source sets HotSwap compiles against (build/pyide/classpath.json).
+  async function clientTask(root, ref, { debugPort } = {}, log) {
+    const mod = read(root, refOf(ref).id);
+    if (!isFile(path.join(mod.dir, 'gradlew.bat'))) throw fail(`mods/${mod.id} has no gradlew.bat: it is not a Gradle project Nano Studio can build`, 'noGradle');
+    const port = Number(debugPort);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw fail('No debug port');
+    const { home } = await jdkOf(mod, log);
+    fs.mkdirSync(path.join(mod.dir, HOTSWAP_DIR), { recursive: true });
+    fs.writeFileSync(path.join(mod.dir, HOTSWAP_DIR, 'init.gradle'), INIT_SCRIPT);
+    fs.rmSync(path.join(mod.dir, HOTSWAP_DIR, 'classpath.json'), { force: true });
+    keepPlayingUnfocused(mod.dir);
+    // .\ and no daemon as for a build; the configuration cache would keep the last run's debug port.
+    return { cmd: process.env.ComSpec || 'cmd.exe', cwd: mod.dir, env: { JAVA_HOME: home, GRADLE_OPTS: [process.env.GRADLE_OPTS, GRADLE_UTF8].filter(Boolean).join(' ') },
+      args: ['/d', '/c', '.\\gradlew.bat', '--console=plain', '--no-daemon', '--no-configuration-cache', '-I', `${HOTSWAP_DIR}/init.gradle`, `-Ppyide.debugPort=${port}`,
+        `-Ppyide.classpathFile=${HOTSWAP_DIR}/classpath.json`, 'pyideClasspath', 'runClient'],
+      sourceRoots: [['src', 'main', 'java'], ['src', 'client', 'java']].map((p) => path.join(mod.dir, ...p)).filter(isDir) };
+  }
+  const sourceSets = (mod) => {
+    const sets = readJson(path.join(mod.dir, HOTSWAP_DIR, 'classpath.json'));
+    if (!Array.isArray(sets)) throw fail('The test client is not running, or Gradle has not written its class path yet', 'noClient');
+    return sets;
+  };
+  const under = (file, dir) => path.resolve(file).toLowerCase().startsWith(path.resolve(dir).toLowerCase() + path.sep);
+  // HotSwap: the saved .java files compiled with javac against their source set's class path, the classes written
+  // over the source set's output (so a class the game has not loaded yet, or a restart, has them too)
+  // -> [{name, file}] for the debugger to redefine.
+  async function hotswapCompile(root, ref, files, log) {
+    const mod = read(root, refOf(ref).id);
+    const sets = sourceSets(mod);
+    const groups = new Map(); // source set -> files
+    for (const f of (Array.isArray(files) ? files : []).filter((x) => typeof x === 'string' && under(x, mod.dir))) {
+      const set = sets.find((s) => (s.sources || []).some((d) => under(f, d)));
+      if (set) groups.set(set, [...(groups.get(set) || []), f]);
+    }
+    if (!groups.size) return [];
+    const { home, release } = await jdkOf(mod, log);
+    const classes = [];
+    for (const [set, list] of groups) {
+      const tmp = fs.mkdtempSync(path.join(mod.dir, HOTSWAP_DIR, 'javac-'));
+      try {
+        const q = (s) => `"${s.replace(/\\/g, '/')}"`;
+        const argfile = path.join(tmp, 'args.txt');
+        fs.writeFileSync(argfile, [`--release ${release}`, '-encoding UTF-8', '-proc:none', '-g', '-implicit:none', `-d ${q(path.join(tmp, 'out'))}`,
+          `-cp ${q([...sets.map((s) => s.output), ...(set.classpath || [])].join(path.delimiter))}`, ...list.map(q)].join('\n'));
+        const utf8 = ['-J-Dfile.encoding=UTF-8', '-J-Dstdout.encoding=UTF-8', '-J-Dstderr.encoding=UTF-8', '-J-Dsun.stdout.encoding=UTF-8', '-J-Dsun.stderr.encoding=UTF-8'];
+        const code = await runTree(path.join(home, 'bin', 'javac.exe'), [...utf8, `@${argfile}`], { cwd: mod.dir, env: programEnv() }, log);
+        if (code !== 0) throw fail('The saved code does not compile', 'compile');
+        for (const f of filesUnder(path.join(tmp, 'out')).filter((n) => n.endsWith('.class'))) {
+          const rel = path.relative(path.join(tmp, 'out'), f);
+          const dest = path.join(set.output, rel);
+          fs.mkdirSync(path.dirname(dest), { recursive: true });
+          fs.copyFileSync(f, dest);
+          classes.push({ name: rel.replace(/\.class$/, '').split(path.sep).join('.'), file: dest });
+        }
+      } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+    }
+    return classes;
+  }
+  // A saved texture, model, language file or other file under assets/ or data/ of a source set's resources, copied
+  // over its output, which the test client reads (F3+T reloads assets/, /reload data/). Other resources
+  // (fabric.mod.json, mods.toml) are filled in by Gradle's processResources, so they wait for the next start.
+  function hotswapResources(root, ref, files) {
+    const mod = read(root, refOf(ref).id);
+    const sets = sourceSets(mod);
+    const out = { copied: [], assets: false, data: false };
+    for (const f of (Array.isArray(files) ? files : []).filter((x) => typeof x === 'string' && under(x, mod.dir))) {
+      const file = path.resolve(f);
+      for (const set of sets) {
+        const base = (set.resources || []).find((d) => under(file, d));
+        if (!base || !set.resourcesOutput) continue;
+        const rel = path.relative(base, file);
+        const top = rel.split(path.sep)[0].toLowerCase();
+        if ((top !== 'assets' && top !== 'data') || rel.split(path.sep).includes('..')) break;
+        const dest = path.join(set.resourcesOutput, rel);
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.copyFileSync(file, dest);
+        out.copied.push(rel.split(path.sep).join('/'));
+        out[top] = true;
+        break;
+      }
+    }
+    return out;
+  }
+
+  // ---------- what a mod needs where it is tried ----------
+  // The ids of the mods `src` cannot start without that a place's mods folder does not hold, by what the jars say of
+  // themselves (jars inside jars count). The game, its loader and Java are never missing.
+  function missingIn(root, src, wanted) {
+    const s = source(root, src);
+    const place = places(root, s).find((p) => p.type === wanted?.type && p.name === wanted?.name);
+    if (s.kind !== 'mod' || !s.jar || !place) return [];
+    const there = new Set();
+    for (const n of jarsIn(place.dir).filter((f) => /\.jar$/i.test(f))) {
+      const d = describeJar(path.join(place.dir, n));
+      for (const m of d.mods) { there.add(m.id); for (const p of m.provides || []) there.add(p); }
+      for (const p of d.provides) there.add(p.id);
+    }
+    const needed = describeJar(s.jar).mods.flatMap((m) => m.depends).filter((d) => d.kind === 'required').map((d) => d.id);
+    return [...new Set(needed.filter((id) => !BUILT_IN.has(id) && !there.has(id)))];
+  }
+  // The Fabric API a Fabric mod is built with, as its gradle.properties names it (fabric_api_version; fabric_version
+  // in older example mods), or null.
+  function fabricApiOf(dir) {
+    let text = '';
+    try { text = fs.readFileSync(path.join(dir, 'gradle.properties'), 'utf8'); } catch {}
+    const v = /^[ \t]*fabric(?:_api)?_version[ \t]*=[ \t]*(\S+)/m.exec(text)?.[1] || '';
+    return /^[\w.+-]{1,64}$/.test(v) ? v : null;
+  }
+  // That Fabric API into a place's mods folder, from Fabric's Maven repository: the example mod requires it and a new
+  // instance has none. What arrives is kept only when it is Fabric API. -> {file, version}
+  async function addFabricApi(root, ref, wanted, log) {
+    const mod = read(root, refOf(ref).id);
+    const version = mod.loader === 'fabric' ? fabricApiOf(mod.dir) : null;
+    if (!version) throw fail(`${mod.name} names no Fabric API version in gradle.properties`, 'noFabricApi');
+    const place = places(root, source(root, { id: mod.id })).find((p) => p.type === wanted?.type && p.name === wanted?.name);
+    if (!place) throw fail(`${wanted?.name} does not take this mod`, 'noPlace');
+    const file = `fabric-api-${version}.jar`;
+    const dest = path.join(place.dir, file);
+    fs.mkdirSync(place.dir, { recursive: true });
+    await fetchFile(fabricApiJar(version), dest, { limit: FABRIC_API_LIMIT }, log);
+    if (modOfJar(dest)?.id !== 'fabric-api') {
+      fs.rmSync(dest, { force: true });
+      throw fail('What was downloaded is not Fabric API', 'noFabricApi');
+    }
+    return { file, version };
+  }
+
   function openInCode(root, ref) {
     const mod = readAny(root, ref);
     const argv = [...codeArgv(), '--mode=code', mod.dir];
@@ -628,7 +809,7 @@ function createModMaker({ fetchFile, ensureJdk, javaFor, servers, instances, ser
     return { started: true };
   }
 
-  return { list, read, create, createPlugin, pluginServers, build, targets, addTo, openInCode,
+  return { list, read, create, createPlugin, pluginServers, build, targets, addTo, missingIn, fabricApiOf, addFabricApi, clientTask, hotswapCompile, hotswapResources, openInCode,
     // At quit: taskkill is waited for, since Windows ends this program's own children with it but not theirs (Gradle's Java).
     stop: () => { for (const pid of runTree.running) spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true, timeout: 5000 }); } };
 }
