@@ -6,6 +6,7 @@
 //! window keeps drawing and takes the result when it is there. An analysis that decodes video waits while the player
 //! plays ("Paused while playing"). Every result is one undo step.
 
+pub mod autocut;
 pub mod beats;
 pub mod color;
 pub mod duck;
@@ -129,6 +130,7 @@ impl<T: Send + 'static> Job<T> {
 /// The automation's state: its dialogs and the one analysis that may run.
 #[derive(Default)]
 pub struct AutoUi {
+    pub autocut: autocut::AutoCutUi,
     pub duck: duck::DuckUi,
     pub silence: silence::SilenceUi,
     pub color: color::ColorUi,
@@ -142,6 +144,7 @@ impl AutoUi {
     /// Whether one of the analyses is running (`ui.auto.running`).
     pub fn running(&self) -> bool {
         self.duck.job.is_some()
+            || self.autocut.job.is_some()
             || self.silence.job.is_some()
             || self.color.job.is_some()
             || self.scenes.job.is_some()
@@ -152,7 +155,9 @@ impl AutoUi {
 /// `Some(can run now)` for this feature's actions.
 pub fn enabled(s: &Shell, id: &str) -> Option<bool> {
     match id {
-        "auto.duck" | "auto.silence" | "auto.scenes" | "auto.beats" => Some(s.app.sequence().is_some()),
+        "auto.duck" | "auto.silence" | "auto.scenes" | "auto.beats" | "auto.autocut" => {
+            Some(s.app.sequence().is_some())
+        }
         "auto.color" => Some(color::target(&s.app).is_some()),
         _ => None,
     }
@@ -160,7 +165,7 @@ pub fn enabled(s: &Shell, id: &str) -> Option<bool> {
 
 /// Runs one of this feature's actions -> whether it was one.
 pub fn run(s: &mut Shell, id: &str, _ctx: &egui::Context) -> bool {
-    if !matches!(id, "auto.duck" | "auto.silence" | "auto.color" | "auto.scenes" | "auto.beats") {
+    if !matches!(id, "auto.duck" | "auto.silence" | "auto.color" | "auto.scenes" | "auto.beats" | "auto.autocut") {
         return false;
     }
     if s.features.auto.running() || crate::voice::running(s) || crate::speakers::running(s) {
@@ -170,6 +175,7 @@ pub fn run(s: &mut Shell, id: &str, _ctx: &egui::Context) -> bool {
     match id {
         "auto.duck" => duck::open(s),
         "auto.silence" => silence::open(s),
+        "auto.autocut" => autocut::open(s),
         "auto.scenes" => scenes::open(s),
         "auto.beats" => beats::open(s),
         _ => color::start(s),
@@ -182,6 +188,7 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     let playing = s.transport.playing();
     duck::poll(s, playing);
     silence::poll(s, playing);
+    autocut::poll(s, playing);
     color::poll(s, playing);
     scenes::poll(s, playing);
     beats::poll(s, playing);
@@ -193,6 +200,7 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
             .as_ref()
             .map(|j| job(&j.title, j.fraction(), j.paused()))
             .or_else(|| a.silence.job.as_ref().map(|j| job(&j.title, j.fraction(), j.paused())))
+            .or_else(|| a.autocut.job.as_ref().map(|j| job(&j.title, j.fraction(), j.paused())))
             .or_else(|| a.color.job.as_ref().map(|j| job(&j.title, j.fraction(), j.paused())))
             .or_else(|| a.scenes.job.as_ref().map(|j| job(&j.title, j.fraction(), j.paused())))
             .or_else(|| a.beats.job.as_ref().map(|j| job(&j.title, j.fraction(), j.paused())))
@@ -225,6 +233,7 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     }
     duck::windows(s, ctx);
     silence::windows(s, ctx);
+    autocut::windows(s, ctx);
     scenes::windows(s, ctx);
     beats::windows(s, ctx);
 }
@@ -234,6 +243,7 @@ pub fn cancel(s: &mut Shell) {
     let a = &s.features.auto;
     a.duck.job.as_ref().inspect(|j| j.cancel());
     a.silence.job.as_ref().inspect(|j| j.cancel());
+    a.autocut.job.as_ref().inspect(|j| j.cancel());
     a.color.job.as_ref().inspect(|j| j.cancel());
     a.scenes.job.as_ref().inspect(|j| j.cancel());
     a.beats.job.as_ref().inspect(|j| j.cancel());

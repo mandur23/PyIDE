@@ -256,7 +256,7 @@ const PANELS: [&str; 19] = [
 ];
 
 /// The static id of a panel named in the settings.
-fn panel_id(name: &str) -> Option<&'static str> {
+pub fn panel_id(name: &str) -> Option<&'static str> {
     PANELS.into_iter().find(|p| *p == name)
 }
 

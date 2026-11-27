@@ -455,8 +455,8 @@ fn caption_style_lists_the_systems_fonts_and_doubtful_words_follow_the_setting()
     assert!(until(&mut h, 20, |s| s.features.text.panel.fonts.is_some()), "the families are read on a thread");
     h.step();
     h.step();
-    // the first list of the dialog is the font's, showing the track's family by its label
-    let combo = h.get_all_by_role(egui::accesskit::Role::ComboBox).next().expect("the font list").rect();
+    // the dialog's lists: the presets first, then the font's, showing the track's family by its label
+    let combo = h.get_all_by_role(egui::accesskit::Role::ComboBox).nth(1).expect("the font list").rect();
     assert!(combo.width() > 0.0);
     click(&mut h, combo.center());
     h.step();

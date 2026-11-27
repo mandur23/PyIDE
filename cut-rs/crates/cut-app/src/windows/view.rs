@@ -414,17 +414,20 @@ pub fn slot_tabs(
 
 /// The right-click menu of a panel's tab.
 fn menu_of(s: &mut Shell, r: &egui::Response, panel: &'static str, in_window: bool) {
-    if !detachable(panel) {
-        return;
-    }
     r.context_menu(|ui| {
-        let label = if in_window { "Return to Main Window" } else { "Open in New Window" };
-        if ui.button(tr(label)).clicked() {
-            if in_window {
-                dock(s, panel);
-            } else {
-                detach(s, panel);
+        if detachable(panel) {
+            let label = if in_window { "Return to Main Window" } else { "Open in New Window" };
+            if ui.button(tr(label)).clicked() {
+                if in_window {
+                    dock(s, panel);
+                } else {
+                    detach(s, panel);
+                }
+                ui.close();
             }
+        }
+        if !in_window && ui.button(tr("Close Panel")).clicked() {
+            crate::workspaces::close_panel(s, panel);
             ui.close();
         }
     });
@@ -474,6 +477,9 @@ fn drag_tab(s: &mut Shell, ui: &egui::Ui, r: &egui::Response, panel: &'static st
     if r.dragged()
         && let Some(p) = ctx.pointer_latest_pos()
     {
+        if !in_window && ctx.content_rect().contains(p) {
+            crate::workspaces::drag_inside(s, ctx, panel, p, false);
+        }
         egui::Area::new(egui::Id::unique(("tab-drag", panel)))
             .fixed_pos(p + Vec2::new(12.0, 8.0))
             .order(egui::Order::Tooltip)
@@ -499,6 +505,7 @@ fn drag_tab(s: &mut Shell, ui: &egui::Ui, r: &egui::Response, panel: &'static st
         return;
     }
     if inside {
+        crate::workspaces::drag_inside(s, ctx, panel, p, true);
         return;
     }
     // the window opens under the pointer, its title where the tab was held, at the size the panel had docked
@@ -541,7 +548,7 @@ pub fn menu(s: &mut Shell, ui: &mut egui::Ui) {
     ui.separator();
     let ws = s.features.workspace.current;
     ui.menu_button(tr("Open in New Window"), |ui| {
-        for p in ws.panels().into_iter().filter(|p| detachable(p)) {
+        for p in s.features.workspace.panels_in(ws).into_iter().filter(|p| detachable(p)) {
             let on = in_window(s, p);
             let mark = if on { crate::icons::CHECK } else { "  " };
             if ui.button(format!("{mark}  {}", tr(panel_title(p)))).clicked() {

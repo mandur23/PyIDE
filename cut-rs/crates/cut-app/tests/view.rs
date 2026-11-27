@@ -280,16 +280,16 @@ fn zoom_unused_media_and_a_saved_workspace() {
     assert!(h.query_by_label("Unused media in the whole project").is_none());
 
     // Save Changes to This Workspace keeps the splitters as they are
-    let lower = h.state().features.workspace.size(Ws::Editing, "lower").expect("the lower row was drawn");
+    let lower = h.state().features.workspace.size(Ws::Editing, "row1").expect("the lower row was drawn");
     act(&mut h, "workspace.save");
     let saved = h.state().doc.settings.get(cut_app::workspaces::SAVED).cloned().expect("written to the settings");
-    assert_eq!(saved["editing"]["sizes"]["lower"].as_f64().map(|v| v as f32), Some(lower));
-    assert!(saved["editing"]["sizes"]["source"].is_number() && saved["editing"]["sizes"]["project"].is_number());
+    assert_eq!(saved["editing"]["sizes"]["row1"].as_f64().map(|v| v as f32), Some(lower));
+    assert!(saved["editing"]["sizes"]["slot0.0"].is_number() && saved["editing"]["sizes"]["slot1.0"].is_number());
     assert!(saved.get("color").is_none(), "only the workspace shown");
     // and a new start reads it back
     let mut again = cut_app::workspaces::Workspaces::default();
     again.load_saved(Some(&saved));
-    assert_eq!(again.saved_size(Ws::Editing, "lower"), Some(lower));
+    assert_eq!(again.saved_size(Ws::Editing, "row1"), Some(lower));
 
     // it keeps each slot's active tab too, which a start and Reset to Saved Layout show again
     h.state_mut().lower_tab = cut_app::shell::LowerTab::History;

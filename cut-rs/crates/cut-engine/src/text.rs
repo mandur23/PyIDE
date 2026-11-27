@@ -362,7 +362,22 @@ impl TextRenderer {
         let pad = size * 0.25;
         let margin = s.get("margin").and_then(Json::as_f64).unwrap_or(0.0) / 100.0 * h;
         let block = lines.len() as f64 * lh;
-        let top = if text("position") == Some("top") { -h / 2.0 + margin } else { h / 2.0 - margin - block };
+        let top = match text("position") {
+            Some("top") => -h / 2.0 + margin,
+            Some("middle") => -block / 2.0,
+            _ => h / 2.0 - margin - block,
+        };
+        // the native editor's outline and shadow (the JavaScript has neither; absent, the captions are its own),
+        // their widths and distances in pixels of a picture whose shorter side is `ref`, as `size` is
+        let px = w.min(h) / n("ref", 1080.0);
+        let num = |key: &str| s.get(key).and_then(Json::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0);
+        let outline = text("outline")
+            .and_then(css_color)
+            .filter(|_| num("outlineWidth") > 0.0)
+            .map(|c| (c, num("outlineWidth") * px));
+        let shadow = text("shadow")
+            .and_then(css_color)
+            .map(|c| (c, num("shadowBlur") * px, num("shadowX") * px, num("shadowY") * px));
         let font = Font {
             family: text("font").unwrap_or(FALLBACK),
             weight: n("weight", 600.0).round().clamp(1.0, 1000.0) as u16,
@@ -382,6 +397,22 @@ impl TextRenderer {
             let (lx, ly) = ((-width / 2.0 + w / 2.0) * k, (y + h / 2.0) * k);
             if let Some(b) = bg {
                 c.fill_rect((-width / 2.0 - pad + w / 2.0) * k, ly, (width + 2.0 * pad) * k, lh * k, 0.0, b);
+            }
+            if let Some((col, blur, sx, sy)) = shadow {
+                if blur > 0.0 {
+                    let mut layer = Canvas::new(c.w as u32, c.h as u32);
+                    Self::paint(&mut layer, &sh, lx + sx * k, ly + sy * k, col, None);
+                    if let Some((_, wd)) = outline {
+                        stroke_paint(&mut layer, &sh, lx + sx * k, ly + sy * k, col, wd * k);
+                    }
+                    blur_box(&mut layer, (blur * k / 2.0).round() as usize);
+                    over(c, &layer);
+                } else {
+                    Self::paint(c, &sh, lx + sx * k, ly + sy * k, col, None);
+                }
+            }
+            if let Some((col, wd)) = outline {
+                stroke_paint(c, &sh, lx, ly, col, wd * k);
             }
             let (line_hex, color) = match line.color.and_then(|x| css_color(x).map(|c| (x, c))) {
                 Some((x, c)) => (Some(x), c),

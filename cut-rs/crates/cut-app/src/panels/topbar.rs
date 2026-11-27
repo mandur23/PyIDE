@@ -91,9 +91,11 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui) {
             }
             // the tab's own menu acts on its workspace, shown first
             r.context_menu(|ui| {
-                for (id, label) in
-                    [("workspace.reset", "Reset to Saved Layout"), ("workspace.save", "Save Changes to This Workspace")]
-                {
+                for (id, label) in [
+                    ("workspace.reset", "Reset to Saved Layout"),
+                    ("workspace.save", "Save Changes to This Workspace"),
+                    ("workspace.default", "Reset to Default Layout"),
+                ] {
                     if ui.button(tr(label)).clicked() {
                         crate::workspaces::set(s, ws);
                         let ctx = ui.ctx().clone();

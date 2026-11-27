@@ -70,6 +70,7 @@ pub fn automation_menu(s: &mut Shell, ui: &mut egui::Ui) {
         }
     };
     ui.menu_button(tr("Automation"), |ui| {
+        run(s, ui, "auto.autocut", "AutoCut…");
         run(s, ui, "auto.silence", "Remove Silence…");
         run(s, ui, "auto.scenes", "Detect Scene Changes…");
         run(s, ui, "auto.beats", "Detect Beats…");

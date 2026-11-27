@@ -10,6 +10,7 @@
 
 pub mod actions;
 pub mod ai;
+pub mod arrange;
 pub mod audio;
 pub mod auto;
 pub mod captions;

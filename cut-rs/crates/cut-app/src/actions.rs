@@ -194,11 +194,21 @@ impl Shell {
             "selectUnused" => self.project.select_unused(&self.app),
             "window.project" => {
                 self.lower_tab = LowerTab::Project;
+                crate::workspaces::show_panel(self, "project");
                 self.focus(Panel::Project);
             }
-            "window.source" => self.focus(Panel::Source),
-            "window.timeline" => self.focus(Panel::Timeline),
-            "window.program" => self.focus(Panel::Program),
+            "window.source" => {
+                crate::workspaces::show_panel(self, "source");
+                self.focus(Panel::Source);
+            }
+            "window.timeline" => {
+                crate::workspaces::show_panel(self, "timeline");
+                self.focus(Panel::Timeline);
+            }
+            "window.program" => {
+                crate::workspaces::show_panel(self, "program");
+                self.focus(Panel::Program);
+            }
             "playPause" => {
                 if self.transport.playing() {
                     self.transport.pause();

@@ -37,6 +37,8 @@ impl Features {
             f.workspace.current = ws;
         }
         f.workspace.load_saved(doc.settings.get(crate::workspaces::SAVED));
+        f.workspace
+            .load_arranged(doc.settings.get(crate::workspaces::ARRANGED), doc.settings.get(crate::workspaces::NAMED));
         f
     }
 }
@@ -95,7 +97,8 @@ pub fn run(s: &mut Shell, id: &str, ctx: &egui::Context) -> bool {
 /// `panel_ms` (the report and the benchmarks read it).
 pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     type Part = fn(&mut Shell, &egui::Context);
-    let parts: [(&'static str, Part); 15] = [
+    let parts: [(&'static str, Part); 16] = [
+        ("(layouts)", crate::workspaces::windows),
         ("(edit)", crate::edit::frame),
         ("(audio windows)", crate::audio::windows),
         ("(captions windows)", crate::captions::windows),

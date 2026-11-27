@@ -19,9 +19,8 @@ pub fn run(s: &mut Shell, id: &str, _ctx: &egui::Context) -> bool {
     }
     if s.features.workspace.current == Ws::Editing {
         s.lower_tab = LowerTab::Effects;
-    } else {
-        s.features.workspace.open_panel("effects");
     }
+    crate::workspaces::show_panel(s, "effects");
     s.focus(Panel::Effects);
     true
 }

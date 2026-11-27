@@ -91,22 +91,10 @@ pub fn show(s: &mut Shell, ui: &mut egui::Ui) {
                 ui.separator();
                 item(s, ui, "workspace.reset", None);
                 item(s, ui, "workspace.save", Some("Save Changes to This Workspace"));
+                crate::workspaces::layouts_menu(s, ui);
             });
             ui.separator();
-            for id in [
-                "window.project",
-                "window.source",
-                "window.timeline",
-                "window.program",
-                "window.controls",
-                "window.mixer",
-                "window.effects",
-            ] {
-                item(s, ui, id, None);
-            }
-            item(s, ui, "window.essential", Some("Essential Sound"));
-            item(s, ui, "window.captions", Some("Captions"));
-            item(s, ui, "window.transcript", Some("Transcript"));
+            crate::workspaces::panels_menu(s, ui);
             crate::windows::menu(s, ui);
         });
         ui.menu_button(tr("Help"), |ui| {

@@ -101,57 +101,5 @@ pub fn layout(s: &mut Shell, ui: &mut egui::Ui) {
     if crate::view::maximized(s, ui) {
         return;
     }
-    if s.features.workspace.current != crate::workspaces::Ws::Editing {
-        crate::workspaces::layout(s, ui);
-        return;
-    }
-    let g = s.features.workspace.generation(crate::workspaces::Ws::Editing);
-    let h = ui.available_height();
-    let ws = crate::workspaces::Ws::Editing;
-    let r = egui::Panel::bottom(("lower", g))
-        .show_separator_line(false)
-        .resizable(true)
-        .default_size(crate::workspaces::sized(s, ws, "lower", h * 0.55))
-        .size_range(200.0..=(h - 160.0).max(220.0))
-        .frame(Frame::new().fill(pal.gray[1]))
-        .show(ui, |ui| lower(s, ui, g));
-    crate::workspaces::note(s, ws, "lower", r.response.rect.height());
-    let w = ui.available_width();
-    let r = egui::Panel::left(("source", g))
-        .show_separator_line(false)
-        .resizable(true)
-        .default_size(crate::workspaces::sized(s, ws, "source", w * 0.45))
-        .size_range(200.0..=(w - 240.0).max(260.0))
-        .frame(Frame::new().fill(pal.gray[1]))
-        .show(ui, |ui| crate::workspaces::editing_slot(s, ui, 0, 0));
-    crate::workspaces::note(s, ws, "source", r.response.rect.width());
-    egui::CentralPanel::default()
-        .frame(Frame::new().fill(pal.gray[1]))
-        .show(ui, |ui| crate::workspaces::editing_slot(s, ui, 0, 1));
-}
-
-fn lower(s: &mut Shell, ui: &mut egui::Ui, g: u32) {
-    let w = ui.available_width();
-    let ws = crate::workspaces::Ws::Editing;
-    let r = egui::Panel::left(("project", g))
-        .show_separator_line(false)
-        .resizable(true)
-        .default_size(crate::workspaces::sized(s, ws, "project", (w * 0.27).max(240.0)))
-        .size_range(200.0..=(w * 0.5).max(220.0))
-        .frame(Frame::new())
-        .show(ui, |ui| crate::workspaces::editing_slot(s, ui, 1, 0));
-    crate::workspaces::note(s, ws, "project", r.response.rect.width());
-    egui::Panel::left(("tools", g))
-        .show_separator_line(false)
-        .exact_size(40.0)
-        .resizable(false)
-        .frame(Frame::new())
-        .show(ui, |ui| crate::workspaces::editing_slot(s, ui, 1, 1));
-    egui::Panel::right(("meters", g))
-        .show_separator_line(false)
-        .exact_size(56.0)
-        .resizable(false)
-        .frame(Frame::new())
-        .show(ui, |ui| crate::workspaces::editing_slot(s, ui, 1, 3));
-    egui::CentralPanel::default().frame(Frame::new()).show(ui, |ui| crate::workspaces::editing_slot(s, ui, 1, 2));
+    crate::workspaces::layout(s, ui);
 }

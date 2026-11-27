@@ -18,6 +18,7 @@ use cut_oracle::{Inputs, ask};
 use cut_time::{TICKS, Ticks};
 use eframe::egui;
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use serde_json::{Value as Json, json};
 
 const S: f64 = TICKS as f64;
@@ -214,6 +215,106 @@ fn remove_silence_previews_and_ripple_deletes_the_quiet_stretches() {
     );
     h.state_mut().app.undo();
     assert_eq!(h.state().app.history.serialize(), before, "Ctrl+Z gives back the project as it was");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn autocut_previews_its_cuts_lets_one_be_left_out_and_cuts_the_rest_in_one_step() {
+    let dir = scratch("autocut");
+    let (t, m) = (talk(&dir), music(&dir));
+    let s = shell(&dir, &[(&t, "A1", 0.0, 10.0, false), (&m, "A2", 0.0, 12.0, true)]);
+    let before = s.app.history.serialize();
+    let mut h =
+        Harness::builder().with_size(egui::vec2(1280.0, 800.0)).build_ui_state(|ui, s: &mut Shell| s.frame(ui), s);
+    let ctx = h.ctx.clone();
+    h.state_mut().run_action("auto.autocut", &ctx);
+    let start = Instant::now();
+    while h.state().features.auto.autocut.open.is_none() {
+        assert!(start.elapsed() < Duration::from_secs(60), "the sound is measured");
+        h.step();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    h.run_steps(2);
+    let ranges = |h: &Harness<'_, Shell>| -> Vec<(f64, f64)> {
+        h.state()
+            .timeline
+            .overlay
+            .as_ref()
+            .map_or_else(Vec::new, |o| o.ranges.iter().map(|(a, b)| (a / S, b / S)).collect())
+    };
+    let near = |got: &[(f64, f64)], want: &[(f64, f64)]| {
+        got.len() == want.len()
+            && got.iter().zip(want).all(|(g, w)| (g.0 - w.0).abs() <= F / S + 1e-6 && (g.1 - w.1).abs() <= F / S + 1e-6)
+    };
+    // the automatic threshold finds the two silences of half a second or more, 0.1 s kept on each side
+    let got = ranges(&h);
+    assert!(near(&got, &[(2.1, 2.9), (7.1, 8.1)]), "the preview: {got:?}");
+    assert!(h.query_by_label_contains("Automatic (").is_some(), "the threshold it chose is shown");
+    assert_eq!(h.state().app.history.serialize(), before, "the preview changes nothing");
+    // with the speech's words: a filler is cut, and a long pause between words over a silence is named a pause
+    {
+        use cut_app::auto::autocut::{Why, plan};
+        use cut_app::speech::text::Word;
+        let (clips, form) = h.state().features.auto.autocut.open.clone().unwrap();
+        let w = |a: f64, b: f64, t: &str| Word::new(a * S, b * S, t, Some(0.9));
+        let words = [
+            w(0.2, 0.8, "안녕하세요"),
+            w(0.9, 1.2, "음"),
+            w(1.3, 1.9, "여러분"),
+            w(3.0, 3.5, "오늘은"),
+            w(3.6, 4.4, "편집을"),
+        ];
+        let (cuts, ..) = plan(h.state(), &clips, &form, &words);
+        assert!(
+            cuts.iter().any(|c| c.why == Why::Filler && c.from < 1.0 * S && c.to > 1.1 * S),
+            "the filler 음 is cut: {cuts:?}"
+        );
+        assert!(
+            cuts.iter().any(|c| c.why == Why::Pause && c.from <= 2.1 * S + F && c.to >= 2.9 * S - F),
+            "the pause around the silence: {cuts:?}"
+        );
+    }
+    // the 1.9 s left after the last silence is shorter than 2 s: it goes with it
+    h.state_mut().features.auto.autocut.open.as_mut().unwrap().1.min_piece = 2.0;
+    h.run_steps(2);
+    let got = ranges(&h);
+    assert!(near(&got, &[(2.1, 2.9), (7.1, 10.0)]), "a short piece at the clip's end is cut too: {got:?}");
+    // a typed threshold above the tone keeps nothing loud: the whole clip would go
+    {
+        let f = &mut h.state_mut().features.auto.autocut.open.as_mut().unwrap().1;
+        (f.min_piece, f.auto, f.threshold) = (0.4, false, -5.0);
+    }
+    h.run_steps(2);
+    assert!(near(&ranges(&h), &[(0.0, 10.0)]), "{:?}", ranges(&h));
+    // back to the automatic threshold, and the first cut unticked in the list
+    h.state_mut().features.auto.autocut.open.as_mut().unwrap().1.auto = true;
+    h.run_steps(2);
+    let first = h.state().timeline.overlay.as_ref().unwrap().ranges[0];
+    h.state_mut().features.auto.autocut.off.push((first.0.round() as i64, first.1.round() as i64));
+    h.run_steps(2);
+    assert!(near(&ranges(&h), &[(7.1, 8.1)]), "the unticked cut leaves the preview: {:?}", ranges(&h));
+    let steps = h.state().app.history.position();
+    assert!(cut_app::auto::autocut::apply(h.state_mut()), "Apply Cuts");
+    h.run_steps(2);
+    let a1 = lay(h.state(), "A1");
+    let want = [(0.0, 7.1, 0.0), (7.1, 9.0, 8.1)];
+    assert!(
+        a1.len() == 2
+            && a1
+                .iter()
+                .zip(want)
+                .all(|(g, w)| (g.0 - w.0).abs() < 0.034 && (g.1 - w.1).abs() < 0.034 && (g.2 - w.2).abs() < 0.034),
+        "only the ticked cut is ripple-deleted: {a1:?}"
+    );
+    assert_eq!(
+        (h.state().app.history.position(), label(h.state()), h.state().timeline.overlay.is_none()),
+        (steps + 1, "AutoCut".to_owned(), true),
+        "one undo step named AutoCut, and the overlay is gone"
+    );
+    let kept = h.state().doc.settings.get("auto.autocut").cloned().unwrap_or(Json::Null);
+    assert_eq!(kept["auto"], 1.0, "the dialog's fields are remembered: {kept}");
+    h.state_mut().app.undo();
+    assert_eq!(h.state().app.history.serialize(), before, "Undo gives back the project as it was");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -429,6 +530,9 @@ fn every_text_of_round_threes_screens_is_translated() {
         include_str!("../src/auto/mod.rs"),
         include_str!("../src/auto/duck.rs"),
         include_str!("../src/auto/silence.rs"),
+        include_str!("../src/auto/autocut.rs"),
+        include_str!("../src/workspaces.rs"),
+        include_str!("../src/windows/view.rs"),
         include_str!("../src/auto/color.rs"),
         include_str!("../src/auto/levels.rs"),
         include_str!("../src/auto/scenes.rs"),

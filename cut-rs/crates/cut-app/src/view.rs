@@ -114,10 +114,10 @@ fn maximize(s: &mut Shell, at: Option<egui::Pos2>) {
     }
     let slot = match at {
         Some(p) => s.features.view.slots.iter().find(|((w, _), r)| *w == ws && r.contains(p)).map(|((_, k), _)| *k),
-        None => s.app.focus.and_then(panel_id).and_then(|p| ws.slot_of(p)),
+        None => s.app.focus.and_then(panel_id).and_then(|p| s.features.workspace.rows(ws).slot_of(p)),
     };
     // the Tools column keeps its width (`.cut-slot.fixed`)
-    if let Some(k) = slot.filter(|k| ws.slot_panels(*k) != ["tools"]) {
+    if let Some(k) = slot.filter(|k| s.features.workspace.rows(ws).slot_panels(*k) != ["tools"]) {
         s.features.view.maximized = Some((ws, k));
     }
 }
@@ -218,6 +218,7 @@ pub const MENU_ACTIONS: &[(&str, &[&str])] = &[
     ("captions.style", &["Graphics and Titles", "Caption Style…"]),
     ("text.newLayer", &["New Layer", "Text"]),
     ("graphics.colorMatte", &["New Layer", "Color Matte"]),
+    ("auto.autocut", &["Automation", "AutoCut…"]),
     ("auto.silence", &["Automation", "Remove Silence…"]),
     ("auto.scenes", &["Automation", "Detect Scene Changes…"]),
     ("auto.beats", &["Automation", "Detect Beats…"]),

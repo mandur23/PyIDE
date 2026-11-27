@@ -124,7 +124,7 @@ Left:
 ## What a person would still notice against the JavaScript Cut, outside AI, speech, speakers, voice isolation and the control API (2026-11-17)
 Gone this day: Vorbis in WebM/Matroska plays, Opus of more than two channels imports and plays its left and right, the playhead timecode of the Timeline and both monitors is typed into (a timecode, a frame count or +N / -N frames; Enter or leaving it seeks, Escape keeps the time), a caption track's header has its name fallback (name, else language, else Captions) and its Sync Lock button, the tooltips of a track's height grip, a favourite effect's star and the playhead timecodes, the Export form's line naming the caption track a burn-in draws (when the sequence has more than one) and its "Starting…" before the first progress, and the warning when a folder import stops at 50,000 entries. Left:
 - Clips under 4 points wide are drawn as their colour alone: no name, picture, marks or line between them (a speed-up at 10,000 clips; the JavaScript draws them).
-- Save Changes to This Workspace keeps the splitters and each slot's tab, not panels the Window menu added to a slot (the native layouts are fixed tables).
+- (Gone on 2026-11-26: workspaces are arrangements the person changes, and Save Changes keeps the panels the Window menu added; see "Panel layout, AutoCut and caption styles" below.)
 - Built but never done with a real device here, so unproven rather than known to differ: a drag into a panel's own window, a file dropped from Explorer (where it lands), typing Hangul with the Microsoft IME, the rename field and the clip menu pictured in the running app, Main 10 (P010) shared frames, AV1 and VP9 Profile 2 media, ALAC of 20/24/32 bits or more than two channels, a coupled (stereo) Opus stream inside a surround track, Vorbis from a real encoder.
 - Rare: a proxy and an export rendering on the app's GPU when the device is lost leave the first with the generic compositor failure instead of "the GPU device was lost".
 
@@ -134,3 +134,13 @@ Built: the JavaScript Cut's `cut.*` settings carried once from `CUT_STUDIO_SETTI
 - The light theme taken from Nano Studio is checked by its rule only (`studio::theme_of`), not by a picture of the window; `system` reads egui's `system_theme` in the first frame.
 - While the crash box shows in a release build, other threads (the window) keep running until it is closed and the process aborts.
 - `control.external` (external AIs allowed) is carried under its name but this app does not read it yet; whoever builds that switch should decide whether a choice made in the JavaScript Cut should hold.
+
+## Panel layout, AutoCut and caption styles (the owner's wish of 2026-11-26)
+Built in the native app only (the JavaScript spec unchanged); what each does and its defaults are in `docs/cut-app.md` ("Rust Cut에만 있는 것").
+- Panel layout (`cut-app/src/arrange.rs`, `workspaces.rs`): tabs dragged onto a panel dock as a tab, beside it or in a row of their own; Close Panel; the Window menu checks and toggles panels; the arrangement kept at once (`workspaceArrangements`), with Save Changes (`layoutSaved` `rows`), Reset to Default Layout and named layouts (`savedLayouts`). Editing is drawn from its arrangement like the others. Proven: unit tests, `tests/arrange.rs` (the pointer in the headless window), the existing `view`, `windows`, `pointer`, `direct` suites.
+- AutoCut (`cut-app/src/auto/autocut.rs`): silences with an automatic threshold, filler words and pauses from the recognised words, short pieces; previewed, listed, ticked, one undo step. Proven: unit tests, `tests/auto.rs` (generated WAV; words given by the test).
+- Caption styles: outline, shadow, middle position, weight, italic, presets and the person's own (`captionPresets`); `cut-engine` draws the new keys for the monitor and the burn-in. Proven: `cut-engine/tests/render.rs` (pixels), `tests/captions.rs` (the dialog).
+Left:
+- No control API tools for these (the tool table is the JavaScript's, compared by `control_oracle`).
+- AutoCut with the real Whisper (only test words), and a Claude pass choosing retakes or off-topic parts (not built: it spends the owner's quota).
+- Docking by a real mouse in the running app, and pictures of it; added tabs have no × of their own (the tab menu closes them).

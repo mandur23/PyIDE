@@ -117,6 +117,9 @@ fn korean() -> &'static HashMap<String, String> {
         for (k, v) in crate::crash::KO.iter().chain(&crate::update::KO).chain(&crate::control::panel::KO) {
             map.entry((*k).to_owned()).or_insert_with(|| (*v).to_owned());
         }
+        for (k, v) in crate::arrange::KO.iter().chain(&crate::auto::autocut::KO).chain(&crate::captions::style::KO) {
+            map.entry((*k).to_owned()).or_insert_with(|| (*v).to_owned());
+        }
         for (k, v) in crate::timeline::direct::KO {
             map.entry(k.to_owned()).or_insert_with(|| v.to_owned());
         }

@@ -250,6 +250,67 @@ fn a_caption_typed_in_the_panel_is_one_step() {
 }
 
 /// Mean brightness of the program picture's rows in `[a, b)` (fractions of its height).
+#[test]
+fn caption_style_presets_set_outline_shadow_and_place_and_the_persons_own_are_kept() {
+    let d = dir("presets");
+    let mut s = shell(&d);
+    let file = d.join("a.srt");
+    std::fs::write(&file, SRT).unwrap();
+    files::import_file(&mut s, &file, false);
+    let mut h =
+        Harness::builder().with_size(egui::vec2(1280.0, 800.0)).build_ui_state(|ui, s: &mut Shell| s.frame(ui), s);
+    let ctx = h.ctx.clone();
+    h.state_mut().run_action("captions.style", &ctx);
+    h.run_steps(3);
+    // the preset list, then Yellow Bold in it
+    h.get_all_by_role(egui::accesskit::Role::ComboBox).next().expect("the preset list").click();
+    h.run_steps(2);
+    h.get_by_label("Yellow Bold").click();
+    h.run_steps(2);
+    let f = h.state().features.captions.style.clone().expect("the dialog stays open");
+    assert_eq!((f.outline, f.shadow, f.weight, f.color), (true, true, 800, egui::Color32::from_rgb(0xff, 0xe1, 0x4d)));
+    // the person's own preset, saved by name
+    h.get_by_label("Save as Preset…").click();
+    h.run_steps(2);
+    h.event(egui::Event::Text("My yellow".into()));
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    let own = captions::style::own_presets(h.state());
+    assert_eq!(own.len(), 1);
+    assert_eq!((own[0].0.as_str(), &own[0].1["outline"]), ("My yellow", &serde_json::json!("#000000")));
+    // the middle of the picture, then OK: one step with every key
+    h.state_mut().features.captions.style.as_mut().unwrap().position = "middle";
+    h.run_steps(1);
+    let steps = h.state().app.history.position();
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    let style = captions::track_of(&h.state().app, &h.state().features.captions).unwrap().style.clone();
+    assert_eq!(
+        (&style["position"], &style["outline"], &style["outlineWidth"], &style["shadow"], &style["color"]),
+        (
+            &serde_json::json!("middle"),
+            &serde_json::json!("#000000"),
+            &serde_json::json!(3.0),
+            &serde_json::json!("#000000aa"),
+            &serde_json::json!("#ffe14d")
+        )
+    );
+    assert_eq!(h.state().app.history.position(), steps + 1, "in one step");
+    // Default takes the outline and shadow off again
+    h.state_mut().run_action("captions.style", &ctx);
+    h.run_steps(2);
+    h.get_all_by_role(egui::accesskit::Role::ComboBox).next().expect("the preset list").click();
+    h.run_steps(2);
+    h.get_by_label("Default").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    let style = captions::track_of(&h.state().app, &h.state().features.captions).unwrap().style.clone();
+    assert!(style.get("outline").is_none() && style.get("shadow").is_none(), "{style:?}");
+    assert_eq!(style["position"], "bottom");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
 fn band(px: &[u8], w: u32, h: u32, a: f64, b: f64) -> f64 {
     let (y0, y1) = ((f64::from(h) * a) as u32, (f64::from(h) * b) as u32);
     let mut sum = 0.0;

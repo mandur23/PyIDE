@@ -420,6 +420,57 @@ fn captions_are_burned_in_near_the_bottom() {
 }
 
 #[test]
+fn a_caption_style_draws_its_outline_shadow_and_middle_position() {
+    let mut p = project(640, 360);
+    put(&mut p, "s1", clip("c1", "V1", 0, 0.0, SEC as f64, solid("#3070c0")));
+    let mut style = cut_model::defaults::default_caption_style();
+    for (k, v) in [
+        ("background", json!("#00000000")),
+        ("position", json!("middle")),
+        ("size", json!(90)),
+        ("weight", json!(800)),
+        ("outline", json!("#ff0000")),
+        ("outlineWidth", json!(6)),
+        ("shadow", json!("#00ff00ff")),
+        ("shadowBlur", json!(0)),
+        ("shadowX", json!(0)),
+        ("shadowY", json!(24)),
+    ] {
+        style.insert(k.into(), v);
+    }
+    let track = json!({ "id": "k1", "lang": "en", "name": "Captions", "style": style, "syncLock": true,
+        "items": [{ "id": "i1", "start": 0, "end": SEC, "text": "HELLO" }] });
+    p.sequence_mut(Id::new("s1")).expect("s1").captions.push(serde_json::from_value(track).expect("a caption track"));
+    let (p, _) = reload(&p);
+    let mut e = engine();
+    let opts = RenderOptions { captions: cut_engine::Captions::First, ..WAIT };
+    e.render(&p, Id::new("s1"), F, (640, 360), &opts).expect("a render");
+    let img = e.read_pixels();
+    write_png("captions-styled.png", &img, 640, 360);
+    let rows = |f: &dyn Fn([u8; 4]) -> bool| -> Vec<u32> {
+        (0..360u32).filter(|&y| (0..640u32).any(|x| f(px(&img, 640, x, y)))).collect()
+    };
+    let white = rows(&|p| p[0] > 220 && p[1] > 220 && p[2] > 220);
+    let red = rows(&|p| p[0] > 200 && p[1] < 60 && p[2] < 60);
+    let green = rows(&|p| p[1] > 200 && p[0] < 60 && p[2] < 60);
+    assert!(!white.is_empty() && !red.is_empty() && !green.is_empty(), "text, outline and shadow are drawn");
+    let mid = |v: &[u32]| v.iter().sum::<u32>() / v.len() as u32;
+    assert!((150..210).contains(&mid(&white)), "the text is in the middle: rows around {}", mid(&white));
+    assert!(mid(&green) > mid(&white) + 8, "the shadow falls below the text");
+    assert!(red.first() < white.first() && red.last() > white.last(), "the outline goes around the letters");
+    // without the native keys the caption is the JavaScript's: no outline, no shadow
+    let mut q = p.clone();
+    let st = &mut q.sequence_mut(Id::new("s1")).expect("s1").captions[0].style;
+    for k in ["outline", "shadow"] {
+        st.remove(k);
+    }
+    e.render(&q, Id::new("s1"), F, (640, 360), &opts).expect("a render");
+    let plain = e.read_pixels();
+    let any = |f: &dyn Fn([u8; 4]) -> bool| (0..360u32).any(|y| (0..640u32).any(|x| f(px(&plain, 640, x, y))));
+    assert!(!any(&|p| p[0] > 200 && p[1] < 60 && p[2] < 60) && !any(&|p| p[1] > 200 && p[0] < 60 && p[2] < 60));
+}
+
+#[test]
 fn the_gpus_scopes_count_what_the_cpu_counts() {
     let path = quarters();
     let mut p = project(64, 36);
