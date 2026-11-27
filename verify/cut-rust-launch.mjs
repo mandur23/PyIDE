@@ -8,6 +8,7 @@
 //   node verify/cut-rust-launch.mjs [--stub | --real] [--exe <Nano Studio.exe>]
 // --exe tests a built app (dist\win-unpacked) instead of the source tree; its real Cut is resources\cut\nano-studio-cut.exe.
 import { execFileSync, spawn } from 'child_process';
+import http from 'http';
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -126,6 +127,7 @@ if (only !== 'real') {
       const version = JSON.parse(readFileSync(path.join(APP_DIR, 'package.json'), 'utf8')).version;
       check(exeArg ? /^\d+\.\d+\.\d+/.test(rec.env.CUT_STUDIO_VERSION || '') : rec.env.CUT_STUDIO_VERSION === version, `CUT_STUDIO_VERSION is its version (${rec.env.CUT_STUDIO_VERSION})`);
       check(!rec.env.PYIDE_CUT_JS, 'the JavaScript Cut is not asked for');
+      check(!rec.env.CUT_AI_PROVIDER && !rec.env.PYIDE_AI_KEY && !rec.env.PYIDE_AI_CONNECTION, 'with Claude Code chosen (the default), no API in its environment');
       check(same(rec.cwd, path.dirname(STUB)), `it runs in its own folder (${rec.cwd})`);
       const saved = JSON.parse(readFileSync(path.join(r.userData, 'settings.json'), 'utf8'));
       check(saved['app.lastMode'] === 'cut' && saved['appearance.language'] === 'en', `the chooser will offer Cut first next time, other settings kept (${S(saved)})`);
@@ -140,6 +142,54 @@ if (only !== 'real') {
   {
     const r = run('folder', { args: ['--mode=cut', path.dirname(PROJECT)] });
     await startsCut(r, '--mode=cut <folder>');
+  }
+
+  // ---------- an API chosen in Settings › AI › Connection ----------
+  // Its CLI is nano-studio-api.cmd (main/ai/api-cli.js run by this app's executable as Node), which answers a request
+  // as claude -p does, here from a stand-in OpenAI-compatible server on 127.0.0.1.
+  {
+    const asked = [];
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (d) => { body += d; });
+      req.on('end', () => {
+        asked.push({ url: req.url, body: JSON.parse(body) });
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        for (const t of ['Cut ', 'answer']) res.write(`data: ${S({ choices: [{ index: 0, delta: { content: t } }] })}\n\n`);
+        res.end('data: [DONE]\n\n');
+      });
+    });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${server.address().port}/v1`;
+    try {
+      const r = run('api-openai', { args: ['--mode=cut'], settings: { 'appearance.language': 'en', 'aiConnection.provider': 'openai', 'aiConnection.openaiUrl': url, 'aiConnection.openaiModel': 'qwen3' } });
+      const rec = await startsCut(r, 'with an OpenAI-compatible API');
+      if (rec) {
+        const shim = rec.env.CUT_CLAUDE_PATH || '';
+        check(/nano-studio-api\.cmd$/i.test(shim) && existsSync(shim), `CUT_CLAUDE_PATH is the API's stand-in CLI (${shim})`);
+        let conn = null;
+        try { conn = JSON.parse(rec.env.PYIDE_AI_CONNECTION); } catch {}
+        check(rec.env.CUT_AI_PROVIDER === 'openai' && conn?.provider === 'openai' && conn.baseUrl === url && conn.model === 'qwen3', `the connection is in its environment (${rec.env.PYIDE_AI_CONNECTION})`);
+        check(!rec.env.PYIDE_AI_KEY, 'no key was saved, so none is passed');
+        const sys = path.join(work, 'api-system.txt');
+        writeFileSync(sys, 'SYS');
+        const out = await new Promise((resolve) => {
+          const child = spawn(`"${shim}" -p --output-format stream-json --model sonnet --tools "" --max-turns 1 --system-prompt-file "${sys}"`, {
+            shell: true, env: { ...process.env, PYIDE_AI_CONNECTION: rec.env.PYIDE_AI_CONNECTION, PYIDE_AI_KEY: '' }, windowsHide: true,
+          });
+          let text = '';
+          child.stdout.on('data', (d) => { text += d; });
+          child.stdin.end('the prompt');
+          child.on('close', () => resolve(text));
+        });
+        const last = out.split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean).at(-1);
+        check(last?.type === 'result' && last.subtype === 'success' && last.result === 'Cut answer', `the stand-in CLI answers through this app's executable as Node (${S(last)})`);
+        check(asked.at(-1)?.body.model === 'qwen3' && asked.at(-1)?.body.messages.at(-1).content === 'the prompt', 'its request went to the address with the model set');
+      }
+      const k = run('api-anthropic', { args: ['--mode=cut'], settings: { 'appearance.language': 'en', 'aiConnection.provider': 'anthropic' } });
+      const rk = await startsCut(k, 'with the Anthropic API and no key');
+      if (rk) check(rk.env.CUT_CLAUDE_PATH === 'none' && rk.env.CUT_AI_PROVIDER === 'anthropic' && !rk.env.PYIDE_AI_KEY, `no key: no CLI, and Cut is told the API is chosen (${rk.env.CUT_CLAUDE_PATH}, ${rk.env.CUT_AI_PROVIDER})`);
+    } finally { server.close(); }
   }
 
   // ---------- the start chooser ----------

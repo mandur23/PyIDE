@@ -169,6 +169,8 @@
  { "name": "context-menu", "file": "verify/context-menu.mjs", "timeout": 6, "seconds": 12 },
  { "name": "console-output", "file": "verify/console-output.mjs", "timeout": 10, "seconds": 15 },
  { "name": "ai-generate", "file": "verify/ai-generate.mjs", "timeout": 10, "seconds": 25 },
+ { "name": "ai-api-core", "file": "verify/ai-api-core.mjs", "timeout": 5, "seconds": 3 },
+ { "name": "ai-connection", "file": "verify/ai-connection.mjs", "timeout": 10, "seconds": 20 },
  { "name": "diagrams", "file": "verify/diagrams.mjs", "timeout": 10, "seconds": 16 },
  { "name": "visual-script-editor", "file": "verify/visual-script-editor.mjs", "timeout": 10, "seconds": 34 },
  { "name": "visual-script", "file": "verify/visual-script.mjs", "timeout": 10, "seconds": 22 },

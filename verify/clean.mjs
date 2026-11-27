@@ -5,7 +5,7 @@
 //                                         Only folders untouched for --age minutes (default 360) go, so running suites
 //                                         keep theirs.
 //   node verify/clean.mjs --all           the end of a piece of work (npm run clean:all): the same with --age 0, the
-//                                         Rust tests' folders in %TEMP% (cut-app-<test>-<pid>), the suites' output in
+//                                         Rust tests' folders in %TEMP% (cut-app-<test>-<pid> and the others below), the suites' output in
 //                                         verify/out (pictures, logs; downloads-cache and *-venv stay: they save the
 //                                         downloads and the installs of the next run), and the folders of trial builds (%TEMP%\pyidedist-*).
 //                                         Not while a suite, a Rust test or a release runs: their folders are among these.
@@ -54,7 +54,10 @@ function sweep(root, wanted, { files = false } = {}) {
 
 sweep(tmpdir(), (n) => /^pyide-/i.test(n));
 if (all) {
-  sweep(tmpdir(), (n) => /^cut-app-/i.test(n));
+  // The Rust tests' folders: cut-app-<test>-<pid>, cut-edit-<pid>-ThreadId<n> (tests/editing.rs), cut-files-<test>-<pid>
+  // (tests/files*.rs), cut-installed-<test>-<pid> (tests/installed.rs), and the crates' output folders cut-audio,
+  // cut-decode, cut-engine, cut-export (generated media and pictures). 72 of them were left on 2026-11-27.
+  sweep(tmpdir(), (n) => /^cut-app-|^cut-(edit|files|installed)-.*\d$|^cut-(audio|decode|engine|export)$/i.test(n));
   sweep(tmpdir(), (n) => /^pyidedist-/i.test(n));
   const out = path.join(ROOT, 'verify', 'out');
   if (existsSync(out)) sweep(out, (n) => n !== 'downloads-cache' && !/-venv$/.test(n), { files: true });

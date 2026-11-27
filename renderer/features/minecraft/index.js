@@ -465,6 +465,8 @@
       return r;
     } catch (err) {
       const text = /Cancelled/.test(errorText(err)) ? tr('Cancelled. The lines translated so far are kept.')
+        : /\(Settings › AI › Connection\)/.test(errorText(err)) ? tr('Translation uses the API chosen in Settings › AI › Connection, which is not set up yet. Set it up there, then try again.')
+        : /Authentication failed \(\d+, /.test(errorText(err)) ? tr('The API refused the key. Check it in Settings › AI › Connection, then try again.')
         : /Claude Code is not installed/.test(errorText(err)) ? tr('Translation uses Claude Code, which is not installed. Install Claude Code and sign in to it, then try again.')
           : failed(errorText(err)) || errorText(err);
       con.append(`${text}\n`, 'err');

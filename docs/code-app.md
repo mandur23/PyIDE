@@ -229,6 +229,7 @@ Code는 코어 위에 플러그인 약 75개가 올라간 구조입니다. 코�
 
 | 플러그인 | 이름 | 메인 모듈 | 대표 테스트 |
 | --- | --- | --- | --- |
+| `ai-connection` | AI Connection (Claude Code, Anthropic API, OpenAI-compatible API) | `main/features/ai-connection.js` | `verify/ai-connection.mjs`, `verify/ai-api-core.mjs` |
 | `ai-chat` | AI Chat (Claude) | `main/features/ai-chat.js` | `verify/ai-chat.mjs` |
 | `ai-complete` | AI Completion (Qwen2.5-Coder) | `main/features/ai-complete.js` | `verify/ai-complete.mjs` |
 | `ai-edit` | AI Edits (Claude) | `main/features/ai-edit.js` | `verify/ai-edit.mjs` |

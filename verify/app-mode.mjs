@@ -24,7 +24,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (ok, label) => { results.push(!!ok); console.log(`${ok ? 'PASS' : 'FAIL'} ${label}`); };
 const PRODUCT = JSON.parse(readFileSync(path.join(APP_DIR, 'package.json'), 'utf8')).productName;
-const CRAFT_PLUGINS = ['diagnostics', 'installer', 'minecraft', 'notifications', 'port-sharing', 'problems', 'project-roots', 'run', 'settings', 'terminal', 'updater'];
+const CRAFT_PLUGINS = ['ai-connection', 'diagnostics', 'installer', 'minecraft', 'notifications', 'port-sharing', 'problems', 'project-roots', 'run', 'settings', 'terminal', 'updater'];
 
 // User plugins: one for craft only (a renderer script that records craftReady and a main module with an IPC channel),
 // one without "modes", which counts as code only.

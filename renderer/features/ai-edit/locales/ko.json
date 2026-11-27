@@ -34,7 +34,7 @@
   "Suggest the next edit after I pause typing": "입력을 멈추면 다음 수정을 제안",
   "Pause before asking (ms):": "요청 전 대기 시간(ms):",
   "Minimum time between requests (ms):": "요청 사이 최소 간격(ms):",
-  "Requests go through the Claude Code CLI with your Claude subscription. Only the edited region and nearby lines are sent.": "요청은 Claude 구독으로 로그인된 Claude Code CLI를 거칩니다. 수정하는 영역과 그 주변 줄만 전송됩니다.",
+  "Requests go to Claude Code or the API chosen in Settings › AI › Connection. Only the edited region and nearby lines are sent.": "요청은 Claude Code, 또는 설정 › AI › 연결에서 고른 API로 갑니다. 수정하는 영역과 그 주변 줄만 전송됩니다.",
   "Next edit suggestions: paused in Power Save Mode": "다음 편집 제안: 절전 모드에서 일시 중지됨",
   "Claude Code is not signed in, or its sign-in has expired. Claude Code signs in separately from the Claude app.": "Claude Code에 로그인되어 있지 않거나 로그인이 만료되었습니다. Claude Code는 Claude 앱과 따로 로그인합니다.",
   "Sign in to Claude Code": "Claude Code에 로그인"

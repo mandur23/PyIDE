@@ -7,6 +7,7 @@ use serde_json::Value as Json;
 
 use super::ask::Why;
 use super::claude::Code;
+use super::via::{text, textf, via};
 use crate::auto::dialog;
 use crate::i18n::{tr, trf};
 use crate::panels::dialogs::Titled as _;
@@ -81,6 +82,10 @@ pub fn failed(s: &mut Shell, why: &Why) {
             let text = tr("Claude did not answer in time. Try again, or ask for less at once.").into_owned();
             s.features.ai.notice.error = Some((why.code(), text));
         }
+        Why::Claude(f) if via().api() => {
+            let text = textf("The API request failed: {error}", &[("error", &f.error)]);
+            s.features.ai.notice.error = Some((why.code(), text));
+        }
         Why::Claude(f) => {
             let text = trf("Claude Code failed: {error}", &[("error", &f.error)]);
             s.features.ai.notice.error = Some((why.code(), text));
@@ -131,8 +136,13 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     if s.features.ai.notice.pending.is_some() {
         let (mut go, mut cancel) = (false, false);
         dialog("Claude", "cutAiNotice", 480.0).show_titled(ctx, tr("Claude"), None, |ui| {
-            ui.label(tr("These features send text to Claude (Anthropic) through Claude Code on this PC: the transcript or the caption text, and clip, track and marker names with their times."));
-            note(ui, s, &tr("No video, sound or file paths are sent. Claude Code uses your own Claude account."));
+            if via().api() {
+                ui.label(textf("These features send text to {name}, with the key set in Nano Studio (Settings › AI › Connection): the transcript or the caption text, and clip, track and marker names with their times.", &[("name", &via().name())]));
+                note(ui, s, &text("No video, sound or file paths are sent. Usage is billed to that API account."));
+            } else {
+                ui.label(tr("These features send text to Claude (Anthropic) through Claude Code on this PC: the transcript or the caption text, and clip, track and marker names with their times."));
+                note(ui, s, &tr("No video, sound or file paths are sent. Claude Code uses your own Claude account."));
+            }
             crate::panels::dialogs::actions(ui, |ui| {
                 go = crate::panels::dialogs::primary(ui, tr("Continue")).clicked();
                 cancel = ui.button(tr("Cancel")).clicked();
@@ -150,8 +160,22 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     }
     if let Some((code, detail)) = s.features.ai.notice.explain.clone() {
         let mut close = false;
-        dialog("Claude Code", "cutAiMissing", 500.0).show_titled(ctx, tr("Claude Code"), None, |ui| {
+        let title = if via().api() { text("API") } else { tr("Claude Code") };
+        dialog("Claude Code", "cutAiMissing", 500.0).show_titled(ctx, title, None, |ui| {
             match code {
+                Code::Auth if via().api() => {
+                    ui.label(text("The API refused the key."));
+                    note(ui, s, &text("Check the key in Nano Studio, Settings › AI › Connection (in Code or Craft), then open Cut again."));
+                }
+                Code::Quota if via().api() => {
+                    ui.label(text("The API's rate or spending limit was reached."));
+                    note(ui, s, &text("Try again later, or check the limits of the API account."));
+                }
+                _ if via().api() => {
+                    ui.label(text("The API chosen in Nano Studio is not set up yet."));
+                    note(ui, s, &text("Set its key (and for an OpenAI-compatible API its address and model) in Settings › AI › Connection in Code or Craft, then open Cut again."));
+                    note(ui, s, &tr("Speech recognition and the other automation work without it."));
+                }
                 Code::Auth => {
                     ui.label(tr("Claude Code is not signed in, or its sign-in has expired."));
                     note(ui, s, &tr("Open a terminal (Windows Terminal or PowerShell), run claude, and sign in with your Claude account (type /login if it does not ask). Then try again."));
@@ -236,15 +260,28 @@ pub fn settings_section(s: &mut Shell, ui: &mut egui::Ui) {
     let state = match n.installed {
         None => {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
-            "Looking for Claude Code…"
+            tr("Looking for Claude Code…")
         }
-        Some(true) => "Claude Code is installed.",
-        Some(false) => "Claude Code is not installed: install it from claude.com/claude-code and sign in.",
+        Some(false) if via().api() => text("The API chosen in Nano Studio is not set up yet."),
+        Some(true) if via().api() => textf(
+            "Requests go to {name} chosen in Nano Studio (Settings › AI › Connection).",
+            &[("name", &via().name())],
+        )
+        .into(),
+        Some(true) => tr("Claude Code is installed."),
+        Some(false) => tr("Claude Code is not installed: install it from claude.com/claude-code and sign in."),
     };
     ui.vertical(|ui| {
         ui.set_max_width(360.0);
-        note(ui, s, &tr(state));
-        note(ui, s, &tr("Caption polish and translation, YouTube titles and chapters, highlights to shorts and edit commands send the transcript or caption text and clip and marker names to Claude through Claude Code. No video, sound or file paths are sent."));
+        note(ui, s, &state);
+        if via() == super::via::Via::OpenAi {
+            note(ui, s, &text("An OpenAI-compatible API always uses the model set in Nano Studio; the model here does not apply."));
+        }
+        if via().api() {
+            note(ui, s, &text("No video, sound or file paths are sent. Usage is billed to that API account."));
+        } else {
+            note(ui, s, &tr("Caption polish and translation, YouTube titles and chapters, highlights to shorts and edit commands send the transcript or caption text and clip and marker names to Claude through Claude Code. No video, sound or file paths are sent."));
+        }
     });
     ui.end_row();
 }

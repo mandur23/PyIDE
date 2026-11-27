@@ -59,7 +59,7 @@ npm start -- --mode=craft
 | `main/minecraft/imports.js` | 드롭한 파일과 폴더, 모드팩(.mrpack) 가져오기 |
 | `main/minecraft/server-settings.js` | `server.properties`, 화이트리스트, op 읽기와 쓰기(`readProperties`, `writeProperties`) |
 | `main/minecraft/anti-xray.js` | Paper 안티 엑스레이 설정 파일 고치기 |
-| `main/minecraft/translate.js` | 모드 문구 한국어 번역(Claude Code CLI). 서버의 `resourcepack/`과 인스턴스의 `resourcepacks/Nano Studio Korean/`에 씁니다 |
+| `main/minecraft/translate.js` | 모드 문구 한국어 번역(Claude Code CLI, 또는 설정 › AI › 연결에서 고른 API: `main/ai/claude.js`의 `complete`). 서버의 `resourcepack/`과 인스턴스의 `resourcepacks/Nano Studio Korean/`에 씁니다 |
 | `main/minecraft/templates.js` | 리소스 팩 `pack.mcmeta`, Velocity 연결 |
 | `main/minecraft/file-server.js` | 클라이언트 팩과 리소스 팩을 루프백 http로 제공 |
 | `main/minecraft/health.js`, `health-monitor.js` | 비정상 종료의 원인, 자동 재시작 규칙, 멈춤과 과부하 감지 |

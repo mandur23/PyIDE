@@ -287,6 +287,7 @@
 
   function errorMessage(res) {
     if (res.code === 'cancelled') return { kind: 'info', text: tr('Cancelled.') };
+    if (res.via === 'api' && ide.aiConnection) return { kind: 'error', text: ide.aiConnection.explain(res), action: { label: tr('Open AI Connection Settings'), run: () => ide.aiConnection?.open() } };
     if (res.code === 'not-installed') {
       return { kind: 'error', text: tr('Claude Code is not installed.'), action: { label: tr('Open Install Manager'), run: openInstaller } };
     }
@@ -620,7 +621,7 @@
     if (!res.ok) {
       nesProblem = res.code === 'cancelled' ? null : errorMessage(res).text;
       // A missing install or login will not fix itself in seconds; do not call again for a minute.
-      if (res.code === 'not-installed' || res.code === 'auth') lastNesAt = performance.now() + 60000;
+      if (['not-installed', 'auth', 'setup', 'quota'].includes(res.code)) lastNesAt = performance.now() + 60000;
       renderStatus();
       return;
     }
@@ -743,7 +744,7 @@
       nes.appendChild(ctx.ui.checkbox(SETTINGS.nes, tr('Suggest the next edit after I pause typing')));
       nes.appendChild(ctx.ui.fieldRow(tr('Pause before asking (ms):'), ctx.ui.numberInput(SETTINGS.debounce, { step: 100, min: 200, max: 10000, fallback: 1000 })));
       nes.appendChild(ctx.ui.fieldRow(tr('Minimum time between requests (ms):'), ctx.ui.numberInput(SETTINGS.interval, { step: 500, min: 0, max: 60000, fallback: 5000 })));
-      host.appendChild(el('div', 'muted settings-note', tr('Requests go through the Claude Code CLI with your Claude subscription. Only the edited region and nearby lines are sent.')));
+      host.appendChild(el('div', 'muted settings-note', tr('Requests go to Claude Code or the API chosen in Settings › AI › Connection. Only the edited region and nearby lines are sent.')));
     },
   });
   ide.registerAction({ id: 'AiEdit.ToggleNes', title: tr('Toggle Next Edit Suggestions'), run: () => setNes(!nesEnabled()) });

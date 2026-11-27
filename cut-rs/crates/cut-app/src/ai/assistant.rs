@@ -19,6 +19,7 @@ use serde_json::{Value as Json, json};
 
 use super::agent::{Agent, Done, Event, Turn, Usage};
 use super::claude::Code;
+use super::via::{text, textf, via};
 use crate::i18n::{tr, trf};
 use crate::panels::dialogs::Titled as _;
 use crate::shell::Shell;
@@ -548,9 +549,15 @@ fn end(s: &mut Shell, done: Done) {
                 Some("closed") => {
                     tr("Stopped because another project was opened; the request changes nothing in it.").into_owned()
                 }
+                Some("not-installed") if via().api() => {
+                    text("The API chosen in Nano Studio is not set up yet.").into_owned()
+                }
+                Some("auth") if via().api() => text("The API refused the key.").into_owned(),
+                Some("quota") if via().api() => text("The API's rate or spending limit was reached.").into_owned(),
                 Some("not-installed") => tr("Claude Code is not installed on this PC.").into_owned(),
                 Some("auth") => tr("Claude Code is not signed in, or its sign-in has expired.").into_owned(),
                 Some("quota") => tr("Your Claude account has reached its usage limit for now.").into_owned(),
+                _ if via().api() => textf("The API request failed: {error}", &[("error", &done.error)]),
                 Some("timeout") => tr("Claude did not finish in time.").into_owned(),
                 _ => trf("Claude Code failed: {error}", &[("error", &done.error)]),
             }
@@ -607,8 +614,13 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
     if let Some(request) = s.features.ai.assistant.notice.clone() {
         let (mut go, mut cancel) = (false, false);
         crate::auto::dialog("AI Assistant", "cutAsNotice", 500.0).show_titled(ctx, tr("AI Assistant"), None, |ui| {
-            ui.label(tr("The AI assistant sends your request and a description of the project (clip, track and marker names and times, captions) to Claude (Anthropic) through Claude Code on this PC, and lets Claude edit the project with Cut's tools."));
-            ui.label(RichText::new(tr("When Claude asks to see a frame, a picture of the program monitor is sent too. Files and file paths are not sent, and Claude cannot change files on this PC.")).color(s.palette.gray[8]).size(12.0));
+            if via().api() {
+                ui.label(textf("The AI assistant sends your request and a description of the project (clip, track and marker names and times, captions) to {name} chosen in Nano Studio, and lets the model edit the project with Cut's tools.", &[("name", &via().name())]));
+                ui.label(RichText::new(text("When the model asks to see a frame, a picture of the program monitor is sent too. Files and file paths are not sent, and the model cannot change files on this PC.")).color(s.palette.gray[8]).size(12.0));
+            } else {
+                ui.label(tr("The AI assistant sends your request and a description of the project (clip, track and marker names and times, captions) to Claude (Anthropic) through Claude Code on this PC, and lets Claude edit the project with Cut's tools."));
+                ui.label(RichText::new(tr("When Claude asks to see a frame, a picture of the program monitor is sent too. Files and file paths are not sent, and Claude cannot change files on this PC.")).color(s.palette.gray[8]).size(12.0));
+            }
             crate::panels::dialogs::actions(ui, |ui| {
                 go = crate::panels::dialogs::primary(ui, tr("Continue")).clicked();
                 cancel = ui.button(tr("Cancel")).clicked();
@@ -655,7 +667,12 @@ pub fn windows(s: &mut Shell, ctx: &egui::Context) {
                             ui.label(RichText::new(t).strong());
                         }
                         Bubble::Missing => {
-                            ui.label(RichText::new(tr("Claude Code is not installed on this PC.")).color(s.palette.red));
+                            let missing = if via().api() {
+                                text("The API chosen in Nano Studio is not set up yet.")
+                            } else {
+                                tr("Claude Code is not installed on this PC.")
+                            };
+                            ui.label(RichText::new(missing).color(s.palette.red));
                         }
                         Bubble::External(items) => {
                             ui.label(RichText::new(tr("External AI")).strong());

@@ -689,9 +689,13 @@ async function openCut(project) {
   const home = cutHome();
   try { await fs.promises.mkdir(home, { recursive: true }); } catch (err) { log.warn(`cannot create the Cut workspace ${home}: ${err.message}`); }
   const { exe, sidecars } = launcher.locate({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, appDir: __dirname });
-  const claude = process.env.PYIDE_CLAUDE_PATH === 'none' ? 'none' : require('./main/ai/claude').findClaude();
+  // With an API chosen in Settings › AI › Connection, Cut's CLI is api-cli.js and the connection is in its environment.
+  const api = require('./main/ai/connection').forCut();
+  const claude = process.env.PYIDE_CLAUDE_PATH === 'none' ? 'none' : api.claude || require('./main/ai/claude').findClaude();
   const studioApp = [process.execPath, ...(app.isPackaged ? [] : [__dirname]), ...process.argv.filter((a) => a === '--pyide-test-env')];
   const env = launcher.cutEnv({ home, sidecars, claude, settingsFile: SETTINGS_FILE, studioApp, version: app.getVersion() });
+  for (const k of ['CUT_AI_PROVIDER', 'PYIDE_AI_CONNECTION', 'PYIDE_AI_KEY']) delete env[k];
+  Object.assign(env, api.env);
   log.info(`starting ${exe}${project ? ` with ${project}` : ''} (${launcher.ENV.home}=${home})`);
   const result = await launcher.start({ exe, project, env, cwd: path.dirname(exe) });
   log.info(`Cut ${result.state}${result.pid ? ` (pid ${result.pid})` : ''}${'code' in result ? `, exit code ${result.code}` : ''}${result.error ? `: ${result.error}` : ''}`);

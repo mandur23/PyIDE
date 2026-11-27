@@ -62,6 +62,10 @@
 
   function failNote(title, res) {
     const actions = [];
+    if (res.via === 'api' && ide.aiConnection) {
+      ide.notifications.notify({ title: tr('{action} failed', { action: title }), text: ide.aiConnection.explain(res), kind: 'error', group: 'AI Actions', actions: [{ label: tr('Open AI Connection Settings'), run: () => ide.aiConnection?.open() }] });
+      return;
+    }
     if (res.code === 'not-installed') actions.push({ label: tr('Open Install Manager'), run: openInstaller });
     if (res.code === 'auth') actions.push({ label: tr('Sign in to Claude Code'), run: () => ide.runAction('ClaudeCodeLogin') });
     if (OPEN_FILE_CODES.has(res.code) && res.testPath) actions.push({ label: tr('Open {file}', { file: basename(res.testPath) }), run: (note) => { note.expire(); ide.openFile(res.testPath); } });

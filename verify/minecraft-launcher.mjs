@@ -768,8 +768,8 @@ async function craftUi(first) {
     await js(`(document.querySelector('#craftHost .mcs-settings').click(), true)`);
     await until(`!!document.querySelector('.settings-pages .settings-nav-row[data-page]')`, 'settings from the craft list', 10000);
     const settingsPages = await js(`[...document.querySelectorAll('.settings-pages .settings-nav-row[data-page]')].map((r) => r.dataset.page)`);
-    check(S(navEnd) === S(['설정…', 'Nano Studio 정보']) && S(settingsPages) === S(['appearance', 'language', 'plugins', 'updates']),
-      `craft's list ends with Settings and About; its Settings shows only Appearance, Language, Plugins and Updates (${S({ navEnd, settingsPages })})`);
+    check(S(navEnd) === S(['설정…', 'Nano Studio 정보']) && S(settingsPages) === S(['appearance', 'language', 'plugins', 'ai-connection', 'updates']),
+      `craft's list ends with Settings and About; its Settings shows only Appearance, Language, Plugins, AI Connection (its translation uses it) and Updates (${S({ navEnd, settingsPages })})`);
     await shot('craft-settings.png');
     await js(`(${dialogButton('취소')}).click()`);
     await until(`!document.querySelector('.settings-pages')`, 'settings closed', 10000);

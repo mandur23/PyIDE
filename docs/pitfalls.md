@@ -28,6 +28,7 @@
 - **새 `PYIDE_*` 환경 변수는 설치본에서 지워집니다.** 테스트용 변수(신뢰 전부 켜기, 피드와 서명 키 바꾸기)를 설치본도 그대로 읽었습니다. 사용자 설정이면 `main/test-env.js`의 `USER_SETTINGS`에 이유와 함께 넣습니다. 설치본 테스트는 `verify/lib.mjs`가 붙이는 `--pyide-test-env`로만 테스트 변수를 씁니다.
 - **IPC는 `main/ipc-guard.js`가 `ipcMain` 자체를 감싸서 IDE 페이지와 시작 화면의 맨 위 프레임만 받습니다.** `preload.js`에서 시작 화면에 채널을 더하면 `CHOOSER_CHANNELS`에도 넣습니다(`verify/ipc-guard.mjs`가 비교합니다). `ipcMain`을 감싸기 전에 핸들러를 등록하는 코드를 `main.js` 맨 위에 넣지 않습니다.
 - **안전 모드에서 파일을 바깥 앱으로 여는 규칙은 막을 목록이 아니라 허용 목록입니다(`openKind`).** 실행되는 형식의 목록은 늘 빠지는 것이 있습니다(.pyc, .chm, .sh).
+- **AI의 API 키는 설정 값이 아닙니다(설정 › AI › 연결, 2026-11-26).** `settings.json`은 설정 동기화와 진단 zip이 읽고 렌더러가 통째로 가집니다. 키는 저장 단추를 누를 때 한 번 메인으로 가서 `safeStorage`로 `<userData>/ai-connection/keys.json`에 들어가고, 페이지는 있는지와 끝 네 글자만 받습니다(`main/ai/connection.js`). Rust Cut에는 명령줄이 아니라 환경 변수(`PYIDE_AI_KEY`)로 갑니다.
 - **srcdoc 프레임은 IDE의 CSP를 물려받으므로 `img-src http: https:`가 그대로 열려 있습니다.** 신뢰하지 않은 노트북의 HTML 출력이 원격 이미지를 불러왔습니다. 메타 CSP를 더하면 물려받은 정책 위에서 더 좁힐 수 있습니다. 막힌 요청은 CSP 위반으로 보고되므로 테스트는 `takeCsp`로 가져갑니다.
 
 ## 공통: Electron과 Node
@@ -146,6 +147,7 @@
 - **실제 OS 드래그는 마우스 메시지가 있어야 끝납니다.** `verify/post-mouse-move.ps1`로 테스트 창에만 메시지를 보냅니다. 실제 마우스를 움직이지 않습니다.
 - **테스트는 클립보드를 보존해야 합니다.** Electron 45에서 `clipboard-keeper`가 조용히 고장 나 있었습니다. 로그에 경고가 있는지 봅니다.
 - **클립보드의 파일 목록은 `paste` 이벤트로만 읽습니다.** Electron의 `clipboard`는 탐색기가 복사한 파일 목록을 읽지도 쓰지도 못하고, PowerShell로 읽으면 1.5초가 걸립니다. `paste` 이벤트의 `clipboardData.files`에는 폴더도 들어 있습니다(`webUtils.getPathForFile`). 키 처리에서 `preventDefault`하면 이벤트가 오지 않으므로 `webContents.paste()`(`tree:paste`)로 일으킵니다. 쓰기만 PowerShell(`fs:copyToClipboard`)입니다. 컨텍스트 메뉴 항목은 `click`이 아니라 `mousedown`에 실행됩니다(테스트에서 `click()`은 아무 일도 하지 않습니다).
+- **`clean.mjs --all`은 `cut-app-*`만 Rust 테스트의 폴더로 알아서, `cut-edit-*`, `cut-files-*`, `cut-installed-*`, `cut-audio`, `cut-decode`, `cut-engine`, `cut-export` 72개(약 30 MB)가 %TEMP%에 쌓였습니다(2026-11-27).** 이제 그 이름들도 지웁니다. Rust 테스트가 %TEMP%에 새 이름의 폴더를 만들면 `clean.mjs`의 그 줄에 더합니다.
 - **`verify/out`은 여럿이 같이 씁니다.** 다른 세션의 정리가 실행 중인 폴더를 지울 수 있습니다. 동시 작업 중에는 `node verify/clean.mjs --age 15`를 쓰고, 끝난 뒤 `--age 0`을 씁니다. `*-venv`와 `downloads-cache`는 남깁니다.
 - **문구 검사는 Code와 Craft 양쪽을 봅니다.** `verify/i18n-static.mjs`가 모드별로 검사합니다. 예전에는 전부 합쳐 검사해서 Craft 누락을 못 찾았습니다.
 - **고정된 시간 상한은 부하에서 깨집니다.** 코어 수의 두 배만큼 바쁜 프로세스를 함께 돌리면 이 PC에서 117개 중 6개가 실패했습니다. 타이밍 의심은 바쁜 프로세스로 재현합니다. 이 PC는 논리 코어 16개인데, 12개를 채우면 `tasklist`가 0.7초에 답하고 `private-share`가 156/156으로 끝납니다. 16개 이상을 채우면 `tasklist`가 부하가 끝날 때까지 답하지 않아 런처 검사 하나가 실패하고 15분 안에 끝나지 않습니다. 부하는 코어의 4분의 3으로 봅니다. 기다림은 답이 어느 쪽으로든 나면 끝나게 씁니다(`outcome`). 상한은 실패하는 쪽만 기다리는 시간이 되어 넉넉해도 비용이 없습니다.
@@ -172,7 +174,10 @@
 - **숨겨진 데스크톱(`verify/on-desktop.ps1`)의 창은 화면을 가져올 수 없습니다.** `desktopCapturer`가 창을 찾고 `getUserMedia`도 `live` 트랙을 주지만 Windows가 0.15초쯤 뒤에 끝냅니다(`code-mods`의 게임 화면, 2026-11-25에 트랙의 `ended` 시각으로 확인). 그런 스트림의 픽셀을 보는 검사는 스트림이 살아 있을 때만 하고, 끊기면 SKIP을 찍고 "끊겼다고 말하는지"를 봅니다. 앱도 끊긴 화면을 말없이 비우지 않고 알립니다.
 - **`PYIDE_TEST_VIEWPORT`로 창 크기를 흉내 내면 페이지의 `screen.availHeight`는 작업 표시줄을 뺀 높이가 아니라 화면 전체입니다.** 메인이 작업 영역(`workArea`)에 맞춘 창을 그 값과 비교한 `code-mods`의 "Code 옆에" 검사가 CI 창 크기에서만 48px 차이로 실패했습니다. 메인이 놓은 창끼리(Code 창의 `outerHeight`와 게임 창) 비교합니다.
 - **테스트가 `keybd_event`나 `SendInput`에 닿게 하지 않습니다.** 주입한 키는 테스트의 데스크톱이 아니라 사용자가 보고 있는 데스크톱의 앞 창으로 갑니다. 게임에 F3+T를 보내는 길(`game-window.js`의 `reload`)은 `code-mods`가 부르지 않고, 리소스 복사는 IPC를 직접 불러 확인합니다.
-- **백슬래시가 든 고침은 셸 here-document로도, `node -e`로도 쓰지 않습니다(이번에만 네 번).** `'\n'`이 줄바꿈으로 바뀌어 문법 오류가 된 파일이 남습니다. 고치는 스크립트는 파일로 쓰고(`\n`이 든 줄은 편집 도구로) `node 파일`로 돌립니다. 백틱도 같습니다: bash 큰따옴표 안의 `node -e`에 Rust 주석의 백틱으로 감싼 이름을 넣자 명령 치환으로 사라졌습니다(2026-11-26).
+- **백슬래시가 든 고침은 셸 here-document로도, `node -e`로도 쓰지 않습니다(이번에만 네 번).** `'\n'`이 줄바꿈으로 바뀌어 문법 오류가 된 파일이 남습니다. 고치는 스크립트는 파일로 쓰고(`\n`이 든 줄은 편집 도구로) `node 파일`로 돌립니다. 백틱도 같습니다: bash 큰따옴표 안의 `node -e`에 Rust 주석의 백틱으로 감싼 이름을 넣자 명령 치환으로 사라졌습니다(2026-11-26). 같은 날 두 번 더: 따옴표 친 heredoc 안의 편집 스크립트가 정규식의 `\(`·`\d`를 잃었고, JS 문자열에 넣은 `'\\n'`이 실제 줄바꿈이 되었습니다.
+- **설정 페이지에서 OK/Apply를 거치지 않고 바로 저장하는 칸(API 키)은 저장한 뒤 자기 표시를 스스로 고칩니다.** 페이지는 열 때 한 번 그려져서, 키를 저장해도 칸의 "끝 네 글자" 안내와 지우기 단추가 그대로였습니다(`verify/ai-connection.mjs`가 찾음). 메인이 돌려준 상태로 그 줄을 다시 정합니다.
+- **`ai-chat`의 "context action listed"와 `ai-generate`의 "korean tests ran"(그 뒤 다시 띄운 IDE가 준비되지 않음)이 숨겨진 데스크톱에서 한 번씩 실패하고, 코드를 바꾸지 않은 다시 실행에서는 모두 통과했습니다(2026-11-27).** 한 번 실패하면 고치기 전에 그 스위트만 다시 돌려 봅니다.
+- **`lib.mjs`의 `js()`는 식 하나만 받습니다.** `` js(`a(); b()`) ``는 `SyntaxError: Unexpected token ';'`입니다. 쉼표로 잇거나(`(a(), b(), true)`) 함수로 감쌉니다.
 - **`lib.mjs`의 `click(selector)`는 요소를 화면에 끌어오지 않습니다.** 스크롤되는 도구 창에서 아래로 밀린 버튼의 가운데 좌표는 창 밖이거나 다른 요소 위라서, 눌러도 아무 일이 없고 다음 기다림이 바로 통과해 엉뚱한 검사에서 실패합니다(`code-mods`의 "서버에 넣기"). 스크롤되는 영역의 버튼은 `scrollIntoView({block: 'center'})` 뒤에 누릅니다.
 
 ## Code: 코딩
@@ -742,7 +747,9 @@
 ## 아직 남은 문제: 공통
 
 - 인증서: Authenticode 서명이 없어 SmartScreen 경고가 납니다.
-- `safeStorage` 비동기 API로 옮기지 않았습니다.
+- `safeStorage` 비동기 API로 옮기지 않았습니다(AI 연결의 키 보관도 동기 API입니다).
+- API를 고르고 연 Rust Cut의 환경에 키(`PYIDE_AI_KEY`)가 남아, Cut이 띄우는 Python 서버도 그 값을 물려받습니다. 같은 사용자의 프로세스라 막지 않았습니다. 키를 Cut이 읽고 지우려면 Rust 쪽 `claude::launch`가 키를 명시적으로 넘겨야 합니다.
+- API로 Anthropic·OpenAI 호환 서버에 실제로 요청해 본 적은 없습니다(테스트는 127.0.0.1의 대역 서버). 실제 서버의 SSE 모양이 다르면(예: OpenAI 호환이라면서 도구 호출이나 오류를 다른 모양으로 보내는 서버) 그때 고칩니다.
 - `shell.openPath`가 없는 파일에서 25초 넘게 돌아오지 않았습니다. 원인을 모릅니다.
 
 ## 아직 남은 문제: Cut

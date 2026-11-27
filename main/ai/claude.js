@@ -1,5 +1,6 @@
 // Single-turn completions through the Claude Code CLI (`claude -p`), signed in with the user's Claude subscription.
 // No tools, no session file, no hooks or CLAUDE.md: the model sees only the system prompt and the prompt on stdin.
+// With an API chosen in Settings › AI › Connection, complete() goes to main/ai/api.js instead.
 const { spawn, execFileSync } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -75,8 +76,19 @@ function launch(bin, args, { env: extra = {} } = {}) {
   return spawn(viaShell ? quote(bin) : bin, viaShell ? args.map(quote) : args, { cwd: WORK_DIR, env, shell: viaShell, windowsHide: true });
 }
 
-// -> Promise<{text, ms}>. onText(textSoFar) streams the answer as it is generated. Rejects with a ClaudeError.
+// The API chosen in Settings › AI › Connection (main/ai/connection.js), or null for Claude Code. Plain Node (the tests
+// that load this file without Electron) has no settings: always Claude Code.
+function apiConnection() {
+  let electron;
+  try { electron = require('electron'); } catch { return null; }
+  return electron && typeof electron === 'object' && electron.app ? require('./connection').current() : null;
+}
+
+// -> Promise<{text, ms}>. onText(textSoFar) streams the answer as it is generated. Rejects with a ClaudeError, or with
+// api.js's ApiError (the same codes, plus 'setup', and via: 'api') when an API is chosen.
 function complete({ system, prompt, model = 'haiku', signal, onText }) {
+  const api = apiConnection();
+  if (api) return require('./api').complete(api, { system, prompt, model, signal, onText });
   const bin = findClaude();
   if (!bin) return Promise.reject(new ClaudeError('not-installed', 'Claude Code is not installed'));
   if (signal?.aborted) return Promise.reject(new ClaudeError('cancelled', 'Cancelled'));

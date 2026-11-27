@@ -34,7 +34,7 @@
   "Open a file to insert the code into.": "코드를 삽입할 파일을 여세요.",
   "Open a project to chat about it.": "대화하려면 프로젝트를 여세요.",
   "Remove": "제거",
-  "Requests go through the Claude Code CLI with your Claude subscription. The chat sends the files and selections you attach; commit messages send the staged diff, shortened when it is large.": "요청은 Claude 구독으로 Claude Code CLI를 통해 전송됩니다. 채팅은 첨부한 파일과 선택 영역을 보내고, 커밋 메시지는 스테이징된 diff를 보냅니다(크면 줄여서 보냄).",
+  "Requests go to Claude Code or the API chosen in Settings › AI › Connection. The chat sends the files and selections you attach; commit messages send the staged diff, shortened when it is large.": "요청은 Claude Code, 또는 설정 › AI › 연결에서 고른 API로 갑니다. 채팅은 첨부한 파일과 선택 영역을 보내고, 커밋 메시지는 스테이징된 diff를 보냅니다(크면 줄여서 보냄).",
   "Send": "보내기",
   "Send (Enter)": "보내기 (Enter)",
   "Stage changes or tick files in the Commit window.": "변경 사항을 스테이징하거나 커밋 창에서 파일을 선택하세요.",

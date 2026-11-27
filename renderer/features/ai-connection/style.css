@@ -1,0 +1,6 @@
+.aic-key, .aic-url, .aic-test { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.aic-key input[type=password] { flex: 1; min-width: 180px; }
+.aic-url input[type=text] { flex: 1; min-width: 220px; }
+.aic-test { margin-top: 8px; }
+.aic-test-out.aic-bad { color: var(--error, #e5534b); }
+.aic-body .field input[type=text] { min-width: 220px; }

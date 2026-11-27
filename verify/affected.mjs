@@ -32,6 +32,9 @@ const AREAS = [
   { area: 'Cut (JavaScript, the frozen specification)', match: /^(renderer\/features\/cut\/|main\/cut\/)/, suites: /^cut-(?!rust)/ },
   { area: 'the start chooser', match: /^renderer\/(chooser\.html$|core\/chooser\.(js|css)$)/, suites: /^app-mode$/ },
   { area: 'Craft', match: /^(renderer\/features\/minecraft\/|main\/minecraft\/|main\/features\/minecraft\.js$|tools\/nano-bridge\/)/, suites: CRAFT },
+  // Every Claude feature goes through main/ai/claude.js, or main/ai/api.js with an API chosen; the Rust Cut through
+  // api-cli.js (2026-11-26). ai-chat and ai-edit are not in the CI list: run them by hand with these.
+  { area: 'AI connection', match: /^(main\/ai\/(api|api-cli|connection|claude)\.js$|main\/features\/ai-(connection|chat|edit|generate)\.js$|renderer\/features\/ai-(connection|chat|edit|generate)\/)/, suites: /^(ai-api-core|ai-connection|ai-generate|cut-rust-launch|cut-ai-core)$/ },
   { area: 'sharing', match: /^(main\/features\/port-sharing\.js$|renderer\/features\/port-sharing\/|main\/bore)/, suites: /^(port-sharing|bore-client$|private-share$|automation$)/ },
   { area: 'updates and the release', match: /^(scripts\/|main\/(updater|release-key)|renderer\/features\/updater\/|package(-lock)?\.json$|\.github\/)/, suites: /^(updater|release-harness|report-update|plugin-install-asar)$/ },
   // the list of suites and the tools around the tests: a suite added to the list is picked as a changed suite
@@ -43,6 +46,8 @@ const AREAS = [
 
 // Found the hard way. [path, suites by name or Rust test files, when and why]
 const LEARNED = [
+  [/^renderer\/features\/[^/]+\/plugin\.json$/, { suites: /^(app-mode|minecraft-launcher|settings)$/ },
+    '2026-11-27: a new plugin (ai-connection, modes code and craft) changed the exact plugin and settings page lists these compare'],
   [/^cut-rs\/crates\/cut-app\/src\/prefs\//, { tests: ['speech', 'messages', 'pointer', 'text_prefs'] },
     '2026-11-20: the Settings window in a scroll area moved a row for a frame; speech.rs and messages.rs press its rows'],
   [/^cut-rs\/crates\/cut-app\/src\/panels\/dialogs\.rs$/, { tests: ['speech', 'messages', 'pointer', 'files', 'export'] },

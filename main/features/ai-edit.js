@@ -144,8 +144,8 @@ exports.register = ({ ipcMain }) => {
     try {
       return { ok: true, ...(await complete({ system, prompt, model, signal: ctl.signal, onText })) };
     } catch (err) {
-      if (timedOut) return { ok: false, code: 'timeout', message: 'Claude Code did not answer in time' };
-      return { ok: false, code: err.code || 'cli', message: err.message };
+      if (timedOut) return { ok: false, code: 'timeout', message: 'Claude Code did not answer in time', via: err.via };
+      return { ok: false, code: err.code || 'cli', message: err.message, via: err.via };
     } finally {
       clearTimeout(timer);
       running.delete(reqId);

@@ -706,7 +706,7 @@
       count();
     };
     count();
-    box.append(status, go, el('div', 'mcset-desc muted', tr('Claude (your Claude Code) writes the lines into the resource pack, resourcepack/assets/<mod>/lang/ko_kr.json, and Send to Players gives them to everyone. Lines already there, and your edits, are kept.')));
+    box.append(status, go, el('div', 'mcset-desc muted', tr('Claude (Claude Code, or the API chosen in Settings › AI › Connection) writes the lines into the resource pack, resourcepack/assets/<mod>/lang/ko_kr.json, and Send to Players gives them to everyone. Lines already there, and your edits, are kept.')));
     return box;
   }
   function otherRows(v) {

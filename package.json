@@ -98,6 +98,8 @@
     "asarUnpack": [
       "main/**/*.py",
       "main/notebook/colab-bridge.js",
+      "main/ai/api.js",
+      "main/ai/api-cli.js",
       "main/bore-client.js",
       "main/bore-gate.js",
       "renderer/features/**/*.py",

@@ -33,6 +33,7 @@ pub mod plan;
 pub mod runner;
 pub mod shorts_ui;
 pub mod unicode;
+pub mod via;
 
 use std::sync::Arc;
 use std::time::Duration;

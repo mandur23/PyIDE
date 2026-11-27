@@ -495,7 +495,7 @@
     };
     count();
     const body = el('div', 'mc-dialog mcc-korean');
-    body.append(status, go, el('div', 'mc-dialog-note muted', tr('Claude (your Claude Code) writes the lines into the instance\'s resource pack, resourcepacks/Nano Studio Korean, and turns it on in its options.txt. The game reads that file when it starts, so the Korean applies from the next game start. Lines already there, and your edits, are kept.')));
+    body.append(status, go, el('div', 'mc-dialog-note muted', tr('Claude (Claude Code, or the API chosen in Settings › AI › Connection) writes the lines into the instance\'s resource pack, resourcepacks/Nano Studio Korean, and turns it on in its options.txt. The game reads that file when it starts, so the Korean applies from the next game start. Lines already there, and your edits, are kept.')));
     ide.ui.dialog({ title: tr('Korean Translation of {name}', { name: inst.title || inst.name }), body, width: 560, buttons: [{ label: tr('Close'), primary: true }] });
   }
 

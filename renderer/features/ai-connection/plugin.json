@@ -1,0 +1,9 @@
+{
+  "id": "ai-connection",
+  "name": "AI Connection",
+  "version": "1.0.0",
+  "vendor": "Nano Studio",
+  "description": "Chooses how the AI features reach a model: Claude Code with your Claude account, the Anthropic API with your API key, or an OpenAI-compatible API (OpenAI, Gemini, OpenRouter, Ollama). Keys are kept encrypted for your Windows account.",
+  "modes": ["code", "craft"],
+  "main": ["ai-connection.js"]
+}

@@ -240,6 +240,7 @@
   ide.api.on('ai-chat:commit-stream', ({ reqId, text }) => streams.get(reqId)?.(text));
 
   function errorText(res) {
+    if (res.via === 'api' && ide.aiConnection) return ide.aiConnection.explain(res);
     if (res.code === 'not-installed') return tr('Claude Code is not installed.');
     if (res.code === 'auth') return tr('Claude Code is not signed in, or its sign-in has expired. Claude Code signs in separately from the Claude app.');
     if (res.code === 'timeout') return tr('Claude Code did not answer in time.');
@@ -379,7 +380,8 @@
     else if (res.code === 'cancelled') reply.stopped = true;
     else {
       reply.error = errorText(res);
-      if (res.code === 'auth') reply.errorCode = 'auth';
+      if (res.via === 'api' && res.code !== 'timeout') reply.errorCode = 'api';
+      else if (res.code === 'auth') reply.errorCode = 'auth';
       // A failed send keeps its files for the next try.
       if (!chips.mentions.length) { chips.mentions = attached; renderChips(); }
     }
@@ -519,7 +521,11 @@
       if (m.stopped) node.appendChild(el('div', 'aic-note', tr('Stopped.')));
       if (m.error) {
         const note = node.appendChild(el('div', 'aic-note error', m.error));
-        if (m.errorCode === 'auth') {
+        if (m.errorCode === 'api') {
+          const open = el('button', 'secondary aic-login', tr('Open AI Connection Settings'));
+          open.onclick = () => ide.aiConnection?.open();
+          note.append(' ', open);
+        } else if (m.errorCode === 'auth') {
           const login = el('button', 'secondary aic-login', tr('Sign in to Claude Code'));
           login.onclick = () => ide.runAction('ClaudeCodeLogin');
           note.append(' ', login);
@@ -760,7 +766,7 @@
       chat.appendChild(ctx.ui.fieldRow(tr('Model:'), ctx.ui.selectInput(SETTINGS.model, MODELS.map((m) => [m.id, m.label]), 'sonnet')));
       const commit = ctx.ui.section(host, tr('Commit Messages'));
       commit.appendChild(ctx.ui.fieldRow(tr('Language:'), ctx.ui.selectInput(SETTINGS.commitLanguage, [['ko', '한국어'], ['en', 'English']], 'ko')));
-      host.appendChild(el('div', 'muted settings-note', tr('Requests go through the Claude Code CLI with your Claude subscription. The chat sends the files and selections you attach; commit messages send the staged diff, shortened when it is large.')));
+      host.appendChild(el('div', 'muted settings-note', tr('Requests go to Claude Code or the API chosen in Settings › AI › Connection. The chat sends the files and selections you attach; commit messages send the staged diff, shortened when it is large.')));
     },
   });
 

@@ -20,7 +20,7 @@ static class Stub {
 
   static int Main(string[] args) {
     var dir = Environment.GetEnvironmentVariable("CUT_STUB_DIR");
-    var names = new[] { "CUT_HOME", "CUT_SIDECAR_DIR", "CUT_CLAUDE_PATH", "CUT_STUDIO_SETTINGS", "CUT_STUDIO_APP", "CUT_STUDIO_VERSION", "PYIDE_CUT_JS" };
+    var names = new[] { "CUT_HOME", "CUT_SIDECAR_DIR", "CUT_CLAUDE_PATH", "CUT_STUDIO_SETTINGS", "CUT_STUDIO_APP", "CUT_STUDIO_VERSION", "PYIDE_CUT_JS", "CUT_AI_PROVIDER", "PYIDE_AI_CONNECTION", "PYIDE_AI_KEY" };
     var json = new StringBuilder("{\"pid\":").Append(System.Diagnostics.Process.GetCurrentProcess().Id);
     json.Append(",\"cwd\":").Append(Q(Environment.CurrentDirectory)).Append(",\"args\":[");
     for (int i = 0; i < args.Length; i++) json.Append(i > 0 ? "," : "").Append(Q(args[i]));
